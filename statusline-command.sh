@@ -5,10 +5,15 @@
 #   line 1: [host] cwd (branch)
 #   line 2: ctx | cache | 5h | wk | cost
 # Color thresholds:
-#   ctx        green <50  yellow 50-60  red >=60   (auto-compact at ~66%)
-#   5h, wk     green <75  yellow 75-90  red >=90
-#   cache hit  green >=90 yellow 75-90  red <75    (high-is-good)
-#   cost       green <$25 yellow $25-$50 red >=$50
+#   ctx (200K) green <100K  yellow 100-147K  red >=147K  (compact at 167K)
+#   ctx (1M)   green <200K  yellow 200-947K  red >=947K  (compact at 967K;
+#              200K is also the boundary where Opus 1M pricing doubles)
+#   5h, wk     green <75    yellow 75-90     red >=90
+#   cache hit  green >=90   yellow 75-90     red <75      (high-is-good)
+#   cost       green <$25   yellow $25-$50   red >=$50
+# Compact = window − 33K-token buffer (Claude Code default as of 2026-05);
+# CLAUDE_AUTOCOMPACT_PCT_OVERRIDE wins if set.  Red is pinned 20K below
+# compact — enough headroom for 1-2 more turns.
 # Projection (5h, wk): "+/-X.Yh" green when >5% margin to window reset,
 # yellow when 0-5% margin (close call), red when projecting to hit the cap.
 
@@ -91,12 +96,43 @@ def _project(util, resets_at_unix, period_seconds):
         return ""
 
 # --- Context ---------------------------------------------------------------
+# Thresholds are token-anchored where the underlying limit is a token count
+# (33K compact buffer, 200K Opus-1M pricing boundary).  Comparing against
+# ctx_used in tokens also avoids the 1% rounding in payload used_percentage
+# (10K tokens of slop at the boundary on a 1M window).
 cw = d.get("context_window") or {}
 window_size = cw.get("context_window_size") or 200_000
-ctx_pct = cw.get("used_percentage") or 0
 cu = cw.get("current_usage") or {}
 ctx_used = (cu.get("input_tokens") or 0) + (cu.get("cache_creation_input_tokens") or 0) + (cu.get("cache_read_input_tokens") or 0)
-context_summary = f"ctx: {fmt(ctx_used)} / {fmt(window_size)} ({_color_high_bad(ctx_pct, 50, 60, 1)})"
+
+# Auto-compact reserves a fixed-token buffer for the summarization pass.
+# CLAUDE_AUTOCOMPACT_PCT_OVERRIDE wins for users who tune it.
+COMPACT_BUFFER_TOKENS = 33_000
+RED_MARGIN_TOKENS = 20_000  # ~1-2 turns of headroom before auto-compact fires
+override = os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+compact_tokens = max(0, window_size - COMPACT_BUFFER_TOKENS)
+if override:
+    try:
+        compact_tokens = int(window_size * float(override) / 100)
+    except ValueError:
+        pass
+red_tokens = max(0, compact_tokens - RED_MARGIN_TOKENS)
+
+# 1M-context Opus models double pricing past 200K — flip yellow at the 200K
+# boundary (token-anchored).  Other windows stay green until 50% utilization,
+# where model accuracy starts to degrade (fraction-anchored, not token).
+model_id = (d.get("model") or {}).get("id") or ""
+is_1m_window = window_size >= 1_000_000 or "[1m]" in model_id
+yellow_tokens = 200_000 if is_1m_window else window_size // 2
+
+if ctx_used >= red_tokens:
+    ctx_color = RED
+elif ctx_used >= yellow_tokens:
+    ctx_color = YELLOW
+else:
+    ctx_color = GREEN
+display_pct = 100.0 * ctx_used / window_size if window_size else 0.0
+context_summary = f"ctx: {fmt(ctx_used)} / {fmt(window_size)} ({ctx_color}{display_pct:.1f}%{RESET})"
 
 # --- Cache hit (session-wide — stdin JSON only exposes current turn, so we
 # still walk the session transcript + every subagent JSONL to sum across all

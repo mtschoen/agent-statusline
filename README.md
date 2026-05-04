@@ -36,16 +36,31 @@ available:
 
 ## Color thresholds
 
-| field      | green   | yellow      | red       |
-|------------|---------|-------------|-----------|
-| ctx        | < 50%   | 50–60%      | ≥ 60%     |
-| cache hit  | ≥ 90%   | 75–90%      | < 75%     |
-| 5h / wk    | < 75%   | 75–90%      | ≥ 90%     |
-| cost       | < $25   | $25–$50     | ≥ $50     |
-| pace ±X.Yh | > 5% margin | 0–5% margin | < 0       |
+ctx thresholds gate on raw token counts (the underlying limits — 33K
+compact buffer, 200K Opus-1M pricing boundary — are themselves token
+quantities, not fractions, so the gating compares tokens directly):
 
-The cost thresholds reflect a personal per-session shape; tweak the constants
-in the script if your scale differs.
+| field        | green       | yellow      | red             |
+|--------------|-------------|-------------|-----------------|
+| ctx (200K)   | < 100K      | 100–147K    | ≥ 147K          |
+| ctx (1M)     | < 200K      | 200–947K    | ≥ 947K          |
+| cache hit    | ≥ 90%       | 75–90%      | < 75%           |
+| 5h / wk      | < 75%       | 75–90%      | ≥ 90%           |
+| cost         | < $25       | $25–$50     | ≥ $50           |
+| pace ±X.Yh   | > 5% margin | 0–5% margin | < 0             |
+
+ctx red is computed as `(window_size − 33K compact buffer) − 20K margin`,
+giving ~1–2 turns of headroom before auto-compact fires. Set
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1–100) to override the compact point,
+and the red band tracks it.
+
+ctx yellow is **token-anchored on 1M models** (200K, the boundary where
+Opus 1M pricing doubles) and **fraction-anchored otherwise** (50%, where
+model accuracy starts to degrade — a fill-fraction signal, not a token
+target). The 1M case keeps the higher-cost zone visually distinct.
+
+The cost thresholds reflect a personal per-session shape; tweak the
+constants in the script if your scale differs.
 
 ## Install
 

@@ -102,10 +102,10 @@ context_summary = f"ctx: {fmt(ctx_used)} / {fmt(window_size)} ({_color_high_bad(
 # still walk the session transcript + every subagent JSONL to sum across all
 # assistant turns).  Cost & ctx % come from stdin and do NOT need this walk.
 def _sum_cache_tokens(transcript_path):
-    read_total = create_total = input_total = 0
+    read_total = write_total = input_total = 0
     seen = set()
     def process(p):
-        nonlocal read_total, create_total, input_total
+        nonlocal read_total, write_total, input_total
         try:
             with open(p, encoding="utf-8") as f:
                 for line in f:
@@ -126,7 +126,7 @@ def _sum_cache_tokens(transcript_path):
                         seen.add(mid)
                     u = msg.get("usage") or {}
                     read_total += int(u.get("cache_read_input_tokens") or 0)
-                    create_total += int(u.get("cache_creation_input_tokens") or 0)
+                    write_total += int(u.get("cache_creation_input_tokens") or 0)
                     input_total += int(u.get("input_tokens") or 0)
         except Exception:
             pass
@@ -137,14 +137,14 @@ def _sum_cache_tokens(transcript_path):
             if os.path.isdir(sub_dir):
                 for sub in glob.glob(os.path.join(sub_dir, "agent-*.jsonl")):
                     process(sub)
-    return read_total, create_total, input_total
+    return read_total, write_total, input_total
 
-read_t, new_t, input_t = _sum_cache_tokens(d.get("transcript_path") or "")
-total_in = read_t + new_t + input_t
+read_t, write_t, input_t = _sum_cache_tokens(d.get("transcript_path") or "")
+total_in = read_t + write_t + input_t
 cache_summary = ""
 if total_in > 0:
     hit_pct = read_t * 100 / total_in
-    cache_summary = f"cache: {fmt(read_t)} read / {fmt(new_t)} new / {_color_high_good(hit_pct, 90, 75)} hit"
+    cache_summary = f"cache: {fmt(read_t)} read / {fmt(write_t)} write / {_color_high_good(hit_pct, 90, 75)} hit"
 
 # --- Cost ------------------------------------------------------------------
 cost = (d.get("cost") or {}).get("total_cost_usd") or 0
@@ -166,7 +166,7 @@ for win_key, period_seconds, label in (("five_hour", 5 * 3600, "5h"), ("seven_da
     pct_part = _color_high_bad(util, 75, 90)
     proj_part = _project(util, resets_at, period_seconds)
     usage_parts.append(f"{label}: {pct_part}{proj_part}")
-usage_summary = " | ".join(usage_parts)
+usage_summary = " ".join(usage_parts)
 
 sys.stdout.write(cwd + "\t" + context_summary + "\t" + cache_summary + "\t" + usage_summary + "\t" + cost_summary)
 ' <<<"$input" 2>"$HOME/.claude/.statusline-error.log")

@@ -28,6 +28,9 @@ available:
   is followed by a **pace projection** in absolute hours: `+0.4h` means
   you're on track to finish the window with 24 minutes of compute headroom;
   `-1.3h` means you're projected to hit the cap before the window resets.
+  The pace number turns yellow as a close-call warning when the green margin
+  shrinks to within 5% of the window length (~15 minutes for the 5h window,
+  ~8.4h for the weekly window).
 - **cost** — `cost.total_cost_usd` from Claude Code's payload (matches
   `/usage`, includes subagent spend).
 
@@ -39,7 +42,7 @@ available:
 | cache hit  | ≥ 90%   | 75–90%      | < 75%     |
 | 5h / wk    | < 75%   | 75–90%      | ≥ 90%     |
 | cost       | < $25   | $25–$50     | ≥ $50     |
-| pace ±X.Yh | ≥ 0     | —           | < 0       |
+| pace ±X.Yh | > 5% margin | 0–5% margin | < 0       |
 
 The cost thresholds reflect a personal per-session shape; tweak the constants
 in the script if your scale differs.

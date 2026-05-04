@@ -9,8 +9,8 @@
 #   5h, wk     green <75  yellow 75-90  red >=90
 #   cache hit  green >=90 yellow 75-90  red <75    (high-is-good)
 #   cost       green <$25 yellow $25-$50 red >=$50
-# Projection (5h, wk): "+/-X.Yh" green when on track to finish under budget,
-# red when on track to hit cap before reset.
+# Projection (5h, wk): "+/-X.Yh" green when >5% margin to window reset,
+# yellow when 0-5% margin (close call), red when projecting to hit the cap.
 
 input=$(cat)
 # Truncate-on-write dump of the latest stdin payload.  Useful when Claude Code
@@ -79,7 +79,13 @@ def _project(util, resets_at_unix, period_seconds):
         if elapsed <= 0 or remaining <= 0:
             return ""
         delta = 100.0 * elapsed / util - period_seconds
-        color = GREEN if delta >= 0 else RED
+        warn_threshold = 0.05 * period_seconds
+        if delta < 0:
+            color = RED
+        elif delta <= warn_threshold:
+            color = YELLOW
+        else:
+            color = GREEN
         return f" {color}{_fmt_delta(delta)}{RESET}"
     except Exception:
         return ""

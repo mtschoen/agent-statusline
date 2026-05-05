@@ -11,9 +11,10 @@
 #   5h, wk     green <75    yellow 75-90     red >=90
 #   cache hit  green >=90   yellow 75-90     red <75      (high-is-good)
 #   cost       green <$25   yellow $25-$50   red >=$50
-# Cache identity colors (no threshold, just for at-a-glance read/write distinction):
-#   cache read  teal  (256-color 38)
-#   cache write orange (256-color 208)
+# Identity colors (no threshold, just at-a-glance distinction):
+#   cache read     teal       (256-color 38)
+#   cache write    orange     (256-color 208)
+#   ctx denominator soft mauve (256-color 139)
 # Compact = window − 33K-token buffer (Claude Code default as of 2026-05);
 # CLAUDE_AUTOCOMPACT_PCT_OVERRIDE wins if set.  Red is pinned 20K below
 # compact — enough headroom for 1-2 more turns.
@@ -58,6 +59,7 @@ RESET = "\x1b[0m"
 # 256-color teal / orange — distinct from the threshold colors above.
 CACHE_READ = "\x1b[38;5;38m"
 CACHE_WRITE = "\x1b[38;5;208m"
+CTX_DENOM = "\x1b[38;5;139m"
 
 def fmt(n):
     if n >= 1_000_000: return f"{n/1_000_000:.2f}M"
@@ -139,7 +141,7 @@ elif ctx_used >= yellow_tokens:
 else:
     ctx_color = GREEN
 display_pct = 100.0 * ctx_used / window_size if window_size else 0.0
-context_summary = f"{fmt(ctx_used)} / {fmt(window_size)} ({ctx_color}{display_pct:.1f}%{RESET})"
+context_summary = f"{ctx_color}{fmt(ctx_used)}{RESET} / {CTX_DENOM}{fmt(window_size)}{RESET} ({ctx_color}{display_pct:.1f}%{RESET})"
 
 # --- Cache hit (session-wide — stdin JSON only exposes current turn, so we
 # still walk the session transcript + every subagent JSONL to sum across all

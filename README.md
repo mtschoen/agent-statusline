@@ -9,7 +9,7 @@ thresholds.
 
 ```
 [hostname] /path/to/cwd (branch)
-ctx: 183.7K / 1.00M (18.0%) | cache: 15.41M read / 207.4K write / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | cost: $10.66
+183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $10.66
 ```
 
 ## What you see
@@ -77,11 +77,30 @@ Then point Claude Code at it. In `~/.claude/settings.json`:
   "statusLine": {
     "type": "command",
     "command": "bash ~/schoen-claude-status/statusline-command.sh"
+  },
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "bash ~/schoen-claude-status/subagent-statusline.sh"
   }
 }
 ```
 
-The next render picks up the change — no restart needed.
+The next render picks up the change — no restart needed. The
+`subagentStatusLine` block is optional; omit it to keep Claude Code's default
+`name · description · token count` rendering in the agent panel.
+
+### Per-agent status lines
+
+When `subagentStatusLine` is configured, each row in the agent panel below
+the prompt is replaced with a single line of `ctx | cache | cost`, computed
+by walking that agent's own JSONL transcript at
+`~/.claude/projects/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl`.
+
+The same color thresholds apply per agent. Quota (`5h` / `wk`) is omitted —
+it's account-global, identical for every agent, so it would just clutter the
+panel. Cost is derived from per-Mtok rates (the per-task payload doesn't
+carry `cost.total_cost_usd`); accuracy is within a few percent of `/usage`
+for non-Opus-1M turns.
 
 ### Requirements
 
@@ -89,6 +108,8 @@ The next render picks up the change — no restart needed.
   run Claude Code.
 - Claude Code v2.1+ (for the rich JSON payload — earlier versions only sent
   `model` / `session_id` / `cwd`).
+- Subagent statusline requires a Claude Code version that ships
+  `subagentStatusLine` (see [docs](https://code.claude.com/docs/en/statusline#subagent-status-lines)).
 
 ## Why this and not [other-statusline]?
 

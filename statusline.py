@@ -116,7 +116,7 @@ def main():
         line1 = f"{line1} ({branch})"
 
     parts = [s for s in (
-        context_summary, cache_summary, quota_summary, cost_summary, beacon_summary
+        context_summary, cache_summary, quota_summary, cost_summary
     ) if s]
     line2 = " | ".join(parts)
 
@@ -124,11 +124,16 @@ def main():
     if line2:
         sys.stdout.write("\n" + line2)
 
-    # --- Calibrated ETA (line 3) when a live beacon is present.
-    if beacon_dict and (beacon_dict.get("eta_seconds") or 0) > 0:
-        calibrated = format_calibrated_eta(beacon_dict["eta_seconds"])
-        if calibrated:
-            sys.stdout.write("\n" + calibrated)
+    # --- Beacon (line 3) when a live beacon is present, with calibrated ETA
+    #     appended inline to keep it on a single dedicated row instead of
+    #     bloating line 2.
+    if beacon_summary:
+        line3 = beacon_summary
+        if beacon_dict and (beacon_dict.get("eta_seconds") or 0) > 0:
+            calibrated = format_calibrated_eta(beacon_dict["eta_seconds"])
+            if calibrated:
+                line3 = f"{line3}  ·  {calibrated}"
+        sys.stdout.write("\n" + line3)
 
 
 if __name__ == "__main__":

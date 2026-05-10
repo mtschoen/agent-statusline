@@ -19,7 +19,15 @@ matches the main-script's accepted ~5-10% under-estimate for big-context Opus.
 import glob
 import json
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
+
+# orjson is 3-5x faster than stdlib json for the per-line parse that dominates
+# the pace walk. Optional -- the walker (and walk_transcript) fall back cleanly.
+try:
+    from orjson import loads as _json_loads
+except ImportError:
+    _json_loads = json.loads
 
 # --- ANSI colors -----------------------------------------------------------
 RED = "\x1b[31m"
@@ -119,7 +127,7 @@ def walk_transcript(path, include_subagents=False):
             with open(p, encoding="utf-8") as f:
                 for line in f:
                     try:
-                        e = json.loads(line)
+                        e = _json_loads(line)
                     except Exception:
                         continue
                     msg = e.get("message") or {}
@@ -245,10 +253,11 @@ def _fmt_delta_hours(seconds):
 _PACE_CACHE_PATH = os.path.join(
     os.path.expanduser("~"), ".claude", ".statusline-pace-cache.json"
 )
-# Walking ~400+ JSONLs costs ~750ms on the typical fleet, too slow per status
-# refresh (fires many times per turn). 60s cache lets a usage spike show up
-# within a minute and amortizes the walk to once per minute when actively used.
-_PACE_CACHE_TTL_SECONDS = 60
+# Walking ~1500 JSONLs costs ~250ms on the typical fleet (orjson + 8-worker
+# ProcessPool over per-session groups). Statusline still fires many times per
+# render, so the cache stays -- but the TTL is tighter than the old 60s now
+# that the cold walk is 3x cheaper, so a usage spike shows in pace within 30s.
+_PACE_CACHE_TTL_SECONDS = 30
 
 
 def _pace_buckets_cached(period_seconds, win_start_unix):
@@ -283,6 +292,64 @@ def _pace_buckets_cached(period_seconds, win_start_unix):
     return trailing, window
 
 
+def _walk_session_group(paths, period_cutoff, win_start_unix):
+    """Walk one parent+subagents group, return (trailing_dollars, window_dollars).
+
+    Module-level so ProcessPoolExecutor can serialize a reference to it.
+
+    Sequential within a group so the dedup set catches the parent <->
+    auto-compact-subagent message.id overlap (the only collision pattern that
+    actually appears -- 146 instances in the working corpus, all parent-vs-its-
+    own-acompact-subagent). Cross-session collisions weren't observed and are
+    not defended against here; if they ever appear in real data the cost
+    impact would still round to zero.
+    """
+    earliest = min(period_cutoff, win_start_unix)
+    trailing = window_cost = 0.0
+    seen_ids = set()
+    for path in paths:
+        last_model = ""
+        try:
+            with open(path, "rb") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        e = _json_loads(line)
+                    except Exception:
+                        continue
+                    msg = e.get("message") or {}
+                    if msg.get("role") != "assistant":
+                        continue
+                    mid = msg.get("id")
+                    if mid:
+                        if mid in seen_ids:
+                            continue
+                        seen_ids.add(mid)
+                    ts_str = e.get("timestamp")
+                    if not ts_str:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(
+                            ts_str.replace("Z", "+00:00")
+                        ).timestamp()
+                    except (ValueError, TypeError):
+                        continue
+                    if ts < earliest:
+                        continue
+                    model_id = msg.get("model") or ""
+                    if model_id:
+                        last_model = model_id
+                    c = _cost_for_turn(msg.get("usage") or {}, model_id or last_model)
+                    if ts >= period_cutoff:
+                        trailing += c
+                    if ts >= win_start_unix:
+                        window_cost += c
+        except OSError:
+            continue
+    return trailing, window_cost
+
+
 def _walk_pace_buckets(period_seconds, win_start_unix):
     """Sum assistant-turn cost across all transcripts into two buckets.
 
@@ -295,11 +362,15 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
     in-window-only rate is unstable on day 1 of a fresh window where the
     elapsed-since-window-start denominator is tiny.
 
-    File-level mtime filter skips transcripts that can't contain in-range
-    entries; line-level timestamp filter then assigns each turn to the right
-    bucket. Dedupes by message.id like walk_transcript().
+    Implementation:
+      * mtime filter prunes ~80% of files that can't contain in-range entries.
+      * Survivors are grouped by parent session (parent.jsonl + its
+        subagents/agent-*.jsonl) so dedup is local to the group.
+      * Groups dispatch to a ProcessPoolExecutor for true CPU parallelism.
+        Single-group walks run inline to skip ~150ms pool-startup tax.
 
-    Expensive (~750ms on the typical fleet); call via _pace_buckets_cached.
+    Expensive on the typical fleet (~150ms parallel, was ~750ms single-thread);
+    call via _pace_buckets_cached.
     """
     home = os.path.expanduser("~")
     proj_root = os.path.join(home, ".claude", "projects")
@@ -308,56 +379,65 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
     now = datetime.now(timezone.utc).timestamp()
     period_cutoff = now - period_seconds
     earliest = min(period_cutoff, win_start_unix)
+
+    # Group by (slug, session_id) so each work unit owns its own dedup set.
+    groups = {}
+    for path in glob.glob(os.path.join(proj_root, "*", "*.jsonl")):
+        try:
+            if os.path.getmtime(path) < earliest:
+                continue
+        except OSError:
+            continue
+        slug = os.path.basename(os.path.dirname(path))
+        session_id = os.path.splitext(os.path.basename(path))[0]
+        groups.setdefault((slug, session_id), []).append(path)
+    sub_pattern = os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl")
+    for path in glob.glob(sub_pattern):
+        try:
+            if os.path.getmtime(path) < earliest:
+                continue
+        except OSError:
+            continue
+        sub_dir = os.path.dirname(path)
+        session_dir = os.path.dirname(sub_dir)
+        session_id = os.path.basename(session_dir)
+        slug = os.path.basename(os.path.dirname(session_dir))
+        groups.setdefault((slug, session_id), []).append(path)
+
+    if not groups:
+        return 0.0, 0.0
+
+    # Inline walk if the parallelism win wouldn't beat process-pool startup.
+    if len(groups) <= 2:
+        trailing = window_cost = 0.0
+        for paths in groups.values():
+            t, w = _walk_session_group(paths, period_cutoff, win_start_unix)
+            trailing += t
+            window_cost += w
+        return trailing, window_cost
+
+    workers = min(8, os.cpu_count() or 4)
     trailing = window_cost = 0.0
-    seen_ids = set()
-    patterns = (
-        os.path.join(proj_root, "*", "*.jsonl"),
-        os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl"),
-    )
-    for pat in patterns:
-        for path in glob.glob(pat):
-            try:
-                if os.path.getmtime(path) < earliest:
+    try:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(_walk_session_group, paths, period_cutoff, win_start_unix)
+                for paths in groups.values()
+            ]
+            for fut in as_completed(futures):
+                try:
+                    t, w = fut.result()
+                except Exception:
                     continue
-            except OSError:
-                continue
-            last_model = ""
-            try:
-                with open(path, encoding="utf-8") as f:
-                    for line in f:
-                        try:
-                            e = json.loads(line)
-                        except Exception:
-                            continue
-                        msg = e.get("message") or {}
-                        if msg.get("role") != "assistant":
-                            continue
-                        mid = msg.get("id")
-                        if mid:
-                            if mid in seen_ids:
-                                continue
-                            seen_ids.add(mid)
-                        ts_str = e.get("timestamp")
-                        if not ts_str:
-                            continue
-                        try:
-                            ts = datetime.fromisoformat(
-                                ts_str.replace("Z", "+00:00")
-                            ).timestamp()
-                        except ValueError:
-                            continue
-                        if ts < earliest:
-                            continue
-                        model_id = msg.get("model") or ""
-                        if model_id:
-                            last_model = model_id
-                        c = _cost_for_turn(msg.get("usage") or {}, model_id or last_model)
-                        if ts >= period_cutoff:
-                            trailing += c
-                        if ts >= win_start_unix:
-                            window_cost += c
-            except OSError:
-                continue
+                trailing += t
+                window_cost += w
+    except (OSError, RuntimeError):
+        # ProcessPoolExecutor unavailable (sandboxed env, no fork on some
+        # platforms, etc.) -- fall back to inline sequential walk.
+        for paths in groups.values():
+            t, w = _walk_session_group(paths, period_cutoff, win_start_unix)
+            trailing += t
+            window_cost += w
     return trailing, window_cost
 
 

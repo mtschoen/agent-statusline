@@ -39,6 +39,14 @@ identity); fields are omitted when their data isn't available:
   Anthropic's `rate_limits` payload field — proxy setups (LiteLLM, gateways)
   typically don't surface it, so these fields silently omit on those
   configurations.
+
+  The 5h projection extrapolates the in-window rate (`util / elapsed`); the
+  weekly projection uses a **trailing-168h burn rate** derived from local
+  JSONL transcripts and calibrated to %/$ via the current window's
+  (util, in-window-$). This stabilizes the wk projection on day 1 of a fresh
+  window where the in-window denominator is too small to be meaningful. The
+  walk is cached to `~/.claude/.statusline-pace-cache.json` with a 5-minute
+  TTL.
 - **Cost** — total session spend, e.g. `$10.66`. From `cost.total_cost_usd`
   on Claude Code's payload (matches `/usage`, includes subagent spend).
 

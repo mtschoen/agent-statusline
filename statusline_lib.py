@@ -242,8 +242,142 @@ def _fmt_delta_hours(seconds):
     return f"{sign}{abs(seconds) / 3600:.1f}h"
 
 
-def _project_pace(util, resets_at_unix, period_seconds):
-    """Returns ' +X.Yh' (colored) or '' if not enough data."""
+_PACE_CACHE_PATH = os.path.join(
+    os.path.expanduser("~"), ".claude", ".statusline-pace-cache.json"
+)
+# Walking ~400+ JSONLs costs ~750ms on the typical fleet, too slow per status
+# refresh (fires many times per turn). 60s cache lets a usage spike show up
+# within a minute and amortizes the walk to once per minute when actively used.
+_PACE_CACHE_TTL_SECONDS = 60
+
+
+def _pace_buckets_cached(period_seconds, win_start_unix):
+    """Cached wrapper around _walk_pace_buckets. See _walk_pace_buckets for math."""
+    try:
+        with open(_PACE_CACHE_PATH, encoding="utf-8") as f:
+            c = json.load(f)
+        age = datetime.now(timezone.utc).timestamp() - c.get("computed_at_unix", 0)
+        if (
+            age < _PACE_CACHE_TTL_SECONDS
+            and c.get("period_seconds") == period_seconds
+            and c.get("win_start_unix") == win_start_unix
+        ):
+            return c["trailing_dollars"], c["window_dollars"]
+    except (OSError, ValueError, KeyError):
+        pass
+    trailing, window = _walk_pace_buckets(period_seconds, win_start_unix)
+    try:
+        with open(_PACE_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "computed_at_unix": datetime.now(timezone.utc).timestamp(),
+                    "period_seconds": period_seconds,
+                    "win_start_unix": win_start_unix,
+                    "trailing_dollars": trailing,
+                    "window_dollars": window,
+                },
+                f,
+            )
+    except OSError:
+        pass
+    return trailing, window
+
+
+def _walk_pace_buckets(period_seconds, win_start_unix):
+    """Sum assistant-turn cost across all transcripts into two buckets.
+
+    Returns (trailing_dollars, window_dollars):
+      trailing_dollars -- cost in the trailing `period_seconds` from now
+      window_dollars   -- cost since `win_start_unix` (current rate-limit window)
+
+    Used to project the weekly quota at a stable trailing-period burn rate,
+    calibrated to %/$ via the current window's (util, window_dollars). The
+    in-window-only rate is unstable on day 1 of a fresh window where the
+    elapsed-since-window-start denominator is tiny.
+
+    File-level mtime filter skips transcripts that can't contain in-range
+    entries; line-level timestamp filter then assigns each turn to the right
+    bucket. Dedupes by message.id like walk_transcript().
+
+    Expensive (~750ms on the typical fleet); call via _pace_buckets_cached.
+    """
+    home = os.path.expanduser("~")
+    proj_root = os.path.join(home, ".claude", "projects")
+    if not os.path.isdir(proj_root):
+        return 0.0, 0.0
+    now = datetime.now(timezone.utc).timestamp()
+    period_cutoff = now - period_seconds
+    earliest = min(period_cutoff, win_start_unix)
+    trailing = window_cost = 0.0
+    seen_ids = set()
+    patterns = (
+        os.path.join(proj_root, "*", "*.jsonl"),
+        os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl"),
+    )
+    for pat in patterns:
+        for path in glob.glob(pat):
+            try:
+                if os.path.getmtime(path) < earliest:
+                    continue
+            except OSError:
+                continue
+            last_model = ""
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            e = json.loads(line)
+                        except Exception:
+                            continue
+                        msg = e.get("message") or {}
+                        if msg.get("role") != "assistant":
+                            continue
+                        mid = msg.get("id")
+                        if mid:
+                            if mid in seen_ids:
+                                continue
+                            seen_ids.add(mid)
+                        ts_str = e.get("timestamp")
+                        if not ts_str:
+                            continue
+                        try:
+                            ts = datetime.fromisoformat(
+                                ts_str.replace("Z", "+00:00")
+                            ).timestamp()
+                        except ValueError:
+                            continue
+                        if ts < earliest:
+                            continue
+                        model_id = msg.get("model") or ""
+                        if model_id:
+                            last_model = model_id
+                        c = _cost_for_turn(msg.get("usage") or {}, model_id or last_model)
+                        if ts >= period_cutoff:
+                            trailing += c
+                        if ts >= win_start_unix:
+                            window_cost += c
+            except OSError:
+                continue
+    return trailing, window_cost
+
+
+def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
+    """Returns ' +X.Yh' (colored) or '' if not enough data.
+
+    Two pace estimators:
+      * in-window: extrapolates `util / elapsed_in_window` to reset time. Noisy
+        early in the window (tiny denominator), tightens as elapsed grows.
+      * trailing-period: walks JSONL transcripts for trailing-period $-burn,
+        calibrates to %/$ via (util, current-window $), projects forward. Stable
+        from day 1, slightly biased mid-week by data from the prior period's tail.
+
+    use_trailing=True linearly blends the two by `elapsed / period`: pure
+    trailing at window start, pure in-window at window end. The two converge at
+    week-end (the trailing window aligns with the current window) so the late-
+    week blend is mostly cosmetic; the early-week blend is what stabilizes day
+    1. Falls back to in-window only when JSONL calibration is degenerate (zero
+    $ in window).
+    """
     if util is None or util <= 0 or not resets_at_unix:
         return ""
     try:
@@ -252,7 +386,20 @@ def _project_pace(util, resets_at_unix, period_seconds):
         elapsed = period_seconds - remaining
         if elapsed <= 0 or remaining <= 0:
             return ""
-        delta = 100.0 * elapsed / util - period_seconds
+        in_window_delta = 100.0 * elapsed / util - period_seconds
+        delta = in_window_delta
+        if use_trailing:
+            win_start = resets_at_unix - period_seconds
+            trailing_d, window_d = _pace_buckets_cached(period_seconds, win_start)
+            if trailing_d > 0 and window_d > 0:
+                hourly_pct = trailing_d * util / (window_d * period_seconds / 3600)
+                if hourly_pct > 0:
+                    trailing_delta = (100.0 - util) / hourly_pct * 3600 - remaining
+                    in_window_weight = elapsed / period_seconds
+                    delta = (
+                        (1.0 - in_window_weight) * trailing_delta
+                        + in_window_weight * in_window_delta
+                    )
         warn_threshold = 0.05 * period_seconds
         if delta < 0:
             color = RED
@@ -269,15 +416,15 @@ def format_quota(rate_limits):
     """Returns space-joined '5h: P% +Hh wk: P% +Hh', omitting unavailable windows."""
     rl = rate_limits or {}
     parts = []
-    for win_key, period_seconds, label in (
-        ("five_hour", 5 * 3600, "5h"),
-        ("seven_day", 7 * 86400, "wk"),
+    for win_key, period_seconds, label, use_trailing in (
+        ("five_hour", 5 * 3600, "5h", False),
+        ("seven_day", 7 * 86400, "wk", True),
     ):
         w = rl.get(win_key) or {}
         util = w.get("used_percentage")
         if util is None:
             continue
         pct_part = color_high_bad(util, 75, 90)
-        proj_part = _project_pace(util, w.get("resets_at"), period_seconds)
+        proj_part = _project_pace(util, w.get("resets_at"), period_seconds, use_trailing)
         parts.append(f"{label}: {pct_part}{proj_part}")
     return " ".join(parts)

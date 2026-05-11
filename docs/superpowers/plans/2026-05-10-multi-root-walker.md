@@ -14,230 +14,6 @@
 
 Each phase commits in its own repo. Cross-repo coordination point: Phase 7 verifies the integrated behavior end-to-end.
 
-## Phase 5: SPEC.md update + version bump
-
-### Task 5.1: Update SPEC.md and version string
-
-**Files:**
-- Modify: `C:\Users\mtsch\claude-walker\SPEC.md`
-- Modify: `C:\Users\mtsch\claude-walker\cpp\main.cpp` (version string)
-
-- [x] **Step 1: Add a "Roots" section to SPEC.md**
-
-Insert between "## CLI contract" and "## Discovery" in `SPEC.md`:
-
-````markdown
-## Roots
-
-Every subcommand walks an effective set of project roots assembled as:
-
-1. **Primary root.** From `--projects-root <path>` if given, else
-   `~/.claude/projects`.
-2. **CLI extras.** Zero or more `--extra-projects-root <path>` flags.
-3. **Config extras.** Read from `~/.claude/walker-roots.json` unless
-   `--no-config` is passed.
-
-### Config file shape
-
-`~/.claude/walker-roots.json`:
-
-```json
-{
-  "extra_roots": [
-    "/mnt/chonkers/Users/mtsch/.claude/projects"
-  ]
-}
-```
-
-Single key `extra_roots`: array of absolute paths. Per-host; NOT
-synced via memory-sync. Missing file → no extras. Malformed JSON →
-stderr diagnostic, treat as no extras (must NOT error).
-
-### Resolution
-
-The combined list is:
-
-- Deduplicated by `fs::canonical` (realpath); if `canonical` fails for
-  an entry, fall back to its lexically-normalized form.
-- Filtered to existing directories. Non-existent extras are skipped
-  silently with a stderr diagnostic. (This is the SMB-mount-unreachable
-  case — walker must keep going.)
-- Order: primary first, CLI extras in order, config extras in order.
-  Order is informational; results are aggregated and must not depend on
-  it within float epsilon.
-
-Per-group dedup (`seen_ids` on `message.id`) is unchanged. Per-file
-mtime filter is unchanged. All applied uniformly across roots.
-````
-
-- [x] **Step 2: Bump version**
-
-In `C:\Users\mtsch\claude-walker\cpp\main.cpp`, change line 70:
-
-```cpp
-        std::cout << "cpp/0.4.0\n";
-```
-
-In `SPEC.md`, find the existing "## Versioning" section and update the example. If there's a `spec_version` mention, leave the spec version implicit; the README and binaries carry the visible bump.
-
-- [x] **Step 3: Verify**
-
-Run: `C:\Users\mtsch\claude-walker\cpp\build\Release\walker.exe --version`
-Expected: `cpp/0.4.0`
-
-- [x] **Step 4: Commit**
-
-```bash
-cd C:\Users\mtsch\claude-walker
-git add SPEC.md cpp/main.cpp
-git commit -m "spec: document multi-root resolution, bump cpp/0.4.0"
-```
-
----
-
-## Phase 6: Conformance fixtures + harness
-
-Adds two new conformance scenarios in a separate test path that exercises multi-root discovery without polluting the existing aggregate sums.
-
-### Task 6.1: Create the multi-root fixture directories
-
-**Files:**
-- Create: `C:\Users\mtsch\claude-walker\shared\corpus\multi_root\10-merge-roots\primary\<slug>\<sid>.jsonl`
-- Create: `C:\Users\mtsch\claude-walker\shared\corpus\multi_root\10-merge-roots\extra\<slug>\<sid>.jsonl`
-- Create: `C:\Users\mtsch\claude-walker\shared\corpus\multi_root\10-merge-roots\expected.json`
-- Create: `C:\Users\mtsch\claude-walker\shared\corpus\multi_root\11-unreachable\primary\<slug>\<sid>.jsonl`
-- Create: `C:\Users\mtsch\claude-walker\shared\corpus\multi_root\11-unreachable\expected.json`
-
-- [x] **Step 1: Create `10-merge-roots/primary/multi-a/sess-a.jsonl`**
-
-```json
-{"timestamp":"2026-05-09T12:00:00Z","message":{"role":"assistant","id":"msg-a-1","model":"claude-opus-4-7","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
-```
-
-That single line yields cost = (1000 * 5.0 + 500 * 25.0) / 1_000_000 = $0.0175.
-
-- [x] **Step 2: Create `10-merge-roots/extra/multi-b/sess-b.jsonl`**
-
-```json
-{"timestamp":"2026-05-09T12:00:00Z","message":{"role":"assistant","id":"msg-b-1","model":"claude-sonnet-4-6","usage":{"input_tokens":2000,"output_tokens":1000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
-```
-
-Cost = (2000 * 3.0 + 1000 * 15.0) / 1_000_000 = $0.021.
-
-- [x] **Step 3: Create `10-merge-roots/expected.json`**
-
-```json
-{
-  "_meta": {
-    "now_unix": 1778414400.0,
-    "period_seconds": 604800,
-    "win_start_unix": 1778000000.0,
-    "note": "Multi-root conformance fixture."
-  },
-  "expected": {
-    "trailing_usd": 0.0385,
-    "window_usd": 0.0385
-  },
-  "primary_root": "primary",
-  "extra_roots": ["extra"]
-}
-```
-
-Cost total: $0.0175 + $0.021 = $0.0385.
-
-- [x] **Step 4: Create `11-unreachable/primary/multi-a/sess-c.jsonl`**
-
-```json
-{"timestamp":"2026-05-09T12:00:00Z","message":{"role":"assistant","id":"msg-c-1","model":"claude-opus-4-7","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
-```
-
-Cost = $0.0175 (same shape as 10-merge-roots primary).
-
-- [x] **Step 5: Create `11-unreachable/expected.json`**
-
-```json
-{
-  "_meta": {
-    "now_unix": 1778414400.0,
-    "period_seconds": 604800,
-    "win_start_unix": 1778000000.0,
-    "note": "Multi-root unreachable extra: walker must skip silently and return primary-only totals."
-  },
-  "expected": {
-    "trailing_usd": 0.0175,
-    "window_usd": 0.0175
-  },
-  "primary_root": "primary",
-  "extra_roots": ["__does_not_exist__"]
-}
-```
-
-### Task 6.2: Add multi-root check path to conformance harness
-
-**Files:**
-- Modify: `C:\Users\mtsch\claude-walker\shared\conformance.py`
-
-- [x] **Step 1: Add a `check_multi_root` helper**
-
-Insert near the other `check_*` functions:
-
-```python
-MULTI_ROOT_CORPUS = ROOT / "shared" / "corpus" / "multi_root"
-
-
-def check_multi_root(lang: str, binary: Path) -> bool:
-    """Run each multi-root scenario; assert binary sums match expected.json."""
-    if not MULTI_ROOT_CORPUS.is_dir():
-        return True  # no scenarios — skip cleanly
-    all_ok = True
-    for scenario_dir in sorted(MULTI_ROOT_CORPUS.iterdir()):
-        if not scenario_dir.is_dir():
-            continue
-        expected_file = scenario_dir / "expected.json"
-        if not expected_file.is_file():
-            continue
-        data = json.loads(expected_file.read_text())
-        meta = data["_meta"]
-        primary = scenario_dir / data["primary_root"]
-        extras = [scenario_dir / r for r in data["extra_roots"]]
-        try:
-            got = run_walker(binary, meta, primary, extras=extras)
-        except Exception as e:
-            print(f"  [{lang:>4s}] {scenario_dir.name:<22s} FAIL  {e}")
-            all_ok = False
-            continue
-        target = data["expected"]
-        ok, dt, dw = within_tolerance(got, target)
-        badge = " OK " if ok else "FAIL"
-        print(
-            f"  [{lang:>4s}] {scenario_dir.name:<22s} {badge}  "
-            f"trailing=${got.get('trailing_usd', 0):.6f} (d=${dt:+.6f})  "
-            f"window=${got.get('window_usd', 0):.6f} (d=${dw:+.6f})"
-        )
-        if not ok:
-            all_ok = False
-    return all_ok
-```
-
-- [x] **Step 2: Wire into the main loop**
-
-Find the main function (or the per-lang dispatch loop) where `check_aggregate` and per-fixture checks are called, and add a call to `check_multi_root(lang, binary)` after the per-fixture loop. Have it contribute to the overall pass/fail tally the same way other checks do.
-
-- [x] **Step 3: Run conformance**
-
-Run: `cd C:\Users\mtsch\claude-walker && python shared\conformance.py cpp`
-Expected: every existing fixture passes AND both multi-root scenarios pass.
-
-- [x] **Step 4: Commit**
-
-```bash
-cd C:\Users\mtsch\claude-walker
-git add shared/corpus/multi_root/ shared/conformance.py
-git commit -m "test: multi-root conformance fixtures + harness"
-```
-
----
-
 ## Phase 7: Python fallback in statusline_lib.py
 
 ### Task 7.1: Add `_walker_root_list()` helper
@@ -245,7 +21,7 @@ git commit -m "test: multi-root conformance fixtures + harness"
 **Files:**
 - Modify: `C:\Users\mtsch\schoen-claude-status\statusline_lib.py`
 
-- [ ] **Step 1: Add the helper near the other private file helpers**
+- [x] **Step 1: Add the helper near the other private file helpers**
 
 Insert after `_find_walker_binary()` (around line 568):
 
@@ -301,7 +77,7 @@ def _walker_root_list():
 **Files:**
 - Modify: `C:\Users\mtsch\schoen-claude-status\statusline_lib.py` (`_walk_pace_buckets` at lines 667-760)
 
-- [ ] **Step 1: Replace the `proj_root` lookup + discovery glob loop**
+- [x] **Step 1: Replace the `proj_root` lookup + discovery glob loop**
 
 Inside `_walk_pace_buckets`, replace lines 694-724 (from `home = os.path.expanduser("~")` through the second `for path in glob.glob(sub_pattern):` loop) with a roots-loop wrapper:
 
@@ -346,7 +122,7 @@ Inside `_walk_pace_buckets`, replace lines 694-724 (from `home = os.path.expandu
 **Files:**
 - Modify: `C:\Users\mtsch\schoen-claude-status\statusline_lib.py`
 
-- [ ] **Step 1: Rename the constant**
+- [x] **Step 1: Rename the constant**
 
 Replace line 488-489 (the `_PACE_CACHE_PATH = ...` assignment):
 
@@ -363,7 +139,7 @@ Why v2: the v1 cache key didn't include roots, so a stale v1 entry on disk would
 **Files:**
 - Create: `C:\Users\mtsch\schoen-claude-status\.claude\scripts\verify_multi_root_fallback.py`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 The test sets HOME (USERPROFILE on Windows) to a tmp dir so `~` expansion lands inside that tmp world. Builds a default-root + extra-root layout there, drops a `walker-roots.json` next to them, runs the walker pace function, asserts the dollar total.
 
@@ -474,12 +250,12 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run the test**
+- [x] **Step 2: Run the test**
 
 Run: `python C:\Users\mtsch\schoen-claude-status\.claude\scripts\verify_multi_root_fallback.py`
 Expected: `OK: trailing=$0.0385 window=$0.0210` (or similar — the precise window value depends on `win_start_unix` vs entry timestamp).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 cd C:\Users\mtsch\schoen-claude-status

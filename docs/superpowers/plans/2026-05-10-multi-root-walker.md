@@ -16,205 +16,6 @@ Each phase commits in its own repo. Cross-repo coordination point: Phase 7 verif
 
 ---
 
-## Phase 2: cost-mode multi-root
-
-Wire the resolver into `run_cost`.
-
-### Task 2.1: Add `--extra-projects-root` and `--no-config` to cost-mode argument parser
-
-**Files:**
-- Modify: `C:\Users\mtsch\claude-walker\cpp\main.cpp` (Args struct + parse_args)
-
-- [x] **Step 1: Update Args struct (replace lines 38-43)**
-
-```cpp
-struct Args {
-    uint64_t period_seconds = 0;
-    double win_start_unix = 0.0;
-    std::optional<double> now_unix;
-    std::optional<fs::path> projects_root;
-    std::vector<fs::path> extra_projects_roots;
-    bool read_config = true;
-};
-```
-
-- [x] **Step 2: Add flag handling to parse_args (inside the loop at lines 52-75)**
-
-Insert before the final `else { die(... unknown flag ...) }` branch:
-
-```cpp
-} else if (flag == "--extra-projects-root") {
-    args.extra_projects_roots.emplace_back(next());
-} else if (flag == "--no-config") {
-    args.read_config = false;
-```
-
-(Keep the existing `--version`, `--projects-root`, etc. branches as they are.)
-
-- [x] **Step 3: Build to verify it compiles**
-
-Run: `cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release`
-Expected: build succeeds.
-
-- [x] **Step 4: Smoke-test that the new flags parse without error**
-
-Run: `C:\Users\mtsch\claude-walker\cpp\build\Release\walker.exe --period 86400 --win-start 0 --extra-projects-root C:\nonexistent --no-config`
-Expected: exit 0, one JSON line on stdout, `trailing_usd` and `window_usd` numeric (probably matching the current single-root totals since the extra is nonexistent — no behavior change yet).
-
-### Task 2.2: Modify `discover_groups` to accept a vector of roots
-
-**Files:**
-- Modify: `C:\Users\mtsch\claude-walker\cpp\main.cpp` (discover_groups at lines 282-345)
-
-- [x] **Step 1: Change signature and loop body**
-
-Replace the function (around lines 282-345). Show the full new body:
-
-```cpp
-static GroupMap discover_groups(
-    const std::vector<fs::path>& roots,
-    double earliest)
-{
-    GroupMap groups;
-
-    for (const fs::path& root : roots) {
-        std::error_code ec;
-        if (!fs::exists(root, ec)) continue;
-
-        // Parents: <root>/<slug>/<session_id>.jsonl
-        for (auto& slug_entry : fs::directory_iterator(root, ec)) {
-            if (!slug_entry.is_directory()) continue;
-            std::string slug = slug_entry.path().filename().string();
-
-            for (auto& file_entry : fs::directory_iterator(slug_entry.path(), ec)) {
-                const auto& path = file_entry.path();
-
-                if (!file_entry.is_regular_file()) continue;
-                if (path.extension() != ".jsonl") continue;
-
-                auto mtime = fs::last_write_time(path, ec);
-                if (!ec) {
-                    auto sys_time = std::chrono::time_point_cast<std::chrono::seconds>(
-                        std::chrono::clock_cast<std::chrono::system_clock>(mtime));
-                    double mtime_unix = static_cast<double>(sys_time.time_since_epoch().count());
-                    if (mtime_unix < earliest) continue;
-                }
-
-                std::string sid = path.stem().string();
-                groups[group_key(slug, sid)].push_back(path);
-            }
-
-            // Subagents: <root>/<slug>/<session_id>/subagents/agent-*.jsonl
-            for (auto& session_entry : fs::directory_iterator(slug_entry.path(), ec)) {
-                if (!session_entry.is_directory()) continue;
-                std::string sid = session_entry.path().filename().string();
-
-                fs::path subagents_dir = session_entry.path() / "subagents";
-                if (!fs::is_directory(subagents_dir, ec)) continue;
-
-                for (auto& agent_entry : fs::directory_iterator(subagents_dir, ec)) {
-                    const auto& apath = agent_entry.path();
-                    if (!agent_entry.is_regular_file()) continue;
-                    if (apath.extension() != ".jsonl") continue;
-
-                    std::string fname = apath.filename().string();
-                    if (fname.substr(0, 6) != "agent-") continue;
-
-                    auto mtime = fs::last_write_time(apath, ec);
-                    if (!ec) {
-                        auto sys_time = std::chrono::time_point_cast<std::chrono::seconds>(
-                            std::chrono::clock_cast<std::chrono::system_clock>(mtime));
-                        double mtime_unix = static_cast<double>(sys_time.time_since_epoch().count());
-                        if (mtime_unix < earliest) continue;
-                    }
-
-                    groups[group_key(slug, sid)].push_back(apath);
-                }
-            }
-        }
-    }
-
-    return groups;
-}
-```
-
-Note the only changes from the original: signature accepts `std::vector<fs::path>&`, and an outer `for (root : roots)` loop wraps the rest.
-
-- [x] **Step 2: Update the include in main.cpp**
-
-Add near the other includes at the top of `main.cpp`:
-
-```cpp
-#include "walker_roots.hpp"
-```
-
-- [x] **Step 3: Update run_cost (lines 437-507)**
-
-Replace the `fs::path root = args.projects_root.value_or(default_projects_root());` line + the `GroupMap groups = discover_groups(root, earliest);` line with:
-
-```cpp
-fs::path primary = args.projects_root.value_or(default_projects_root());
-std::vector<fs::path> roots = walker::resolve_roots(
-    primary, args.extra_projects_roots, args.read_config);
-
-GroupMap groups = discover_groups(roots, earliest);
-```
-
-(Everything else in run_cost is unchanged.)
-
-- [x] **Step 4: Build**
-
-Run: `cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release`
-Expected: build succeeds.
-
-### Task 2.3: Run existing conformance with `--no-config` (sanity check no regressions)
-
-Existing conformance walks corpus via `--projects-root <CORPUS>`. With our changes, that's "primary = CORPUS, no extras, no config." Behavior should be identical to before.
-
-But the conformance harness doesn't pass `--no-config` yet. If the dev machine has a `walker-roots.json`, conformance would now pick it up — which it shouldn't for fixture isolation. **Fix conformance first, then re-run.**
-
-- [x] **Step 1: Patch conformance.py to always pass `--no-config`**
-
-Modify: `C:\Users\mtsch\claude-walker\shared\conformance.py` — the `run_walker` function (around line 69):
-
-```python
-def run_walker(binary: Path, meta: dict, projects_root: Path, extras: list[Path] | None = None) -> dict:
-    """Run the walker binary against `projects_root`, return parsed JSON output."""
-    cmd = [
-        str(binary),
-        "--period", str(meta["period_seconds"]),
-        "--win-start", repr(meta["win_start_unix"]),
-        "--now", repr(meta["now_unix"]),
-        "--projects-root", str(projects_root),
-        "--no-config",
-    ]
-    for extra in extras or []:
-        cmd.extend(["--extra-projects-root", str(extra)])
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"{binary.name} exited {result.returncode}\n"
-            f"stderr:\n{result.stderr}"
-        )
-    line = result.stdout.strip().splitlines()[-1]
-    return json.loads(line)
-```
-
-- [x] **Step 2: Run conformance against cpp**
-
-Run: `cd C:\Users\mtsch\claude-walker && python shared\conformance.py cpp`
-Expected: every fixture passes, aggregate passes. (`--no-config` should be a no-op when no walker-roots.json exists on the dev box, OR cause the file to be skipped if one does.)
-
-- [ ] **Step 3: Commit**
-
-```bash
-cd C:\Users\mtsch\claude-walker
-git add cpp/main.cpp shared/conformance.py
-git commit -m "walker: cost-mode multi-root + --no-config / --extra-projects-root"
-```
-
----
-
 ## Phase 3: beacons-history multi-root
 
 ### Task 3.1: Add flags to history args parser
@@ -222,7 +23,7 @@ git commit -m "walker: cost-mode multi-root + --no-config / --extra-projects-roo
 **Files:**
 - Modify: `C:\Users\mtsch\claude-walker\cpp\beacons.cpp` (HistoryArgs + parse_history_args, lines 365-410)
 
-- [ ] **Step 1: Extend HistoryArgs**
+- [x] **Step 1: Extend HistoryArgs**
 
 Replace lines 365-371:
 
@@ -238,7 +39,7 @@ struct HistoryArgs {
 };
 ```
 
-- [ ] **Step 2: Add flag handling in parse_history_args**
+- [x] **Step 2: Add flag handling in parse_history_args**
 
 Before the final `} else { err = "unknown flag..."; }` (around line 403), insert:
 
@@ -251,7 +52,7 @@ Before the final `} else { err = "unknown flag..."; }` (around line 403), insert
     out.read_config = false;
 ```
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 Run: `cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release`
 Expected: success.
@@ -261,7 +62,7 @@ Expected: success.
 **Files:**
 - Modify: `C:\Users\mtsch\claude-walker\cpp\beacons.cpp` (lines 509-545)
 
-- [ ] **Step 1: Add the walker_roots.hpp include**
+- [x] **Step 1: Add the walker_roots.hpp include**
 
 Add at the top with other includes:
 
@@ -269,7 +70,7 @@ Add at the top with other includes:
 #include "walker_roots.hpp"
 ```
 
-- [ ] **Step 2: Replace `discover_history_groups`**
+- [x] **Step 2: Replace `discover_history_groups`**
 
 ```cpp
 HistoryGroups discover_history_groups(const std::vector<fs::path>& roots) {
@@ -314,7 +115,7 @@ HistoryGroups discover_history_groups(const std::vector<fs::path>& roots) {
 }
 ```
 
-- [ ] **Step 3: Update run_history to use resolve_roots**
+- [x] **Step 3: Update run_history to use resolve_roots**
 
 In `run_history` (around line 575), replace `fs::path root = parsed.projects_root.value_or(walker::default_projects_root());` and the subsequent `HistoryGroups groups = discover_history_groups(root);` with:
 
@@ -325,13 +126,13 @@ std::vector<fs::path> roots = walker::resolve_roots(
 HistoryGroups groups = discover_history_groups(roots);
 ```
 
-- [ ] **Step 4: Build + smoke-test**
+- [x] **Step 4: Build + smoke-test**
 
 Run: `cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release`
 Then: `C:\Users\mtsch\claude-walker\cpp\build\Release\walker.exe beacons-history --period 604800 --win-start 0 --no-config`
 Expected: exit 0, JSON line with `pairs`, `session_count`, `n_pairs`, `bias_factor` fields.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd C:\Users\mtsch\claude-walker
@@ -348,7 +149,7 @@ git commit -m "walker: beacons-history multi-root"
 **Files:**
 - Modify: `C:\Users\mtsch\claude-walker\cpp\beacons.cpp` (LatestArgs + parse_latest_args + run_latest)
 
-- [ ] **Step 1: Extend LatestArgs (replace lines 324-328)**
+- [x] **Step 1: Extend LatestArgs (replace lines 324-328)**
 
 ```cpp
 struct LatestArgs {
@@ -360,7 +161,7 @@ struct LatestArgs {
 };
 ```
 
-- [ ] **Step 2: Add flag handling in parse_latest_args**
+- [x] **Step 2: Add flag handling in parse_latest_args**
 
 Before the final `} else { err = "unknown flag..."; }` (around line 356), insert:
 
@@ -373,7 +174,7 @@ Before the final `} else { err = "unknown flag..."; }` (around line 356), insert
     out.read_config = false;
 ```
 
-- [ ] **Step 3: Update run_latest to loop over roots**
+- [x] **Step 3: Update run_latest to loop over roots**
 
 In `run_latest`, replace the discovery section (around lines 440-466) so it iterates the resolved roots list. The new body:
 
@@ -409,12 +210,12 @@ for (const fs::path& root : roots) {
 
 (The rest of run_latest — finding the latest beacon across `paths` — stays unchanged.)
 
-- [ ] **Step 4: Build**
+- [x] **Step 4: Build**
 
 Run: `cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release`
 Expected: success.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd C:\Users\mtsch\claude-walker

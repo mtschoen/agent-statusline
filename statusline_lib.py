@@ -486,7 +486,7 @@ def _fmt_delta_hours(seconds):
 
 
 _PACE_CACHE_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-pace-cache.json"
+    os.path.expanduser("~"), ".claude", ".statusline-pace-cache-v2.json"
 )
 # Cold pace walk costs ~250ms parallel-Python or ~95ms with the native
 # claude-walker. The cache stays because the statusline fires many times per
@@ -565,6 +565,52 @@ def _find_walker_binary():
         if which:
             return which
     return None
+
+
+_WALKER_ROOTS_CONFIG_PATH = os.path.join(
+    os.path.expanduser("~"), ".claude", "walker-roots.json"
+)
+
+
+def _walker_root_list():
+    """Default root + extras from walker-roots.json. Mirrors C++ resolve_roots.
+
+    Failure modes match the SPEC: missing file => no extras; malformed JSON =>
+    stderr message + no extras. Only directories that exist on disk make it
+    into the result. Realpath-deduped.
+    """
+    home = os.path.expanduser("~")
+    default = os.path.join(home, ".claude", "projects")
+    all_paths = [default]
+    try:
+        with open(_WALKER_ROOTS_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+        extras = cfg.get("extra_roots") or []
+        if isinstance(extras, list):
+            all_paths.extend(str(p) for p in extras if isinstance(p, str) and p)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as exc:
+        import sys
+        print(
+            f"statusline_lib: ignoring malformed {_WALKER_ROOTS_CONFIG_PATH}: {exc}",
+            file=sys.stderr,
+        )
+
+    seen = set()
+    result = []
+    for p in all_paths:
+        try:
+            canon = os.path.realpath(p)
+        except OSError:
+            canon = os.path.normpath(p)
+        if not os.path.isdir(canon):
+            continue
+        if canon in seen:
+            continue
+        seen.add(canon)
+        result.append(canon)
+    return result
 
 
 def _walk_pace_buckets_native(period_seconds, win_start_unix):
@@ -691,9 +737,8 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
     if native is not None:
         return native
 
-    home = os.path.expanduser("~")
-    proj_root = os.path.join(home, ".claude", "projects")
-    if not os.path.isdir(proj_root):
+    roots = _walker_root_list()
+    if not roots:
         return 0.0, 0.0
     now = datetime.now(timezone.utc).timestamp()
     period_cutoff = now - period_seconds
@@ -701,27 +746,28 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
 
     # Group by (slug, session_id) so each work unit owns its own dedup set.
     groups = {}
-    for path in glob.glob(os.path.join(proj_root, "*", "*.jsonl")):
-        try:
-            if os.path.getmtime(path) < earliest:
+    for proj_root in roots:
+        for path in glob.glob(os.path.join(proj_root, "*", "*.jsonl")):
+            try:
+                if os.path.getmtime(path) < earliest:
+                    continue
+            except OSError:
                 continue
-        except OSError:
-            continue
-        slug = os.path.basename(os.path.dirname(path))
-        session_id = os.path.splitext(os.path.basename(path))[0]
-        groups.setdefault((slug, session_id), []).append(path)
-    sub_pattern = os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl")
-    for path in glob.glob(sub_pattern):
-        try:
-            if os.path.getmtime(path) < earliest:
+            slug = os.path.basename(os.path.dirname(path))
+            session_id = os.path.splitext(os.path.basename(path))[0]
+            groups.setdefault((slug, session_id), []).append(path)
+        sub_pattern = os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl")
+        for path in glob.glob(sub_pattern):
+            try:
+                if os.path.getmtime(path) < earliest:
+                    continue
+            except OSError:
                 continue
-        except OSError:
-            continue
-        sub_dir = os.path.dirname(path)
-        session_dir = os.path.dirname(sub_dir)
-        session_id = os.path.basename(session_dir)
-        slug = os.path.basename(os.path.dirname(session_dir))
-        groups.setdefault((slug, session_id), []).append(path)
+            sub_dir = os.path.dirname(path)
+            session_dir = os.path.dirname(sub_dir)
+            session_id = os.path.basename(session_dir)
+            slug = os.path.basename(os.path.dirname(session_dir))
+            groups.setdefault((slug, session_id), []).append(path)
 
     if not groups:
         return 0.0, 0.0

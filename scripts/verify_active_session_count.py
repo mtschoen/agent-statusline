@@ -60,6 +60,10 @@ def main():
     if count_active_sessions("/nonexistent/path/foo.jsonl", now=now) != 0:
         failures.append("missing dir should return 0")
 
+    # Case 7: default `now=` exercises the live time.time() branch.
+    if count_active_sessions("") != 0:
+        failures.append("default now should still return 0 for empty path")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}")

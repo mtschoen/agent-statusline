@@ -260,7 +260,7 @@ naturally once other sessions go idle."
 **Files:**
 - Modify: `README.md:19-23` (the "What you see" / Line 1 description)
 
-- [ ] **Step 1: Read current README line-1 description**
+- [x] **Step 1: Read current README line-1 description**
 
 Open `README.md` and locate the "Line 1" sentence (around line 21):
 
@@ -268,7 +268,7 @@ Open `README.md` and locate the "Line 1" sentence (around line 21):
 **Line 1** — hostname, current working directory, current git branch (if any).
 ```
 
-- [ ] **Step 2: Extend the Line 1 description**
+- [x] **Step 2: Extend the Line 1 description**
 
 Replace the single sentence with:
 
@@ -280,7 +280,7 @@ written to a transcript in this project directory within the last
 disappears on its own once the other sessions go idle.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git -C C:/Users/mtsch/schoen-claude-status add README.md

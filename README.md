@@ -18,7 +18,11 @@ thresholds.
 
 ## What you see
 
-**Line 1** — hostname, current working directory, current git branch (if any).
+**Line 1** — hostname, current working directory, an optional red
+`[N sessions]` warning when two or more Claude Code sessions have
+written to a transcript in this project directory within the last
+5 minutes, and current git branch (if any). The session warning
+disappears on its own once the other sessions go idle.
 
 **Line 2** — pipe-separated metrics with no inline labels (colors carry the
 identity); fields are omitted when their data isn't available:

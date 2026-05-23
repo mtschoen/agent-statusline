@@ -21,6 +21,7 @@ import time
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from statusline_lib import (
+    ORANGE,
     RED,
     RESET,
     count_active_sessions,
@@ -120,7 +121,15 @@ def main():
 
     # --- Assemble.
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
-    line1 = f"{spinner} [{_hostname()}] {cwd}"
+    # Local-mode badge (env var or signal file)
+    _local_mode = (
+        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
+        or os.path.isfile(os.path.expanduser("~/.claude/.local-mode"))
+    )
+    if _local_mode:
+        line1 = f"{spinner} {ORANGE}LOCAL{RESET} [{_hostname()}] {cwd}"
+    else:
+        line1 = f"{spinner} [{_hostname()}] {cwd}"
     n_sessions = count_active_sessions(d.get("transcript_path") or "", cwd=cwd)
     if n_sessions >= 2:
         line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"

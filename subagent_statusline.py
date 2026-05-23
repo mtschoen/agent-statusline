@@ -32,6 +32,7 @@ import time
 from statusline_lib import (
     CTX_DENOM,
     GREEN,
+    ORANGE,
     RED,
     RESET,
     YELLOW,
@@ -249,10 +250,18 @@ def main():
     parent = d.get("transcript_path") or ""
     session_id = d.get("session_id") or ""
     out = sys.stdout
+
+    _local_mode = (
+        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
+        or os.path.isfile(os.path.expanduser("~/.claude/.local-mode"))
+    )
+    _local_prefix = f"{ORANGE}LOCAL{RESET} | " if _local_mode else ""
+
     for task in d.get("tasks") or []:
         row = _row_for_task(task, parent, session_id)
         if row is None:
             continue
+        row["content"] = _local_prefix + row["content"]
         out.write(json.dumps(row) + "\n")
 
 

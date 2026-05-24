@@ -25,6 +25,7 @@ from statusline_lib import (
     RED,
     RESET,
     count_active_sessions,
+    debounce_session_count,
     format_beacon,
     format_cache,
     format_calibrated_eta,
@@ -133,7 +134,10 @@ def main():
         line1 = f"{spinner} {ORANGE}LOCAL{RESET} [{_hostname()}] {cwd}"
     else:
         line1 = f"{spinner} [{_hostname()}] {cwd}"
-    n_sessions = count_active_sessions(d.get("transcript_path") or "", cwd=cwd)
+    raw_sessions = count_active_sessions(d.get("transcript_path") or "", cwd=cwd)
+    # Suppress the brief 2-process overlap during a session restart (old process
+    # still winding down as the new one starts) -- only badge a sustained count.
+    n_sessions = debounce_session_count(raw_sessions, cwd)
     if n_sessions >= 2:
         line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
     branch = _git_branch(cwd)

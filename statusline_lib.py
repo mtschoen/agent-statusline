@@ -149,6 +149,97 @@ def _count_via_mtime(transcript_path, *, now=None, window_seconds=_SESSION_WINDO
         return 0
 
 
+# --- Multi-session badge debounce -----------------------------------------
+# `count_active_sessions` reports live process truth, but a restart produces a
+# brief handoff overlap: the old `claude` process is still winding down when
+# the new one spins up, so for a few seconds two processes legitimately match
+# the cwd. Painting `[2 sessions]` for that blip is noise. We suppress the
+# badge until an elevated (>= 2) count has *persisted* for the dwell window.
+#
+# The statusline re-renders only when a turn is processed, so the dwell is
+# timed against a stored wall-clock timestamp, never a render count. State is
+# a small JSON file keyed by cwd: {cwd: {"first": ts, "last": ts}}. It is
+# re-derived from live truth every render, so unlike a cache it can't drift --
+# a wrong entry self-corrects on the next render. A gap longer than
+# `_SESSION_DEBOUNCE_GAP_SECONDS` since the last elevated observation means the
+# previous episode's clearing render was missed (lazy refresh), so we treat
+# the new observation as a fresh episode and re-arm rather than trust a stale
+# "first" stamp.
+_SESSION_DEBOUNCE_PATH = os.path.join(
+    os.path.expanduser("~"), ".claude", ".statusline-session-debounce.json"
+)
+_SESSION_DEBOUNCE_DWELL_SECONDS = 20
+_SESSION_DEBOUNCE_GAP_SECONDS = 30
+_SESSION_DEBOUNCE_MAX_AGE_SECONDS = 86400  # prune entries older than a day
+
+
+def _load_debounce_state(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_debounce_state(path, state, now):
+    pruned = {
+        k: v
+        for k, v in state.items()
+        if isinstance(v, dict)
+        and (now - v.get("last", 0)) <= _SESSION_DEBOUNCE_MAX_AGE_SECONDS
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(pruned, f)
+    except OSError:
+        pass
+
+
+def debounce_session_count(
+    raw_count,
+    cwd,
+    *,
+    now=None,
+    state_path=None,
+    dwell_seconds=_SESSION_DEBOUNCE_DWELL_SECONDS,
+    gap_seconds=_SESSION_DEBOUNCE_GAP_SECONDS,
+):
+    """Return the session count to *display*, suppressing brief restart blips.
+
+    Reports `raw_count` unchanged once an elevated (>= 2) count has persisted
+    for `dwell_seconds`; until then an elevated count is reported as 1 so the
+    badge stays quiet. Counts below 2 pass straight through and clear any
+    tracked episode. Returns `raw_count` unchanged when `cwd` is empty (no key
+    to track state by). Never raises -- statusline rendering must not crash.
+    """
+    now = time.time() if now is None else now
+    key = os.path.normcase(cwd or "")
+    if not key:
+        return raw_count
+    path = state_path or _SESSION_DEBOUNCE_PATH
+    state = _load_debounce_state(path)
+    entry = state.get(key)
+
+    if raw_count < 2:
+        if entry is not None:
+            state.pop(key, None)
+            _save_debounce_state(path, state, now)
+        return raw_count
+
+    # raw_count >= 2: continue an in-progress episode, or start a fresh one.
+    if not isinstance(entry, dict) or (now - entry.get("last", 0)) > gap_seconds:
+        entry = {"first": now, "last": now}
+    else:
+        entry = {"first": entry.get("first", now), "last": now}
+    state[key] = entry
+    _save_debounce_state(path, state, now)
+
+    if now - entry["first"] >= dwell_seconds:
+        return raw_count
+    return 1
+
+
 # --- Pricing ---------------------------------------------------------------
 # (input_per_mtok, output_per_mtok). Cache read = 0.1x input; cache write =
 # 1.25x input (matches billing as of 2026-04-30; docs say 2.0x for 1h-TTL,

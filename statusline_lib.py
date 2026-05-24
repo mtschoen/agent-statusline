@@ -358,6 +358,35 @@ def format_cost(cost):
     return f"{color}${cost:.2f}{RESET}"
 
 
+# --- Model badge ----------------------------------------------------------
+# Model-family badge: substring match -> short label + ANSI color. Distinct
+# from threshold green/yellow/red and the cache identity teal/orange so a
+# coloured badge never reads as a warning or a metric. Shared by the main and
+# subagent statuslines.
+_MODEL_BADGES = [
+    (("opus",),   "opus",   "\x1b[35m"),  # magenta
+    (("sonnet",), "sonnet", "\x1b[36m"),  # cyan
+    (("haiku",),  "haiku",  "\x1b[34m"),  # blue
+]
+
+
+def format_model_badge(model_id):
+    """Colored short model-family badge, e.g. magenta `opus[1m]`.
+
+    Appends the `[1m]` runtime-tier suffix when present in the id. Unknown
+    families render as a mauve `?`; an empty id returns "" so the caller can
+    omit the segment.
+    """
+    if not model_id:
+        return ""
+    mid = model_id.lower()
+    suffix = "[1m]" if "[1m]" in mid else ""
+    for keys, label, color in _MODEL_BADGES:
+        if any(k in mid for k in keys):
+            return f"{color}{label}{suffix}{RESET}"
+    return f"{CTX_DENOM}?{RESET}"
+
+
 # --- Beacon (live progress signal from the active turn) -----------------
 _BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
 _BEACON_STALE_SECONDS = 300

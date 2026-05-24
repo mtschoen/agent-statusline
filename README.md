@@ -10,7 +10,7 @@ thresholds.
 
 ```
 [hostname] /path/to/cwd (branch)
-183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $10.66
+opus[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $10.66
 ● opus reviewing diff      | 215.4K / 1.00M (21.5%) | 4.21M / 89.3K / 97% hit | $4.82 | 1m23s
 ✓ sonnet exploring config  | 18.4K  / 200K  ( 9.2%) | 87.3K / 4.2K  / 95% hit | $0.21
 ● haiku running tests      | 5.1K   / 200K  ( 2.6%) | 18.9K / 1.1K  / 84% hit | $0.04 | 8s
@@ -31,6 +31,11 @@ session that cleanly `/exit`'d still counts for up to 5 minutes.
 **Line 2** — pipe-separated metrics with no inline labels (colors carry the
 identity); fields are omitted when their data isn't available:
 
+- **Model** — the active model family as a colored badge, e.g. `opus[1m]`
+  (magenta Opus, cyan Sonnet, blue Haiku; mauve `?` for an unrecognized
+  family). The `[1m]` suffix marks the 1M-context runtime tier. Same badge
+  the per-agent rows use, so the main line and the agent panel read
+  consistently.
 - **Context** — `tokens / window (used %)`, e.g. `183.7K / 1.00M (18.0%)`.
   Numerator and percent share the threshold color; denominator is mauve.
 - **Cache** — `reads / writes / hit %`, e.g. `15.41M / 207.4K / 99% hit`.

@@ -41,6 +41,7 @@ from statusline_lib import (
     format_cache,
     format_context,
     format_cost,
+    format_model_badge,
     walk_transcript,
 )
 
@@ -67,15 +68,6 @@ _DEFAULT_ICON = ("●", YELLOW)  # running / unknown / in-flight
 # teammate. Substring-matched -- substring tolerance covers any future
 # `team_lead` / `lead_agent` variants.
 _LEAD_TYPES = ("lead", "main", "coordinator")
-
-# Model-family badge: substring match -> short label + ANSI color. Distinct
-# from threshold green/yellow/red and the cache identity teal/orange so a
-# coloured badge never reads as a warning or a metric.
-_MODEL_BADGES = [
-    (("opus",),   "opus",   "\x1b[35m"),  # magenta
-    (("sonnet",), "sonnet", "\x1b[36m"),  # cyan
-    (("haiku",),  "haiku",  "\x1b[34m"),  # blue
-]
 
 # Statuses that mean "elapsed clock has stopped" -- omit the elapsed segment
 # rather than letting it tick forever past completion (the input gives us no
@@ -164,17 +156,6 @@ def _live_payload_for_session(session_id):
     }
 
 
-def _model_badge(model_id):
-    if not model_id:
-        return ""
-    mid = model_id.lower()
-    suffix = "[1m]" if "[1m]" in mid else ""
-    for keys, label, color in _MODEL_BADGES:
-        if any(k in mid for k in keys):
-            return f"{color}{label}{suffix}{RESET}"
-    return f"{CTX_DENOM}?{RESET}"
-
-
 def _is_lead_task(task, session_id):
     """Detect whether a task entry represents the team lead (the parent
     session itself) rather than a teammate/subagent."""
@@ -225,7 +206,7 @@ def _row_for_task(task, parent_transcript_path, session_id):
             format_cost(walk["cost"]),
         ]
 
-    badge = _model_badge(model_id)
+    badge = format_model_badge(model_id)
     head_pieces = [p for p in (icon, badge, description) if p]
     head = " ".join(head_pieces)
     # Beacon: walker globs `agent-<sid>.jsonl`, so the bare task_id is what

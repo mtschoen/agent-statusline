@@ -30,6 +30,7 @@ from statusline_lib import (
     format_calibrated_eta,
     format_context,
     format_cost,
+    format_model_badge,
     format_quota,
     walk_transcript,
 )
@@ -101,6 +102,7 @@ def main():
         + (cu.get("cache_read_input_tokens") or 0)
     )
     model_id = (d.get("model") or {}).get("id") or ""
+    model_summary = format_model_badge(model_id)
     context_summary = format_context(ctx_used, window_size, model_id)
 
     # --- Cache: stdin only carries the current turn, so walk the session
@@ -139,7 +141,7 @@ def main():
         line1 = f"{line1} ({branch})"
 
     parts = [s for s in (
-        context_summary, cache_summary, quota_summary, cost_summary
+        model_summary, context_summary, cache_summary, quota_summary, cost_summary
     ) if s]
     line2 = " | ".join(parts)
 

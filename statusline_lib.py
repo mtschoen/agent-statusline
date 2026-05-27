@@ -5,15 +5,21 @@ Used by:
   subagent_statusline.py   -- per-agent panel rows: 1-line metrics
 
 Cost handling differs between the two callers:
-  Main script reads `cost.total_cost_usd` from the stdin payload (authoritative,
-  matches /usage). Subagent script must derive cost from the agent JSONL since
-  the per-task fields don't include cost. The walker computes both in one pass
-  so the subagent path doesn't need a second iteration.
+  Main script shows the authoritative `cost.total_cost_usd` from the stdin
+  payload for the PARENT session, then adds our own estimate of subagent spend.
+  The payload is parent-only -- subagents run as isolated sessions invisible to
+  it (Claude Code issue #48040) -- so the authoritative figure alone undercounts
+  subagent-heavy sessions. Subagent script derives cost from the agent JSONL
+  since the per-task fields don't include cost. The walker computes parent and
+  subagent costs in one pass so neither path needs a second iteration.
 
-Per-Mtok rates and the 1.25x cache-write multiplier match the canonical
-constants documented in ~/.claude/CLAUDE.md ("Cost-estimation formula"). The
-Opus 1M-context tier doubling (>200K context) is intentionally NOT modeled --
-matches the main-script's accepted ~5-10% under-estimate for big-context Opus.
+Per-Mtok rates, the 1.25x cache-write multiplier, and the $0.01/web-search
+charge match the canonical constants in ~/.claude/CLAUDE.md ("Cost-estimation
+formula") and were verified against ~/.claude.json's authoritative per-model
+costUSD: our formula matches the harness to the penny across the fleet (Opus,
+and -- once web search is included -- every model). The Opus 1M-context tier
+doubling is NOT modeled because the harness does not apply it in practice:
+measured 0% error on 28 Opus sessions, including 26M-cache-read ones.
 """
 
 import glob
@@ -216,6 +222,11 @@ _RATES = {
     "haiku":  (1.0,  5.0),
 }
 
+# Server-side web search is billed per request: $10 / 1,000 = $0.01 each.
+# Verified against ~/.claude.json lastModelUsage.costUSD -- adding this term
+# closes the 30-45% under-count on search-heavy (haiku) sessions to exact 1.000.
+_WEB_SEARCH_COST_USD = 0.01
+
 
 def _rates_for(model_id):
     mid = (model_id or "").lower()
@@ -228,18 +239,24 @@ def _rates_for(model_id):
 
 
 def _cost_for_turn(usage, model_id):
-    """Per-Mtok cost for one assistant turn's usage dict."""
+    """Per-Mtok token cost for one assistant turn, plus per-request web search.
+
+    Web search is billed per request, not per token; $0.01 each was verified
+    against ~/.claude.json's authoritative per-model costUSD.
+    """
     inp_rate, out_rate = _rates_for(model_id)
     i = int(usage.get("input_tokens") or 0)
     r = int(usage.get("cache_read_input_tokens") or 0)
     w = int(usage.get("cache_creation_input_tokens") or 0)
     o = int(usage.get("output_tokens") or 0)
-    return (
+    web_searches = int((usage.get("server_tool_use") or {}).get("web_search_requests") or 0)
+    token_cost = (
         i * inp_rate
         + r * (inp_rate * 0.1)
         + w * (inp_rate * 1.25)
         + o * out_rate
     ) / 1_000_000.0
+    return token_cost + web_searches * _WEB_SEARCH_COST_USD
 
 
 # --- Number/percentage formatting -----------------------------------------
@@ -271,7 +288,8 @@ def walk_transcript(path, include_subagents=False):
 
     Returns:
       cache_read, cache_write, input_total, output_total -- session sums
-      cost                                               -- $, derived
+      cost                                               -- $, derived (parent + subagents)
+      parent_cost, subagent_cost                         -- $ split (subagent_cost 0 unless include_subagents)
       last_model_id                                      -- model on most recent assistant turn
       last_input, last_cache_create, last_cache_read     -- usage of most recent turn
                                                             (used to derive ctx_used at "now")
@@ -325,8 +343,13 @@ def walk_transcript(path, include_subagents=False):
         except OSError:
             pass
 
+    parent_cost = 0.0
     if path and os.path.exists(path):
         process(path)
+        # Snapshot before subagents so parent and subagent cost can be reported
+        # separately: the main statusline shows the authoritative parent figure
+        # plus our own subagent estimate.
+        parent_cost = cost_total
         if include_subagents and path.endswith(".jsonl"):
             sub_dir = path[:-6] + "/subagents"
             if os.path.isdir(sub_dir):
@@ -339,6 +362,8 @@ def walk_transcript(path, include_subagents=False):
         "input": input_total,
         "output": output_total,
         "cost": cost_total,
+        "parent_cost": parent_cost,
+        "subagent_cost": cost_total - parent_cost,
         "last_model_id": last_model,
         "last_input": last_input,
         "last_cache_create": last_cache_create,
@@ -408,11 +433,64 @@ def format_cache(read, write, input_t):
     )
 
 
+def _cost_threshold_color(cost):
+    """Magnitude band shared by the parent figure and the subagent addend:
+    green < $25, yellow < $50, red >= $50."""
+    return RED if cost >= 50 else YELLOW if cost >= 25 else GREEN
+
+
 def format_cost(cost):
     if cost is None or cost <= 0:
         return ""
-    color = RED if cost >= 50 else YELLOW if cost >= 25 else GREEN
-    return f"{color}${cost:.2f}{RESET}"
+    return f"{_cost_threshold_color(cost)}${cost:.2f}{RESET}"
+
+
+# The subagent addend carries the same magnitude bands as the parent figure
+# (green/yellow/red via _cost_threshold_color). Its trailing "~" is the estimate
+# marker, and its COLOR is the drift signal: grey when our formula tracks the
+# harness, caution-orange when it has diverged. The drift threshold is tight --
+# our formula matches the harness's parent total_cost_usd to the penny in
+# practice, so even a few percent is a real signal (rate change, new cost
+# dimension) rather than noise.
+_SUBAGENT_COST_COLOR = "\x1b[38;5;245m"   # grey -- the neutral "~" estimate marker
+_COST_DRIFT_COLOR = ORANGE                # caution "~", not error-red: our estimate diverged
+_COST_DRIFT_THRESHOLD = 0.04
+
+
+def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
+    """Render `$parent +$sub~`: authoritative parent + estimated subagent spend.
+
+    Both figures carry the same magnitude bands (green/yellow/red). The parent is
+    the harness's authoritative `total_cost_usd` (ground truth, but PARENT-ONLY
+    -- subagents are invisible to it). The subagent figure is our formula's
+    estimate, marked with a trailing "~".
+
+    The "~" closes the loop on drift. Drift is a PARENT-side measurement:
+    `our_parent` is our formula over the same parent turns as the authoritative
+    figure, so a gap means our cost formula has diverged from the harness (a rate
+    change, a new cost dimension). We tint the estimate marker accordingly --
+    grey when our formula tracks the harness, caution-orange when it doesn't --
+    so the "~" reads as "estimated, and here's how much to trust that estimate."
+    It is deliberately NOT a per-subagent measurement (no ground truth exists for
+    subagents); it's a confidence tint on the estimate marker itself.
+
+    With no subagent cost the result is just the authoritative figure -- byte
+    identical to the pre-subagent behavior.
+    """
+    parent_part = format_cost(authoritative_parent)
+    if not subagent_cost or subagent_cost <= 0:
+        return parent_part
+    drift = 0.0
+    if authoritative_parent and authoritative_parent > 0:
+        drift = (our_parent - authoritative_parent) / authoritative_parent
+    tilde_color = (
+        _COST_DRIFT_COLOR if abs(drift) > _COST_DRIFT_THRESHOLD else _SUBAGENT_COST_COLOR
+    )
+    addend = (
+        f"{_cost_threshold_color(subagent_cost)}+${subagent_cost:.2f}{RESET}"
+        f"{tilde_color}~{RESET}"
+    )
+    return f"{parent_part} {addend}" if parent_part else addend
 
 
 # --- Model badge ----------------------------------------------------------

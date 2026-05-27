@@ -30,7 +30,7 @@ from statusline_lib import (
     format_cache,
     format_calibrated_eta,
     format_context,
-    format_cost,
+    format_cost_with_subagents,
     format_model_badge,
     format_quota,
     walk_transcript,
@@ -111,8 +111,16 @@ def main():
     walk = walk_transcript(d.get("transcript_path") or "", include_subagents=True)
     cache_summary = format_cache(walk["read"], walk["write"], walk["input"])
 
-    # --- Cost: payload is authoritative (matches /usage, includes subagents).
-    cost_summary = format_cost((d.get("cost") or {}).get("total_cost_usd") or 0)
+    # --- Cost: the payload's total_cost_usd is the harness's own figure but is
+    #     PARENT-ONLY -- subagents run as isolated sessions invisible to it
+    #     (Claude Code issue #48040). Show that authoritative parent figure plus
+    #     our estimate of subagent spend. walk["parent_cost"] is our formula over
+    #     the same parent turns; the renderer diffs it against the authoritative
+    #     figure to flag drift (our formula normally matches it to the penny).
+    auth_parent = (d.get("cost") or {}).get("total_cost_usd") or 0
+    cost_summary = format_cost_with_subagents(
+        auth_parent, walk["parent_cost"], walk["subagent_cost"]
+    )
 
     # --- Quota: 5h + weekly utilization with pace projection.
     quota_summary = format_quota(d.get("rate_limits"))

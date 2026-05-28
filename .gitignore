@@ -3,3 +3,5 @@
 *.stackdump
 __pycache__/
 *.pyc
+
+.maintenance.json

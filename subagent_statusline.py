@@ -163,9 +163,7 @@ def _is_lead_task(task, session_id):
     task_type = (task.get("type") or "").lower()
     if any(k in task_type for k in _LEAD_TYPES):
         return True
-    if session_id and task.get("id") == session_id:
-        return True
-    return False
+    return bool(session_id and task.get("id") == session_id)
 
 
 def _row_for_task(task, parent_transcript_path, session_id):

@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   lint:
-    name: Syntax check (Linux)
+    name: Lint (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -23,6 +23,23 @@ jobs:
           python-version: '3.11'
       - name: Check syntax
         run: python -m py_compile statusline.py statusline_lib.py subagent_statusline.py install.py
+      - name: Lint (ruff)
+        # The validation gate. Config lives in pyproject.toml; 0 findings is
+        # the bar. This step is the hard gate that blocks merge on regression.
+        run: |
+          pip install ruff
+          ruff check .
+          ruff format --check .
+      - name: Type check (pyright, non-blocking)
+        # Informational for now. Drop the `|| true` to hard-fail once the
+        # codebase is clean against pyright.
+        run: |
+          pip install pyright
+          pyright || true
+      - name: Lint shell (shellcheck, non-blocking)
+        # Informational until the .sh scripts are triaged to 0 findings, then
+        # drop the `|| true` to make it a hard gate like ruff.
+        run: shellcheck $(git ls-files '*.sh') || true
 
   test:
     name: Unit tests (Linux)

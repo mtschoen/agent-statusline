@@ -28,7 +28,7 @@ import os
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # NOTE: concurrent.futures (ProcessPoolExecutor) is imported lazily inside the
 # only function that uses it (the multi-session parallel cost walk). Importing
@@ -45,14 +45,14 @@ except ImportError:
 # --- ANSI colors -----------------------------------------------------------
 RED = "\x1b[31m"
 YELLOW = "\x1b[33m"
-ORANGE = "\x1b[38;5;208m"        # mid-tier between yellow and red
+ORANGE = "\x1b[38;5;208m"  # mid-tier between yellow and red
 GREEN = "\x1b[32m"
 RESET = "\x1b[0m"
 # Identity colors (256-color) -- distinct from the threshold band so identity
 # never reads as a warning.
-CACHE_READ = "\x1b[38;5;38m"     # teal
-CACHE_WRITE = ORANGE             # cache-write identity reuses the orange hue
-CTX_DENOM = "\x1b[38;5;139m"     # soft mauve
+CACHE_READ = "\x1b[38;5;38m"  # teal
+CACHE_WRITE = ORANGE  # cache-write identity reuses the orange hue
+CTX_DENOM = "\x1b[38;5;139m"  # soft mauve
 
 # --- Multi-session warning -------------------------------------------------
 # Detects other Claude Code sessions running in the same cwd so the
@@ -119,8 +119,9 @@ def _save_session_count_cache(path, cache, now):
         pass
 
 
-def count_active_sessions(cwd, *, now=None, cache_path=None,
-                          ttl=_SESSION_COUNT_CACHE_TTL_SECONDS):
+def count_active_sessions(
+    cwd, *, now=None, cache_path=None, ttl=_SESSION_COUNT_CACHE_TTL_SECONDS
+):
     """Return how many interactive Claude sessions are running in `cwd`.
 
     Memoized on disk for `ttl` seconds keyed by cwd. Returns 0 when psutil is
@@ -286,9 +287,9 @@ def debounce_session_count(
 # 1.25x input (matches billing as of 2026-04-30; docs say 2.0x for 1h-TTL,
 # empirically wrong).
 _RATES = {
-    "opus":   (5.0, 25.0),
+    "opus": (5.0, 25.0),
     "sonnet": (3.0, 15.0),
-    "haiku":  (1.0,  5.0),
+    "haiku": (1.0, 5.0),
 }
 
 # Server-side web search is billed per request: $10 / 1,000 = $0.01 each.
@@ -318,12 +319,11 @@ def _cost_for_turn(usage, model_id):
     r = int(usage.get("cache_read_input_tokens") or 0)
     w = int(usage.get("cache_creation_input_tokens") or 0)
     o = int(usage.get("output_tokens") or 0)
-    web_searches = int((usage.get("server_tool_use") or {}).get("web_search_requests") or 0)
+    web_searches = int(
+        (usage.get("server_tool_use") or {}).get("web_search_requests") or 0
+    )
     token_cost = (
-        i * inp_rate
-        + r * (inp_rate * 0.1)
-        + w * (inp_rate * 1.25)
-        + o * out_rate
+        i * inp_rate + r * (inp_rate * 0.1) + w * (inp_rate * 1.25) + o * out_rate
     ) / 1_000_000.0
     return token_cost + web_searches * _WEB_SEARCH_COST_USD
 
@@ -331,9 +331,9 @@ def _cost_for_turn(usage, model_id):
 # --- Number/percentage formatting -----------------------------------------
 def fmt(n):
     if n >= 1_000_000:
-        return f"{n/1_000_000:.2f}M"
+        return f"{n / 1_000_000:.2f}M"
     if n >= 1_000:
-        return f"{n/1000:.1f}K"
+        return f"{n / 1000:.1f}K"
     return str(int(n))
 
 
@@ -508,8 +508,8 @@ def _cost_threshold_color(cost):
     return RED if cost >= 50 else YELLOW if cost >= 25 else GREEN
 
 
-_SUM_COST_THRESHOLD_YELLOW = 35   # combined parent+subagent total >= this -> yellow
-_SUM_COST_THRESHOLD_RED = 70      # combined parent+subagent total >= this -> red
+_SUM_COST_THRESHOLD_YELLOW = 35  # combined parent+subagent total >= this -> yellow
+_SUM_COST_THRESHOLD_RED = 70  # combined parent+subagent total >= this -> red
 
 
 def _sum_threshold_color(cost):
@@ -520,8 +520,10 @@ def _sum_threshold_color(cost):
     difference -- it flags a combined burn that two individually-modest figures
     can hide, without crying wolf."""
     return (
-        RED if cost >= _SUM_COST_THRESHOLD_RED
-        else YELLOW if cost >= _SUM_COST_THRESHOLD_YELLOW
+        RED
+        if cost >= _SUM_COST_THRESHOLD_RED
+        else YELLOW
+        if cost >= _SUM_COST_THRESHOLD_YELLOW
         else GREEN
     )
 
@@ -548,13 +550,13 @@ def format_cost(cost):
 #       WAY less than shown.
 # Thresholds are tight because our formula matches the harness's parent
 # total_cost_usd to the penny in practice, so even a few percent is a real signal.
-_SUBAGENT_COST_COLOR = "\x1b[38;5;245m"            # grey -- "~" tracks the harness
-_COST_DRIFT_UNDER_COLOR = ORANGE                   # under, moderate: you may pay MORE
-_COST_DRIFT_UNDER_MAJOR_COLOR = "\x1b[38;5;124m"   # under, way off: deep red
-_COST_DRIFT_OVER_COLOR = "\x1b[38;5;51m"           # over, moderate: cyan, you pay LESS
-_COST_DRIFT_OVER_MAJOR_COLOR = "\x1b[38;5;198m"    # over, way off: bright pink
-_COST_DRIFT_THRESHOLD = 0.04                       # flag at all
-_COST_DRIFT_MAJOR_THRESHOLD = 0.25                 # "way off"
+_SUBAGENT_COST_COLOR = "\x1b[38;5;245m"  # grey -- "~" tracks the harness
+_COST_DRIFT_UNDER_COLOR = ORANGE  # under, moderate: you may pay MORE
+_COST_DRIFT_UNDER_MAJOR_COLOR = "\x1b[38;5;124m"  # under, way off: deep red
+_COST_DRIFT_OVER_COLOR = "\x1b[38;5;51m"  # over, moderate: cyan, you pay LESS
+_COST_DRIFT_OVER_MAJOR_COLOR = "\x1b[38;5;198m"  # over, way off: bright pink
+_COST_DRIFT_THRESHOLD = 0.04  # flag at all
+_COST_DRIFT_MAJOR_THRESHOLD = 0.25  # "way off"
 
 
 def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
@@ -592,11 +594,13 @@ def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
     magnitude = abs(drift)
     major = magnitude > _COST_DRIFT_MAJOR_THRESHOLD
     if magnitude <= _COST_DRIFT_THRESHOLD:
-        tilde_color = _SUBAGENT_COST_COLOR                                   # tracks the harness
-    elif drift > 0:                                                          # over-estimate -> you pay LESS
+        tilde_color = _SUBAGENT_COST_COLOR  # tracks the harness
+    elif drift > 0:  # over-estimate -> you pay LESS
         tilde_color = _COST_DRIFT_OVER_MAJOR_COLOR if major else _COST_DRIFT_OVER_COLOR
-    else:                                                                    # under-estimate -> you may pay MORE
-        tilde_color = _COST_DRIFT_UNDER_MAJOR_COLOR if major else _COST_DRIFT_UNDER_COLOR
+    else:  # under-estimate -> you may pay MORE
+        tilde_color = (
+            _COST_DRIFT_UNDER_MAJOR_COLOR if major else _COST_DRIFT_UNDER_COLOR
+        )
     addend = (
         f"{_cost_threshold_color(subagent_cost)}+ ${subagent_cost:.2f}{RESET}"
         f"{tilde_color}~{RESET}"
@@ -617,9 +621,9 @@ def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
 # coloured badge never reads as a warning or a metric. Shared by the main and
 # subagent statuslines.
 _MODEL_BADGES = [
-    (("opus",),   "opus",   "\x1b[35m"),  # magenta
+    (("opus",), "opus", "\x1b[35m"),  # magenta
     (("sonnet",), "sonnet", "\x1b[36m"),  # cyan
-    (("haiku",),  "haiku",  "\x1b[34m"),  # blue
+    (("haiku",), "haiku", "\x1b[34m"),  # blue
 ]
 
 
@@ -677,13 +681,15 @@ def _compute_objective_drift(begin_ts, begin_eta_seconds, current_eta_seconds):
     if not begin_ts or not begin_eta_seconds or begin_eta_seconds <= 0:
         return "nominal"
     try:
-        normalized = begin_ts.replace("Z", "+00:00") if begin_ts.endswith("Z") else begin_ts
+        normalized = (
+            begin_ts.replace("Z", "+00:00") if begin_ts.endswith("Z") else begin_ts
+        )
         begin_dt = datetime.fromisoformat(normalized)
     except (ValueError, TypeError):
         return "nominal"
     if begin_dt.tzinfo is None:
-        begin_dt = begin_dt.replace(tzinfo=timezone.utc)
-    elapsed = (datetime.now(timezone.utc) - begin_dt).total_seconds()
+        begin_dt = begin_dt.replace(tzinfo=UTC)
+    elapsed = (datetime.now(UTC) - begin_dt).total_seconds()
     if elapsed < 0:
         elapsed = 0
     if elapsed > _DRIFT_MATERIAL_ELAPSED_SECONDS:
@@ -698,6 +704,7 @@ def _compute_objective_drift(begin_ts, begin_eta_seconds, current_eta_seconds):
     if ratio >= _DRIFT_MODERATE_RATIO:
         return "moderate"
     return "nominal"
+
 
 _BIAS_CACHE_PATH = os.path.join(
     os.path.expanduser("~"), ".claude", ".statusline-bias-cache.json"
@@ -714,7 +721,9 @@ def _walker_subcommand(subcommand, *args, timeout=2):
     try:
         result = subprocess.run(
             [bin_path, subcommand, *args],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
     except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError):
         return None
@@ -775,7 +784,7 @@ def _find_beacon_anchors(session_id):
     latest_report_ts = None
     latest_begin_eta = None
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     evt = _json_loads(line)
@@ -842,14 +851,16 @@ def _format_clock_and_elapsed(begin_ts):
         return None
     try:
         # Python's fromisoformat accepts the trailing Z suffix on 3.11+.
-        normalized = begin_ts.replace("Z", "+00:00") if begin_ts.endswith("Z") else begin_ts
+        normalized = (
+            begin_ts.replace("Z", "+00:00") if begin_ts.endswith("Z") else begin_ts
+        )
         dt = datetime.fromisoformat(normalized)
     except (ValueError, TypeError):
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     local = dt.astimezone()
-    elapsed = (datetime.now(timezone.utc) - dt).total_seconds()
+    elapsed = (datetime.now(UTC) - dt).total_seconds()
     if elapsed < 0:
         elapsed = 0
     elapsed_min = max(0, int(elapsed) // 60)
@@ -888,7 +899,10 @@ def format_beacon(session_id):
     turn_anchor = _format_clock_and_elapsed(turn_ts)
     step_anchor = _format_clock_and_elapsed(step_ts)
     if turn_anchor and step_anchor:
-        return (f"{color}⏱ turn {turn_anchor} · step {step_anchor} · ~{eta_min}m · {summary}{RESET}", beacon)
+        return (
+            f"{color}⏱ turn {turn_anchor} · step {step_anchor} · ~{eta_min}m · {summary}{RESET}",
+            beacon,
+        )
     if turn_anchor:
         return (f"{color}⏱ turn {turn_anchor} · ~{eta_min}m · {summary}{RESET}", beacon)
     return (f"{RED}⏱ no begin · ~{eta_min}m · {summary}{RESET}", beacon)
@@ -904,7 +918,7 @@ def _bias_factor_cached(period_seconds):
     try:
         with open(_BIAS_CACHE_PATH, encoding="utf-8") as f:
             c = json.load(f)
-        age = datetime.now(timezone.utc).timestamp() - c.get("computed_at_unix", 0)
+        age = datetime.now(UTC).timestamp() - c.get("computed_at_unix", 0)
         if age < _BIAS_CACHE_TTL_SECONDS and c.get("period_seconds") == period_seconds:
             return c.get("n_pairs", 0), c.get("bias_factor")
     except (OSError, ValueError, KeyError):
@@ -912,8 +926,10 @@ def _bias_factor_cached(period_seconds):
 
     data = _walker_subcommand(
         "beacons-history",
-        "--period", str(int(period_seconds)),
-        "--win-start", "0",
+        "--period",
+        str(int(period_seconds)),
+        "--win-start",
+        "0",
         timeout=5,
     )
     if not data:
@@ -924,7 +940,7 @@ def _bias_factor_cached(period_seconds):
         with open(_BIAS_CACHE_PATH, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "computed_at_unix": datetime.now(timezone.utc).timestamp(),
+                    "computed_at_unix": datetime.now(UTC).timestamp(),
                     "period_seconds": period_seconds,
                     "n_pairs": n_pairs,
                     "bias_factor": bias_factor,
@@ -976,7 +992,7 @@ def _pace_buckets_cached(period_seconds, win_start_unix):
     try:
         with open(_PACE_CACHE_PATH, encoding="utf-8") as f:
             c = json.load(f)
-        age = datetime.now(timezone.utc).timestamp() - c.get("computed_at_unix", 0)
+        age = datetime.now(UTC).timestamp() - c.get("computed_at_unix", 0)
         if (
             age < _PACE_CACHE_TTL_SECONDS
             and c.get("period_seconds") == period_seconds
@@ -990,7 +1006,7 @@ def _pace_buckets_cached(period_seconds, win_start_unix):
         with open(_PACE_CACHE_PATH, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "computed_at_unix": datetime.now(timezone.utc).timestamp(),
+                    "computed_at_unix": datetime.now(UTC).timestamp(),
                     "period_seconds": period_seconds,
                     "win_start_unix": win_start_unix,
                     "trailing_dollars": trailing,
@@ -1067,6 +1083,7 @@ def _walker_root_list():
         pass
     except (OSError, ValueError) as exc:
         import sys
+
         print(
             f"statusline_lib: ignoring malformed {_WALKER_ROOTS_CONFIG_PATH}: {exc}",
             file=sys.stderr,
@@ -1102,8 +1119,10 @@ def _walk_pace_buckets_native(period_seconds, win_start_unix):
         out = subprocess.run(
             [
                 bin_path,
-                "--period", str(int(period_seconds)),
-                "--win-start", repr(float(win_start_unix)),
+                "--period",
+                str(int(period_seconds)),
+                "--win-start",
+                repr(float(win_start_unix)),
             ],
             capture_output=True,
             text=True,
@@ -1215,7 +1234,7 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
     roots = _walker_root_list()
     if not roots:
         return 0.0, 0.0
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).timestamp()
     period_cutoff = now - period_seconds
     earliest = min(period_cutoff, win_start_unix)
 
@@ -1305,8 +1324,8 @@ def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
     if util is None or util <= 0 or not resets_at_unix:
         return ""
     try:
-        reset_dt = datetime.fromtimestamp(resets_at_unix, tz=timezone.utc)
-        remaining = (reset_dt - datetime.now(timezone.utc)).total_seconds()
+        reset_dt = datetime.fromtimestamp(resets_at_unix, tz=UTC)
+        remaining = (reset_dt - datetime.now(UTC)).total_seconds()
         elapsed = period_seconds - remaining
         if elapsed <= 0 or remaining <= 0:
             return ""
@@ -1321,9 +1340,8 @@ def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
                     trailing_delta = (100.0 - util) / hourly_pct * 3600 - remaining
                     in_window_weight = elapsed / period_seconds
                     delta = (
-                        (1.0 - in_window_weight) * trailing_delta
-                        + in_window_weight * in_window_delta
-                    )
+                        1.0 - in_window_weight
+                    ) * trailing_delta + in_window_weight * in_window_delta
         warn_threshold = 0.05 * period_seconds
         if delta < 0:
             color = RED
@@ -1349,6 +1367,8 @@ def format_quota(rate_limits):
         if util is None:
             continue
         pct_part = color_high_bad(util, 75, 90)
-        proj_part = _project_pace(util, w.get("resets_at"), period_seconds, use_trailing)
+        proj_part = _project_pace(
+            util, w.get("resets_at"), period_seconds, use_trailing
+        )
         parts.append(f"{label}: {pct_part}{proj_part}")
     return " ".join(parts)

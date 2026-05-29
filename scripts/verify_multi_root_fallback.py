@@ -7,13 +7,14 @@ Run:
 Builds a tmp filesystem layout, points HOME at it, asserts dollar totals.
 Cleans up on exit even on failure.
 """
+
 import importlib
 import json
 import os
 import shutil
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
@@ -21,7 +22,7 @@ sys.path.insert(0, REPO)
 
 def make_jsonl(path, model, input_tokens, output_tokens):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     entry = {
         "timestamp": iso,
         "message": {
@@ -53,11 +54,15 @@ def main():
 
         make_jsonl(
             os.path.join(default_root, "slug-default", "sess-d.jsonl"),
-            "claude-opus-4-7", 1000, 500,
+            "claude-opus-4-7",
+            1000,
+            500,
         )  # $0.0175
         make_jsonl(
             os.path.join(extra_root, "slug-extra", "sess-e.jsonl"),
-            "claude-sonnet-4-6", 2000, 1000,
+            "claude-sonnet-4-6",
+            2000,
+            1000,
         )  # $0.021
 
         config_path = os.path.join(tmp, ".claude", "walker-roots.json")
@@ -77,20 +82,19 @@ def main():
         statusline_lib._find_walker_binary = lambda: None
 
         roots = statusline_lib._walker_root_list()
-        assert os.path.realpath(default_root) in roots, \
-            f"default root missing: {roots}"
-        assert os.path.realpath(extra_root) in roots, \
-            f"extra root missing: {roots}"
+        assert os.path.realpath(default_root) in roots, f"default root missing: {roots}"
+        assert os.path.realpath(extra_root) in roots, f"extra root missing: {roots}"
 
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
         trailing, window = statusline_lib._walk_pace_buckets(
             period_seconds=604800,
             win_start_unix=now - 86400,
         )
 
         expected = 0.0175 + 0.021
-        assert abs(trailing - expected) < 0.001, \
+        assert abs(trailing - expected) < 0.001, (
             f"trailing got ${trailing:.4f}, expected ${expected:.4f}"
+        )
         print(f"OK: trailing=${trailing:.4f} window=${window:.4f}")
     finally:
         if old_home is None:

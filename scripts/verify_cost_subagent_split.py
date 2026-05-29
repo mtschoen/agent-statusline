@@ -28,21 +28,21 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statusline_lib import (
-    GREEN,
-    YELLOW,
-    RED,
-    walk_transcript,
-    format_cost,
-    format_cost_with_subagents,
-    _cost_for_turn,
-    _WEB_SEARCH_COST_USD,
-    _COST_DRIFT_THRESHOLD,
     _COST_DRIFT_MAJOR_THRESHOLD,
     _COST_DRIFT_OVER_COLOR,
     _COST_DRIFT_OVER_MAJOR_COLOR,
+    _COST_DRIFT_THRESHOLD,
     _COST_DRIFT_UNDER_COLOR,
     _COST_DRIFT_UNDER_MAJOR_COLOR,
     _SUBAGENT_COST_COLOR,
+    _WEB_SEARCH_COST_USD,
+    GREEN,
+    RED,
+    YELLOW,
+    _cost_for_turn,
+    format_cost,
+    format_cost_with_subagents,
+    walk_transcript,
 )
 
 _DRIFT_COLORS = (
@@ -55,7 +55,14 @@ _DRIFT_COLORS = (
 
 def _assistant_line(message_id, model, usage):
     return json.dumps(
-        {"message": {"role": "assistant", "id": message_id, "model": model, "usage": usage}}
+        {
+            "message": {
+                "role": "assistant",
+                "id": message_id,
+                "model": model,
+                "usage": usage,
+            }
+        }
     )
 
 
@@ -74,12 +81,18 @@ def check(failures):
         parent = os.path.join(tmp, "sess.jsonl")
         with open(parent, "w", encoding="utf-8") as f:
             # parent: 1M input tokens, opus -> $5.00
-            f.write(_assistant_line("p1", "claude-opus-4-7", {"input_tokens": 1_000_000}) + "\n")
+            f.write(
+                _assistant_line("p1", "claude-opus-4-7", {"input_tokens": 1_000_000})
+                + "\n"
+            )
         sub_dir = os.path.join(tmp, "sess", "subagents")
         os.makedirs(sub_dir)
         with open(os.path.join(sub_dir, "agent-x.jsonl"), "w", encoding="utf-8") as f:
             # subagent: 1M output tokens, opus -> $25.00
-            f.write(_assistant_line("s1", "claude-opus-4-7", {"output_tokens": 1_000_000}) + "\n")
+            f.write(
+                _assistant_line("s1", "claude-opus-4-7", {"output_tokens": 1_000_000})
+                + "\n"
+            )
 
         w = walk_transcript(parent, include_subagents=True)
         if abs(w["parent_cost"] - 5.0) > 1e-6:
@@ -101,19 +114,19 @@ def check(failures):
         failures.append("no-subagent render should equal plain format_cost")
 
     # --- Subagent total carries the same magnitude bands as the main cost.
-    green = format_cost_with_subagents(5.0, 5.0, 10.0)   # $10 -> green
+    green = format_cost_with_subagents(5.0, 5.0, 10.0)  # $10 -> green
     if (GREEN + "+ $10.00") not in green:
         failures.append("subagent total < $25 should be green")
     yellow = format_cost_with_subagents(5.0, 5.0, 30.0)  # $30 -> yellow
     if (YELLOW + "+ $30.00") not in yellow:
         failures.append("subagent total in [$25,$50) should be yellow")
-    red = format_cost_with_subagents(5.0, 5.0, 60.0)     # $60 -> red
+    red = format_cost_with_subagents(5.0, 5.0, 60.0)  # $60 -> red
     if (RED + "+ $60.00") not in red:
         failures.append("subagent total >= $50 should be red")
 
     # --- The summed total carries its OWN, higher bands (green < $35, yellow <
     #     $70, red >= $70) so a combined burn the parts hide individually flags.
-    sum_green = format_cost_with_subagents(5.0, 5.0, 10.0)     # total $15 -> green
+    sum_green = format_cost_with_subagents(5.0, 5.0, 10.0)  # total $15 -> green
     if (GREEN + "= $15.00") not in sum_green:
         failures.append("summed total < $35 should be green")
     # Parts both green ($20 each) but their $40 sum lands in the yellow band.
@@ -121,7 +134,7 @@ def check(failures):
     if (YELLOW + "= $40.00") not in sum_yellow:
         failures.append("summed total in [$35,$70) should be yellow")
     # Parts both yellow ($40 each), but only the $80 sum crosses into red.
-    sum_red = format_cost_with_subagents(40.0, 40.0, 40.0)     # total $80 -> red
+    sum_red = format_cost_with_subagents(40.0, 40.0, 40.0)  # total $80 -> red
     if (RED + "= $80.00") not in sum_red:
         failures.append("summed total >= $70 should be red")
     # The sum's bands are independent of the parts': here both parts are green
@@ -131,11 +144,13 @@ def check(failures):
     # Discriminator: a $60 total is YELLOW under the sum bands (35/70) but would be
     # RED under the per-figure bands (25/50). Proves _sum_threshold_color is used,
     # not _cost_threshold_color -- the one case where the two band sets disagree.
-    sum_disc = format_cost_with_subagents(30.0, 30.0, 30.0)    # total $60
+    sum_disc = format_cost_with_subagents(30.0, 30.0, 30.0)  # total $60
     if (YELLOW + "= $60.00") not in sum_disc:
         failures.append("summed $60 should be yellow (sum bands 35/70)")
     if (RED + "= $60.00") in sum_disc:
-        failures.append("summed $60 must use sum bands (yellow), not per-figure bands (red)")
+        failures.append(
+            "summed $60 must use sum bands (yellow), not per-figure bands (red)"
+        )
 
     # --- No authoritative parent + subagent cost: show the addend, drop the
     #     redundant sum (the `= $total` equation needs a parent to add to).
@@ -151,8 +166,8 @@ def check(failures):
     if any(c in green for c in _DRIFT_COLORS):
         failures.append("no-drift render should not use any drift color")
 
-    mod = _COST_DRIFT_THRESHOLD + 0.10           # moderate (between flag and major)
-    big = _COST_DRIFT_MAJOR_THRESHOLD + 0.10     # way off
+    mod = _COST_DRIFT_THRESHOLD + 0.10  # moderate (between flag and major)
+    big = _COST_DRIFT_MAJOR_THRESHOLD + 0.10  # way off
 
     # --- Over-estimate moderate -> cyan; magnitude untouched; no arrow.
     over_mod = format_cost_with_subagents(5.0, 5.0 * (1 + mod), 10.0)
@@ -183,7 +198,9 @@ def check(failures):
         failures.append("way-off under should escalate past orange")
 
     # --- Drift within the flag threshold -> grey '~', no tint.
-    edge = format_cost_with_subagents(5.0, 5.0 * (1 + (_COST_DRIFT_THRESHOLD - 0.01)), 10.0)
+    edge = format_cost_with_subagents(
+        5.0, 5.0 * (1 + (_COST_DRIFT_THRESHOLD - 0.01)), 10.0
+    )
     if any(c in edge for c in _DRIFT_COLORS):
         failures.append("drift within threshold should not tint the marker")
 
@@ -195,7 +212,9 @@ def main():
         for failure in failures:
             print(f"FAIL: {failure}")
         sys.exit(1)
-    print("OK: cost field bands both figures, charges web search, tints '~' by drift direction + severity")
+    print(
+        "OK: cost field bands both figures, charges web search, tints '~' by drift direction + severity"
+    )
 
 
 if __name__ == "__main__":

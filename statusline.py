@@ -36,7 +36,6 @@ from statusline_lib import (
     walk_transcript,
 )
 
-
 _INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
 _ERROR_LOG = os.path.expanduser("~/.claude/.statusline-error.log")
 
@@ -69,9 +68,7 @@ def _git_branch(cwd):
         ["git", "-C", cwd, "rev-parse", "--short", "HEAD"],
     ):
         try:
-            out = subprocess.run(
-                arguments, capture_output=True, text=True, timeout=2
-            )
+            out = subprocess.run(arguments, capture_output=True, text=True, timeout=2)
             if out.returncode == 0 and out.stdout.strip():
                 return out.stdout.strip()
         except (OSError, subprocess.SubprocessError):
@@ -129,14 +126,15 @@ def main():
     #     emitted one). Resolves to (None, None) when walker is missing,
     #     no beacon exists, or the latest is kind=end.
     session_id = d.get("session_id") or ""
-    beacon_summary, beacon_dict = format_beacon(session_id) if session_id else (None, None)
+    beacon_summary, beacon_dict = (
+        format_beacon(session_id) if session_id else (None, None)
+    )
 
     # --- Assemble.
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
     # Local-mode badge (env var or signal file)
-    _local_mode = (
-        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
-        or os.path.isfile(os.path.expanduser("~/.claude/.local-mode"))
+    _local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
+        os.path.expanduser("~/.claude/.local-mode")
     )
     if _local_mode:
         line1 = f"{spinner} {ORANGE}LOCAL{RESET} [{_hostname()}] {cwd}"
@@ -152,9 +150,17 @@ def main():
     if branch:
         line1 = f"{line1} ({branch})"
 
-    parts = [s for s in (
-        model_summary, context_summary, cache_summary, quota_summary, cost_summary
-    ) if s]
+    parts = [
+        s
+        for s in (
+            model_summary,
+            context_summary,
+            cache_summary,
+            quota_summary,
+            cost_summary,
+        )
+        if s
+    ]
     line2 = " | ".join(parts)
 
     sys.stdout.write(line1)
@@ -180,6 +186,7 @@ def _log_error():
     # invisible.
     try:
         import traceback
+
         with open(_ERROR_LOG, "a", encoding="utf-8") as f:
             f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             traceback.print_exc(file=f)
@@ -193,6 +200,8 @@ if __name__ == "__main__":
     except Exception:
         _log_error()
         try:
-            sys.stdout.write(f"{RED}STATUSLINE ERROR{RESET} — see ~/.claude/.statusline-error.log")
+            sys.stdout.write(
+                f"{RED}STATUSLINE ERROR{RESET} — see ~/.claude/.statusline-error.log"
+            )
         except Exception:
             pass

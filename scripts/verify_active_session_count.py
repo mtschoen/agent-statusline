@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from statusline_lib import count_active_sessions, _process_matches
+from statusline_lib import _process_matches, count_active_sessions
 
 
 def check_dispatch(failures):
@@ -40,13 +40,22 @@ def check_classifier(failures):
         failures.append("interactive claude in target cwd should match")
     if not _process_matches("claude.exe", ["claude.exe"], "/home/user/proj", target):
         failures.append("claude.exe in target cwd should match (Windows)")
-    if not _process_matches("node", ["node", "/path/to/claude/cli.js"], "/home/user/proj", target):
+    if not _process_matches(
+        "node", ["node", "/path/to/claude/cli.js"], "/home/user/proj", target
+    ):
         failures.append("node-wrapped claude should match")
 
     # Negative: -p / --print headless mode (Task subagents, scripted)
-    if _process_matches("claude.exe", ["claude.exe", "-p", "--output-format", "json"], "/home/user/proj", target):
+    if _process_matches(
+        "claude.exe",
+        ["claude.exe", "-p", "--output-format", "json"],
+        "/home/user/proj",
+        target,
+    ):
         failures.append("-p subagent should NOT match")
-    if _process_matches("claude", ["claude", "--print", "hi"], "/home/user/proj", target):
+    if _process_matches(
+        "claude", ["claude", "--print", "hi"], "/home/user/proj", target
+    ):
         failures.append("--print subagent should NOT match")
 
     # Negative: wrong cwd
@@ -97,7 +106,9 @@ def check_cache(failures):
         # Future-stamped entry (clock moved backwards) -> treated as a miss.
         seed(42, 5000)
         if count_active_sessions(cwd, now=1001, cache_path=cache_path, ttl=8) != 0:
-            failures.append("future-stamped cache entry should be ignored (clock-skew guard)")
+            failures.append(
+                "future-stamped cache entry should be ignored (clock-skew guard)"
+            )
 
 
 def main():
@@ -110,7 +121,9 @@ def main():
         for f in failures:
             print(f"FAIL: {f}")
         sys.exit(1)
-    print("OK: count_active_sessions + _process_matches behave correctly across all cases")
+    print(
+        "OK: count_active_sessions + _process_matches behave correctly across all cases"
+    )
 
 
 if __name__ == "__main__":

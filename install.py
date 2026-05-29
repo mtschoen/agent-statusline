@@ -27,7 +27,9 @@ def _load(path):
         return {}
     data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError(f"{path} is not a JSON object (top-level type: {type(data).__name__})")
+        raise ValueError(
+            f"{path} is not a JSON object (top-level type: {type(data).__name__})"
+        )
     return data
 
 
@@ -42,9 +44,21 @@ def _atomic_write(path, data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--repo", required=True, help="Absolute path to the schoen-claude-status checkout")
-    parser.add_argument("--settings", default=None, help="Path to settings.json (default ~/.claude/settings.json)")
-    parser.add_argument("--dry-run", action="store_true", help="Print the merged JSON and exit without writing")
+    parser.add_argument(
+        "--repo",
+        required=True,
+        help="Absolute path to the schoen-claude-status checkout",
+    )
+    parser.add_argument(
+        "--settings",
+        default=None,
+        help="Path to settings.json (default ~/.claude/settings.json)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the merged JSON and exit without writing",
+    )
     args = parser.parse_args()
 
     # Forward slashes -- bash on Windows (Git Bash, MSYS) handles them and the
@@ -82,7 +96,10 @@ def main():
         settings = _load(settings_path)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"error: could not parse {settings_path}: {e}", file=sys.stderr)
-        print("  refusing to overwrite a malformed settings file -- fix or move it first", file=sys.stderr)
+        print(
+            "  refusing to overwrite a malformed settings file -- fix or move it first",
+            file=sys.stderr,
+        )
         return 1
     except OSError as e:
         print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
@@ -123,7 +140,8 @@ def main():
     # fallback runs identically when it isn't found.
     sys.path.insert(0, repo)
     try:
-        from statusline_lib import _find_walker_binary  # noqa: E402
+        from statusline_lib import _find_walker_binary
+
         walker = _find_walker_binary()
     except ImportError:
         walker = None
@@ -131,7 +149,9 @@ def main():
         print(f"  walker (native):    {walker}")
     else:
         print("  walker (native):    not found -- using Python fallback")
-        print("                      build ~/claude-walker/cpp or set CLAUDE_WALKER_BIN to enable")
+        print(
+            "                      build ~/claude-walker/cpp or set CLAUDE_WALKER_BIN to enable"
+        )
 
     print("Open a new Claude Code session (or trigger a render) to pick it up.")
     return 0

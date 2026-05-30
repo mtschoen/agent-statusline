@@ -17,7 +17,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from statusline_lib import debounce_session_count, _SESSION_DEBOUNCE_DWELL_SECONDS
+from statusline_lib import _SESSION_DEBOUNCE_DWELL_SECONDS, debounce_session_count
 
 DWELL = _SESSION_DEBOUNCE_DWELL_SECONDS
 CWD = os.path.normcase(r"C:\Users\mtsch\liminal")
@@ -61,10 +61,9 @@ def check(failures):
 
     with tempfile.TemporaryDirectory() as tmp:
         sp = fresh_state_path(tmp)
-        # Case 6: a transient that elevates, clears, then re-elevates must
-        # RE-ARM the dwell — i.e. dropping to 1 resets the timer, so the second
-        # blip is suppressed again rather than shown instantly.
-        debounce_session_count(2, CWD, now=2000.0, state_path=sp)          # elevate
+        # Case 6: dropping to 1 re-arms the dwell, so a later re-elevation is
+        # suppressed again rather than shown instantly.
+        debounce_session_count(2, CWD, now=2000.0, state_path=sp)  # elevate
         if debounce_session_count(1, CWD, now=2005.0, state_path=sp) != 1:  # clear
             failures.append("drop to 1 should pass through as 1")
         if debounce_session_count(2, CWD, now=2006.0, state_path=sp) != 1:
@@ -78,7 +77,9 @@ def check(failures):
         # observation re-arms the dwell.
         write_state(sp, {CWD: {"first": 3000.0, "last": 3000.0}})
         if debounce_session_count(2, CWD, now=3000.0 + 100000, state_path=sp) != 1:
-            failures.append("stale elevated stamp after a long gap should re-arm (suppress)")
+            failures.append(
+                "stale elevated stamp after a long gap should re-arm (suppress)"
+            )
 
     with tempfile.TemporaryDirectory() as tmp:
         sp = fresh_state_path(tmp)
@@ -100,7 +101,9 @@ def main():
         for f in failures:
             print(f"FAIL: {f}")
         sys.exit(1)
-    print("OK: debounce_session_count suppresses handoff blips and surfaces real sessions")
+    print(
+        "OK: debounce_session_count suppresses handoff blips and surfaces real sessions"
+    )
 
 
 if __name__ == "__main__":

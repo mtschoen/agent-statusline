@@ -1,0 +1,10 @@
+# Optional runtime extras for the statusline. All are import-guarded in
+# statusline_lib.py -- the statusline works without them (it degrades
+# gracefully), so none are hard requirements:
+#   psutil  -- real process enumeration for active-session counting
+#              (falls back to an mtime heuristic when absent)
+#   orjson  -- faster JSON parsing of transcript lines
+# They are declared here so the tooling does not read them as undeclared
+# (hallucinated) imports. Install with: pip install -r requirements.txt
+orjson
+psutil

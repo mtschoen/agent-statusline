@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 
 .maintenance.json
+
+# Dev-tooling deps (aislop) — pinned via package.json + package-lock.json,
+# installed with `npm ci --ignore-scripts`; the tree itself is not committed.
+node_modules/

@@ -6,6 +6,7 @@ and prints two lines:
 See README.md for layout, color thresholds, and install instructions.
 """
 
+import contextlib
 import json
 import os
 import socket
@@ -36,13 +37,9 @@ from statusline_lib import (
     walk_transcript,
 )
 
-
 _INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
 _ERROR_LOG = os.path.expanduser("~/.claude/.statusline-error.log")
 
-# Per-render spinner so the user can see when the status line refreshes even
-# if the rendered text is byte-identical. Derived from wall clock at 4Hz, so
-# consecutive renders ≥250ms apart almost always show different frames.
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -51,6 +48,8 @@ def _safe_write(path, text):
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     except OSError:
+        # Best-effort write (cache/state file); a failed write is non-fatal
+        # and must not break rendering.
         pass
 
 
@@ -69,14 +68,46 @@ def _git_branch(cwd):
         ["git", "-C", cwd, "rev-parse", "--short", "HEAD"],
     ):
         try:
-            out = subprocess.run(
-                arguments, capture_output=True, text=True, timeout=2
-            )
+            out = subprocess.run(arguments, capture_output=True, text=True, timeout=2)
             if out.returncode == 0 and out.stdout.strip():
                 return out.stdout.strip()
         except (OSError, subprocess.SubprocessError):
             continue
     return ""
+
+
+def _line1(d, cwd, spinner):
+    local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
+        os.path.expanduser("~/.claude/.local-mode")
+    )
+    host = _hostname()
+    line1 = (
+        f"{spinner} {ORANGE}LOCAL{RESET} [{host}] {cwd}"
+        if local_mode
+        else f"{spinner} [{host}] {cwd}"
+    )
+    # Suppress the brief 2-process overlap during a session restart (old process
+    # still winding down as the new one starts) -- only badge a sustained count.
+    n_sessions = debounce_session_count(count_active_sessions(cwd), cwd)
+    if n_sessions >= 2:
+        line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
+    branch = _git_branch(cwd)
+    if branch:
+        line1 = f"{line1} ({branch})"
+    return line1
+
+
+def _beacon_line(session_id):
+    beacon_summary, beacon_dict = (
+        format_beacon(session_id) if session_id else (None, None)
+    )
+    if not beacon_summary:
+        return None
+    if beacon_dict and (beacon_dict.get("eta_seconds") or 0) > 0:
+        calibrated = format_calibrated_eta(beacon_dict["eta_seconds"])
+        if calibrated:
+            return f"{beacon_summary}  ·  {calibrated}"
+    return beacon_summary
 
 
 def main():
@@ -125,65 +156,41 @@ def main():
     # --- Quota: 5h + weekly utilization with pace projection.
     quota_summary = format_quota(d.get("rate_limits"))
 
-    # --- Beacon: live progress signal from the active turn (if the agent
-    #     emitted one). Resolves to (None, None) when walker is missing,
-    #     no beacon exists, or the latest is kind=end.
-    session_id = d.get("session_id") or ""
-    beacon_summary, beacon_dict = format_beacon(session_id) if session_id else (None, None)
-
-    # --- Assemble.
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
-    # Local-mode badge (env var or signal file)
-    _local_mode = (
-        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
-        or os.path.isfile(os.path.expanduser("~/.claude/.local-mode"))
-    )
-    if _local_mode:
-        line1 = f"{spinner} {ORANGE}LOCAL{RESET} [{_hostname()}] {cwd}"
-    else:
-        line1 = f"{spinner} [{_hostname()}] {cwd}"
-    raw_sessions = count_active_sessions(cwd)
-    # Suppress the brief 2-process overlap during a session restart (old process
-    # still winding down as the new one starts) -- only badge a sustained count.
-    n_sessions = debounce_session_count(raw_sessions, cwd)
-    if n_sessions >= 2:
-        line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
-    branch = _git_branch(cwd)
-    if branch:
-        line1 = f"{line1} ({branch})"
+    line1 = _line1(d, cwd, spinner)
 
-    parts = [s for s in (
-        model_summary, context_summary, cache_summary, quota_summary, cost_summary
-    ) if s]
+    parts = [
+        s
+        for s in (
+            model_summary,
+            context_summary,
+            cache_summary,
+            quota_summary,
+            cost_summary,
+        )
+        if s
+    ]
     line2 = " | ".join(parts)
 
     sys.stdout.write(line1)
     if line2:
         sys.stdout.write("\n" + line2)
 
-    # --- Beacon (line 3) when a live beacon is present, with calibrated ETA
-    #     appended inline to keep it on a single dedicated row instead of
-    #     bloating line 2.
-    if beacon_summary:
-        line3 = beacon_summary
-        if beacon_dict and (beacon_dict.get("eta_seconds") or 0) > 0:
-            calibrated = format_calibrated_eta(beacon_dict["eta_seconds"])
-            if calibrated:
-                line3 = f"{line3}  ·  {calibrated}"
+    line3 = _beacon_line(d.get("session_id") or "")
+    if line3:
         sys.stdout.write("\n" + line3)
 
 
 def _log_error():
-    # Append a timestamped traceback so a crash leaves a forensic trail
-    # instead of a silent blank line. Claude Code hides stderr and shows
-    # nothing on nonzero exit, so without this any rare-input crash is
-    # invisible.
     try:
         import traceback
+
         with open(_ERROR_LOG, "a", encoding="utf-8") as f:
             f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             traceback.print_exc(file=f)
     except OSError:
+        # The error logger itself must never raise; if the log file is
+        # unwritable there is nothing useful left to do.
         pass
 
 
@@ -192,7 +199,7 @@ if __name__ == "__main__":
         main()
     except Exception:
         _log_error()
-        try:
-            sys.stdout.write(f"{RED}STATUSLINE ERROR{RESET} — see ~/.claude/.statusline-error.log")
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            sys.stdout.write(
+                f"{RED}STATUSLINE ERROR{RESET} — see ~/.claude/.statusline-error.log"
+            )

@@ -1,0 +1,10 @@
+# aislop (AI-slop gate) config. See LINTER-SETUP.md "AI-slop gate" section.
+# aislop 0.9.4 has no per-rule config -- only whole-engine toggles, exclude
+# globs, and ci.failBelow.
+#
+# After the cleanup pass the repo scores 100/100. failBelow is set to 90 as a
+# "stay healthy" floor with a little headroom (one stray finding won't break
+# CI, but a real regression cluster will). `aislop ci .` runs in CI and exits
+# non-zero below this score.
+ci:
+  failBelow: 90

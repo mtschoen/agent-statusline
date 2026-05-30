@@ -1,0 +1,13 @@
+{
+  "name": "schoen-claude-status-devtools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dev-tooling only — NOT the application and NOT published. The statusline app is Python (installed via install.py / install.sh). This manifest exists solely to pin the aislop AI-slop gate so the per-edit hook and CI run a lockfile-integrity-verified LOCAL binary (node_modules/.bin/aislop) instead of `npx --yes aislop@x` against the live registry. Install with `npm ci --ignore-scripts`.",
+  "license": "MIT",
+  "scripts": {
+    "lint:aislop": "aislop ci ."
+  },
+  "devDependencies": {
+    "aislop": "0.9.4"
+  }
+}

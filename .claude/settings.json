@@ -1,5 +1,22 @@
 {
   "enabledPlugins": {
     "pyright-lsp@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // empty'); case \"$f\" in *.py) o=$(ruff check -q \"$f\" 2>/dev/null); [ -n \"$o\" ] && jq -n --arg c \"ruff:\\n$o\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:$c}}';; *.sh) o=$(shellcheck \"$f\" 2>/dev/null); [ -n \"$o\" ] && jq -n --arg c \"shellcheck:\\n$o\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:$c}}';; esac; exit 0"
+          },
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // empty'); case \"$f\" in *.py) b=$(basename \"$f\"); o=$(\"${CLAUDE_PROJECT_DIR:-.}/node_modules/.bin/aislop\" scan \"${CLAUDE_PROJECT_DIR:-.}\" --json 2>/dev/null | jq -r --arg b \"$b\" '[.diagnostics[] | select(.filePath | endswith($b))] | map(\"\\(.filePath):\\(.line) [\\(.rule)] \\(.message)\") | join(\"\n\")'); [ -n \"$o\" ] && jq -n --arg c \"aislop:\n$o\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:$c}}';; esac; exit 0"
+          }
+        ]
+      }
+    ]
   }
 }

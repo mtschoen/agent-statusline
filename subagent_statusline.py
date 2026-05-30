@@ -45,7 +45,6 @@ from statusline_lib import (
     walk_transcript,
 )
 
-
 _INPUT_LOG = os.path.expanduser("~/.claude/.subagent-statusline-input.log")
 _ERROR_LOG = os.path.expanduser("~/.claude/.subagent-statusline-error.log")
 # Main statusline writes its latest payload here -- carries the authoritative
@@ -57,10 +56,10 @@ _MAIN_INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
 # `completed` / `succeeded` / `error` / `failed` / `paused` / `queued` /
 # `pending` all hit the right bucket regardless of exact spelling.
 _STATUS_ICON = [
-    (("complet", "success", "done", "ok"),    "✓", GREEN),
-    (("error", "fail"),                       "✗", RED),
-    (("paus",),                               "⏸", YELLOW),
-    (("queu", "pend", "wait"),                "○", CTX_DENOM),
+    (("complet", "success", "done", "ok"), "✓", GREEN),
+    (("error", "fail"), "✗", RED),
+    (("paus",), "⏸", YELLOW),
+    (("queu", "pend", "wait"), "○", CTX_DENOM),
 ]
 _DEFAULT_ICON = ("●", YELLOW)  # running / unknown / in-flight
 
@@ -80,6 +79,8 @@ def _safe_write(path, text):
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     except OSError:
+        # Best-effort write; a failed write is non-fatal and must not break
+        # the panel render.
         pass
 
 
@@ -151,7 +152,9 @@ def _live_payload_for_session(session_id):
     if d.get("session_id") != session_id:
         return None
     return {
-        "window_size": int((d.get("context_window") or {}).get("context_window_size") or 0),
+        "window_size": int(
+            (d.get("context_window") or {}).get("context_window_size") or 0
+        ),
         "model_id": (d.get("model") or {}).get("id") or "",
     }
 
@@ -162,9 +165,7 @@ def _is_lead_task(task, session_id):
     task_type = (task.get("type") or "").lower()
     if any(k in task_type for k in _LEAD_TYPES):
         return True
-    if session_id and task.get("id") == session_id:
-        return True
-    return False
+    return bool(session_id and task.get("id") == session_id)
 
 
 def _row_for_task(task, parent_transcript_path, session_id):
@@ -185,7 +186,11 @@ def _row_for_task(task, parent_transcript_path, session_id):
     # the per-agent JSONL for everyone else.
     is_lead = _is_lead_task(task, session_id)
     if is_lead:
-        jsonl = parent_transcript_path if parent_transcript_path and os.path.exists(parent_transcript_path) else ""
+        jsonl = (
+            parent_transcript_path
+            if parent_transcript_path and os.path.exists(parent_transcript_path)
+            else ""
+        )
     else:
         jsonl = _agent_jsonl_path(parent_transcript_path, task_id)
 
@@ -195,11 +200,15 @@ def _row_for_task(task, parent_transcript_path, session_id):
     live = _live_payload_for_session(session_id) if is_lead else None
     if jsonl:
         walk = walk_transcript(jsonl, include_subagents=False)
-        ctx_used = walk["last_input"] + walk["last_cache_create"] + walk["last_cache_read"]
+        ctx_used = (
+            walk["last_input"] + walk["last_cache_create"] + walk["last_cache_read"]
+        )
         # Prefer the authoritative window+model from the live main-statusline
         # payload (lead path only) -- the JSONL drops the [1m] runtime tier.
         model_id = (live or {}).get("model_id") or walk["last_model_id"]
-        window = (live or {}).get("window_size") or ctx_window_for_model(walk["last_model_id"])
+        window = (live or {}).get("window_size") or ctx_window_for_model(
+            walk["last_model_id"]
+        )
         metric_parts = [
             format_context(ctx_used, window, model_id),
             format_cache(walk["read"], walk["write"], walk["input"]),
@@ -233,9 +242,8 @@ def main():
     session_id = d.get("session_id") or ""
     out = sys.stdout
 
-    _local_mode = (
-        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
-        or os.path.isfile(os.path.expanduser("~/.claude/.local-mode"))
+    _local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
+        os.path.expanduser("~/.claude/.local-mode")
     )
     _local_prefix = f"{ORANGE}LOCAL{RESET} | " if _local_mode else ""
 
@@ -248,16 +256,15 @@ def main():
 
 
 def _log_error():
-    # Match statusline.py's safety net: a crashing subagent renderer
-    # silently drops rows, so log the traceback for later forensics.
-    # NDJSON output schema is strict, so we don't emit a visible cue --
-    # the parent statusline carries the user-facing error indicator.
     try:
         import traceback
+
         with open(_ERROR_LOG, "a", encoding="utf-8") as f:
             f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             traceback.print_exc(file=f)
     except OSError:
+        # The error logger itself must never raise; nothing to do if the log
+        # file is unwritable.
         pass
 
 

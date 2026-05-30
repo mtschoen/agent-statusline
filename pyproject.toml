@@ -1,0 +1,32 @@
+# Tooling config for schoen-claude-status.
+#
+# This repo is NOT a distributable Python package (it is installed via
+# install.py / install.sh). pyproject.toml exists only to hold the ruff
+# lint + format gate. See LINTER-SETUP.md for the rollout rationale and
+# TEST-REPORT.md for the current gate status.
+#
+# Dev tooling: `pip install ruff` (>=0.6). CI installs it directly; see
+# .gitea/workflows/ci.yml. The validation gate is `ruff check .` with the
+# broad select below — 0 findings is the bar.
+
+[tool.ruff]
+# Match the CI Python floor (.gitea/workflows/ci.yml uses 3.11). UP fixes are
+# gated to this version, so keep it in sync with the oldest supported runtime.
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF"]
+
+# E (E402/E501) and ARG are intentionally unselected:
+#   - E402: statusline.py reconfigures stdout to UTF-8 before importing the
+#     shared lib, so module-level imports legitimately follow executable code.
+#   - E501: line length is not gated (ruff format handles wrapping).
+#
+# No rule-level ignores and no per-file-ignores: every finding the broad
+# select surfaces is FIXED rather than suppressed. The one unavoidable case
+# -- the U+00D7 MULTIPLICATION SIGN glyph rendered in the status line itself
+# -- carries a single targeted `# noqa: RUF001` at its one site in
+# statusline_lib.py, not a blanket rule ignore.
+
+[tool.ruff.format]
+# ruff format defaults: double quotes, 88-column wrap, trailing commas.

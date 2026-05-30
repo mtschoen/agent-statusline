@@ -50,7 +50,7 @@ def run_case(name, events, expected_begin, expected_report):
     # _find_beacon_anchors looks up the JSONL via session id glob; easiest
     # to monkey-patch _find_session_jsonl for the test instead of placing
     # files into ~/.claude/projects.
-    import statusline_lib
+    import statusline_lib.beacon as _beacon_mod
 
     with tempfile.NamedTemporaryFile(
         suffix=".jsonl", delete=False, mode="w", encoding="utf-8"
@@ -58,12 +58,12 @@ def run_case(name, events, expected_begin, expected_report):
         pass
     write_jsonl(tmp.name, events)
 
-    original = statusline_lib._find_session_jsonl
-    statusline_lib._find_session_jsonl = lambda _sid: tmp.name
+    original = _beacon_mod._find_session_jsonl
+    _beacon_mod._find_session_jsonl = lambda _sid: tmp.name
     try:
         begin_ts, report_ts, _begin_eta = _find_beacon_anchors("ignored-sid")
     finally:
-        statusline_lib._find_session_jsonl = original
+        _beacon_mod._find_session_jsonl = original
         os.unlink(tmp.name)
 
     ok_begin = begin_ts == expected_begin

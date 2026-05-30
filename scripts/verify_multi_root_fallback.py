@@ -8,7 +8,6 @@ Builds a tmp filesystem layout, points HOME at it, asserts dollar totals.
 Cleans up on exit even on failure.
 """
 
-import importlib
 import json
 import os
 import shutil
@@ -70,16 +69,19 @@ def main():
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump({"extra_roots": [extra_root]}, f)
 
-        if "statusline_lib" in sys.modules:
-            importlib.reload(sys.modules["statusline_lib"])
+        # Reload the package so module-level path constants pick up the
+        # patched HOME/USERPROFILE set above.
+        for mod_name in list(sys.modules):
+            if mod_name == "statusline_lib" or mod_name.startswith("statusline_lib."):
+                del sys.modules[mod_name]
         import statusline_lib
+        import statusline_lib.walker as _walker_mod
 
         # Force the Python fallback path — don't let the native walker
-        # point at the user's real ~/.claude.  Patch AFTER import/reload so
-        # we're mutating the live module object that _walk_pace_buckets
-        # will call.
-        _original_find = statusline_lib._find_walker_binary
-        statusline_lib._find_walker_binary = lambda: None
+        # point at the user's real ~/.claude.  Patch the submodule where
+        # _walk_pace_buckets_native/_walker_root_list resolve the name.
+        _original_find = _walker_mod._find_walker_binary
+        _walker_mod._find_walker_binary = lambda: None
 
         roots = statusline_lib._walker_root_list()
         assert os.path.realpath(default_root) in roots, f"default root missing: {roots}"
@@ -108,9 +110,10 @@ def main():
         try:
             # Restore the real finder so subsequent imports in the same process
             # don't see the patched no-op.
-            _sl = sys.modules.get("statusline_lib")
-            if _sl is not None and "_original_find" in dir():
-                _sl._find_walker_binary = _original_find  # type: ignore[attr-defined]
+            import statusline_lib.walker as _wm
+
+            if "_original_find" in dir():
+                _wm._find_walker_binary = _original_find  # type: ignore[attr-defined]
         except Exception:
             pass
         shutil.rmtree(tmp, ignore_errors=True)

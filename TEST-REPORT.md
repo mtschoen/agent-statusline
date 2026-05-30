@@ -40,7 +40,8 @@ Validation gates (the bar):  ruff check . -> 0   ·   aislop ci . -> >= 90 (at 1
 Run locally:  ruff check . && ruff format --check . && npx aislop@0.9.4 ci .
 Config:       pyproject.toml ([tool.ruff])  ·  .aislop/config.yml
 Rollout doc:  LINTER-SETUP.md
-On-save:      .claude/settings.json PostToolUse hook (ruff -q per edited .py)
+On-save:      .claude/settings.json PostToolUse hook — ruff -q per edited .py
+              + aislop scan (whole-repo, filtered to the edited file) per .py edit
 CI:           .gitea/workflows/ci.yml — ruff + aislop hard gates;
               pyright + shellcheck non-blocking.
 Package:      statusline_lib/ (base, sessions, walker, cost, beacon, pace, __init__)

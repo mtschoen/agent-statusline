@@ -110,6 +110,21 @@ aislop hook install --claude --project
 Install the Claude Code per-edit hook. **Pin the binary version** — never `@latest`
 in a hook; it does a network version check on every edit.
 
+> **What this repo actually wires (and why not the installer):** the
+> `hook install` route also writes `.claude/AISLOP.md`, appends `@AISLOP.md` to
+> `CLAUDE.md`, and registers a FileChanged watcher — and its `hook claude`
+> callback is baseline/regression-driven (it stays silent until a baseline is
+> captured). Instead, this repo adds a second `PostToolUse` arm in
+> `.claude/settings.json` alongside the ruff/shellcheck one: on each `.py` edit
+> it runs `npx --yes aislop@0.9.4 scan . --json` (pinned, whole-repo, honoring
+> `.aislop/config.yml` excludes) and feeds back only the diagnostics for the
+> edited file via `additionalContext`. aislop has no single-file scan mode
+> (`scan` takes a directory; `--include` is additive), so the scan is whole-repo
+> and filtered by the edited file's basename. **Cost:** the pinned `npx` invoke
+> adds latency per `.py` edit vs ruff's single-file check — acceptable here, but
+> `npm i -g aislop@0.9.4` + calling the resolved binary removes the npx
+> resolution overhead if the lag becomes annoying.
+
 ### PR / CI gate (③)
 
 ```yaml

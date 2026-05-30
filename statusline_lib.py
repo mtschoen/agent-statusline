@@ -43,7 +43,6 @@ try:
 except ImportError:
     _json_loads = json.loads
 
-# --- ANSI colors -----------------------------------------------------------
 RED = "\x1b[31m"
 YELLOW = "\x1b[33m"
 ORANGE = "\x1b[38;5;208m"  # mid-tier between yellow and red
@@ -55,7 +54,6 @@ CACHE_READ = "\x1b[38;5;38m"  # teal
 CACHE_WRITE = ORANGE  # cache-write identity reuses the orange hue
 CTX_DENOM = "\x1b[38;5;139m"  # soft mauve
 
-# --- Multi-session warning -------------------------------------------------
 # Detects other Claude Code sessions running in the same cwd so the
 # statusline can warn that a second interactive instance is active here.
 #
@@ -194,7 +192,6 @@ def _count_via_psutil(target_cwd, psutil):
     return count
 
 
-# --- Multi-session badge debounce -----------------------------------------
 # `count_active_sessions` reports live process truth, but a restart produces a
 # brief handoff overlap: the old `claude` process is still winding down when
 # the new one spins up, so for a few seconds two processes legitimately match
@@ -286,7 +283,6 @@ def debounce_session_count(
     return 1
 
 
-# --- Pricing ---------------------------------------------------------------
 # (input_per_mtok, output_per_mtok). Cache read = 0.1x input; cache write =
 # 1.25x input (matches billing as of 2026-04-30; docs say 2.0x for 1h-TTL,
 # empirically wrong).
@@ -332,7 +328,6 @@ def _cost_for_turn(usage, model_id):
     return token_cost + web_searches * _WEB_SEARCH_COST_USD
 
 
-# --- Number/percentage formatting -----------------------------------------
 def fmt(n):
     if n >= 1_000_000:
         return f"{n / 1_000_000:.2f}M"
@@ -355,7 +350,6 @@ def color_high_good(pct, warn, danger, decimals=0):
     return f"{c}{format(pct, spec)}%{RESET}"
 
 
-# --- Transcript walker ----------------------------------------------------
 def walk_transcript(path, include_subagents=False):
     """Sum cache/input/output tokens, compute cost, snapshot most-recent turn.
 
@@ -446,7 +440,6 @@ def walk_transcript(path, include_subagents=False):
     }
 
 
-# --- Field formatters -----------------------------------------------------
 COMPACT_BUFFER_TOKENS = 33_000
 RED_MARGIN_TOKENS = 20_000
 ORANGE_THRESHOLD_1M_TOKENS = 500_000  # mid-band warning for 1M-context sessions
@@ -619,7 +612,6 @@ def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
     return f"({body}) {_sum_threshold_color(total)}= ${total:.2f}{RESET}"
 
 
-# --- Model badge ----------------------------------------------------------
 # Model-family badge: substring match -> short label + ANSI color. Distinct
 # from threshold green/yellow/red and the cache identity teal/orange so a
 # coloured badge never reads as a warning or a metric. Shared by the main and
@@ -659,7 +651,6 @@ def format_model_badge(model_id):
     return f"{CTX_DENOM}?{RESET}"
 
 
-# --- Beacon (live progress signal from the active turn) -----------------
 _BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
 _BEACON_STALE_SECONDS = 300
 
@@ -977,7 +968,6 @@ def format_calibrated_eta(raw_eta_seconds, period_seconds=604800):
     return f"~{cal_min}m calibrated ({float(bias):.1f}×)"  # noqa: RUF001
 
 
-# --- Quota (main script only) --------------------------------------------
 def _fmt_delta_hours(seconds):
     sign = "+" if seconds >= 0 else "-"
     return f"{sign}{abs(seconds) / 3600:.1f}h"

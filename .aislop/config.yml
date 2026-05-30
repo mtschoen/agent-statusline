@@ -1,14 +1,15 @@
 # aislop (AI-slop gate) config. See LINTER-SETUP.md "AI-slop gate" section.
 # aislop 0.9.4 has no per-rule config -- only whole-engine toggles, exclude
 # globs, and ci.failBelow.
+#
+# After the cleanup pass the repo scores 100/100. failBelow is set to 90 as a
+# "stay healthy" floor with a little headroom (one stray finding won't break
+# CI, but a real regression cluster will). `aislop ci .` runs in CI and exits
+# non-zero below this score.
 ci:
-  # Floor is the achieved post-cleanup score, used as a "don't regress" line.
-  # It is below 80 (git-wizard's baseline) on purpose: a handful of findings
-  # are structurally unfixable in 0.9.4 -- notably the first-party
-  # `statusline_lib` local-module import, which aislop reads as undeclared
-  # because there is no manifest entry a sibling .py module can occupy.
-  failBelow: 80
+  failBelow: 90
 exclude:
   # scripts/verify_*.py are this repo's test suite; their explanatory comments
-  # and test-idiom error handling are not production slop.
+  # and test-idiom error handling are not production slop. (Standard test-dir
+  # exclusion, per the LINTER-SETUP "AI-slop gate" example.)
   - "scripts/**"

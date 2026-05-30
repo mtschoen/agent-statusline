@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Check syntax
-        run: python -m py_compile statusline.py statusline_lib.py subagent_statusline.py install.py
+        run: python -m py_compile statusline.py subagent_statusline.py install.py statusline_lib/*.py
       - name: Lint (ruff)
         # The validation gate. Config lives in pyproject.toml; 0 findings is
         # the bar. This step is the hard gate that blocks merge on regression.
@@ -30,6 +30,13 @@ jobs:
           pip install ruff
           ruff check .
           ruff format --check .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: AI-slop gate (aislop)
+        # Whole-repo AI-slop score gate. failBelow + exclusions in
+        # .aislop/config.yml. The repo currently scores 100/100.
+        run: npx --yes aislop@0.9.4 ci .
       - name: Type check (pyright, non-blocking)
         # Informational for now. Drop the `|| true` to hard-fail once the
         # codebase is clean against pyright.

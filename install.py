@@ -42,7 +42,7 @@ def _atomic_write(path, data):
     os.replace(tmp, path)
 
 
-def main():
+def _parse_args():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--repo",
@@ -59,13 +59,11 @@ def main():
         action="store_true",
         help="Print the merged JSON and exit without writing",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    # Forward slashes -- bash on Windows (Git Bash, MSYS) handles them and the
-    # JSON value stays readable across platforms.
-    repo = os.path.abspath(args.repo).replace("\\", "/")
-    settings_path = args.settings or os.path.expanduser("~/.claude/settings.json")
 
+def _commands_for_platform(repo):
+    """Return (main_target, subagent_target, main_command, subagent_command)."""
     # On Windows, bare python/python3 resolve to the Microsoft Store alias shim,
     # whose ~750ms per-invocation launch overhead dominated every render. Invoke
     # the python.org build via the `py` launcher directly, skipping BOTH the
@@ -78,13 +76,52 @@ def main():
     if os.name == "nt":
         main_target = f"{repo}/statusline.py"
         subagent_target = f"{repo}/subagent_statusline.py"
-        main_command = f'py -3 "{main_target}"'
-        subagent_command = f'py -3 "{subagent_target}"'
+        return (
+            main_target,
+            subagent_target,
+            f'py -3 "{main_target}"',
+            f'py -3 "{subagent_target}"',
+        )
+    main_target = f"{repo}/statusline-command.sh"
+    subagent_target = f"{repo}/subagent-statusline.sh"
+    return (
+        main_target,
+        subagent_target,
+        f'bash "{main_target}"',
+        f'bash "{subagent_target}"',
+    )
+
+
+def _report_walker(repo):
+    # Optional native pace-walker (claude-walker). Pure speedup -- the Python
+    # fallback runs identically when it isn't found.
+    sys.path.insert(0, repo)
+    try:
+        from statusline_lib import _find_walker_binary
+
+        walker = _find_walker_binary()
+    except ImportError:
+        walker = None
+    if walker:
+        print(f"  walker (native):    {walker}")
     else:
-        main_target = f"{repo}/statusline-command.sh"
-        subagent_target = f"{repo}/subagent-statusline.sh"
-        main_command = f'bash "{main_target}"'
-        subagent_command = f'bash "{subagent_target}"'
+        print("  walker (native):    not found -- using Python fallback")
+        print(
+            "                      build ~/claude-walker/cpp or set CLAUDE_WALKER_BIN to enable"
+        )
+
+
+def main():
+    args = _parse_args()
+
+    # Forward slashes -- bash on Windows (Git Bash, MSYS) handles them and the
+    # JSON value stays readable across platforms.
+    repo = os.path.abspath(args.repo).replace("\\", "/")
+    settings_path = args.settings or os.path.expanduser("~/.claude/settings.json")
+
+    main_target, subagent_target, main_command, subagent_command = (
+        _commands_for_platform(repo)
+    )
 
     for script in (main_target, subagent_target):
         if not os.path.exists(script):
@@ -138,22 +175,7 @@ def main():
     print(f"  statusLine:         {main_command}")
     print(f"  subagentStatusLine: {subagent_command}")
 
-    # Optional native pace-walker (claude-walker). Pure speedup -- the Python
-    # fallback runs identically when it isn't found.
-    sys.path.insert(0, repo)
-    try:
-        from statusline_lib import _find_walker_binary
-
-        walker = _find_walker_binary()
-    except ImportError:
-        walker = None
-    if walker:
-        print(f"  walker (native):    {walker}")
-    else:
-        print("  walker (native):    not found -- using Python fallback")
-        print(
-            "                      build ~/claude-walker/cpp or set CLAUDE_WALKER_BIN to enable"
-        )
+    _report_walker(repo)
 
     print("Open a new Claude Code session (or trigger a render) to pick it up.")
     return 0

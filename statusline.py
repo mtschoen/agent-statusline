@@ -76,6 +76,40 @@ def _git_branch(cwd):
     return ""
 
 
+def _line1(d, cwd, spinner):
+    local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
+        os.path.expanduser("~/.claude/.local-mode")
+    )
+    host = _hostname()
+    line1 = (
+        f"{spinner} {ORANGE}LOCAL{RESET} [{host}] {cwd}"
+        if local_mode
+        else f"{spinner} [{host}] {cwd}"
+    )
+    # Suppress the brief 2-process overlap during a session restart (old process
+    # still winding down as the new one starts) -- only badge a sustained count.
+    n_sessions = debounce_session_count(count_active_sessions(cwd), cwd)
+    if n_sessions >= 2:
+        line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
+    branch = _git_branch(cwd)
+    if branch:
+        line1 = f"{line1} ({branch})"
+    return line1
+
+
+def _beacon_line(session_id):
+    beacon_summary, beacon_dict = (
+        format_beacon(session_id) if session_id else (None, None)
+    )
+    if not beacon_summary:
+        return None
+    if beacon_dict and (beacon_dict.get("eta_seconds") or 0) > 0:
+        calibrated = format_calibrated_eta(beacon_dict["eta_seconds"])
+        if calibrated:
+            return f"{beacon_summary}  ·  {calibrated}"
+    return beacon_summary
+
+
 def main():
     raw = sys.stdin.read()
     # Truncate-on-write dump of the latest payload. Useful when Claude Code
@@ -122,30 +156,8 @@ def main():
     # --- Quota: 5h + weekly utilization with pace projection.
     quota_summary = format_quota(d.get("rate_limits"))
 
-    session_id = d.get("session_id") or ""
-    beacon_summary, beacon_dict = (
-        format_beacon(session_id) if session_id else (None, None)
-    )
-
-    # --- Assemble.
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
-    # Local-mode badge (env var or signal file)
-    _local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
-        os.path.expanduser("~/.claude/.local-mode")
-    )
-    if _local_mode:
-        line1 = f"{spinner} {ORANGE}LOCAL{RESET} [{_hostname()}] {cwd}"
-    else:
-        line1 = f"{spinner} [{_hostname()}] {cwd}"
-    raw_sessions = count_active_sessions(cwd)
-    # Suppress the brief 2-process overlap during a session restart (old process
-    # still winding down as the new one starts) -- only badge a sustained count.
-    n_sessions = debounce_session_count(raw_sessions, cwd)
-    if n_sessions >= 2:
-        line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
-    branch = _git_branch(cwd)
-    if branch:
-        line1 = f"{line1} ({branch})"
+    line1 = _line1(d, cwd, spinner)
 
     parts = [
         s
@@ -164,12 +176,8 @@ def main():
     if line2:
         sys.stdout.write("\n" + line2)
 
-    if beacon_summary:
-        line3 = beacon_summary
-        if beacon_dict and (beacon_dict.get("eta_seconds") or 0) > 0:
-            calibrated = format_calibrated_eta(beacon_dict["eta_seconds"])
-            if calibrated:
-                line3 = f"{line3}  ·  {calibrated}"
+    line3 = _beacon_line(d.get("session_id") or "")
+    if line3:
         sys.stdout.write("\n" + line3)
 
 

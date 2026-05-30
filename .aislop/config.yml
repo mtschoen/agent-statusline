@@ -8,8 +8,3 @@
 # non-zero below this score.
 ci:
   failBelow: 90
-exclude:
-  # scripts/verify_*.py are this repo's test suite; their explanatory comments
-  # and test-idiom error handling are not production slop. (Standard test-dir
-  # exclusion, per the LINTER-SETUP "AI-slop gate" example.)
-  - "scripts/**"

@@ -4,7 +4,7 @@ schoen-claude-status test report — 2026-05-30T03:19:15Z
 Status:   PASS
 Mode:     close-the-gap (lint + AI-slop gate stand-up)
 Tests:    6 verify_*.py scripts — all passing
-Git:      bd78808 (statusline_lib split into a package)
+Git:      6603409 (aislop wired as a hard CI gate)
 
 Lint:     ruff          0 findings  ✓  (hard gate: `ruff check .` + `ruff format --check .`)
           aislop        100 / 100   ✓  (hard gate: `npx aislop@0.9.4 ci .`, failBelow 90)
@@ -24,8 +24,11 @@ Lint:     ruff          0 findings  ✓  (hard gate: `ruff check .` + `ruff form
             - complexity: long/deeply-nested functions extracted into helpers;
               the 1376-line statusline_lib.py split into a 7-module package
               (all < 400 lines).
-            - config: scripts/** (the verify suite) excluded as test idioms;
-              .aislop/config.yml failBelow 90.
+            - config: no exclusions — the verify suite (scripts/**) is scanned
+              and clean; .aislop/config.yml failBelow 90.
+            - verify suite (scripts/**): bare-except restored to a guarded
+              finally (no swallowed errors), 139-line check() split into four
+              focused helpers, narrative comments folded into docstrings/removed.
 
 Coverage: NOT INSTRUMENTED — no coverage.py / line-coverage tooling is
           configured. The 6 scripts/verify_*.py are behavioral verification

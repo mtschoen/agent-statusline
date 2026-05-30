@@ -47,9 +47,9 @@ def mk_assistant(ts, beacon_kind, summary="x", eta=60):
 
 
 def run_case(name, events, expected_begin, expected_report):
-    # _find_beacon_anchors looks up the JSONL via session id glob; easiest
-    # to monkey-patch _find_session_jsonl for the test instead of placing
-    # files into ~/.claude/projects.
+    """Drive _find_beacon_anchors over `events` and compare its anchors. It
+    resolves the JSONL by a session-id glob, so the test monkey-patches
+    _find_session_jsonl rather than seeding files under ~/.claude/projects."""
     import statusline_lib.beacon as _beacon_mod
 
     with tempfile.NamedTemporaryFile(

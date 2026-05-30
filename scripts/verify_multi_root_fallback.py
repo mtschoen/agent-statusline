@@ -44,6 +44,8 @@ def main():
     tmp = tempfile.mkdtemp(prefix="walker-fallback-test-")
     old_home = os.environ.get("HOME")
     old_userprofile = os.environ.get("USERPROFILE")
+    walker_module = None
+    original_find_walker = None
     try:
         os.environ["HOME"] = tmp
         os.environ["USERPROFILE"] = tmp
@@ -75,13 +77,12 @@ def main():
             if mod_name == "statusline_lib" or mod_name.startswith("statusline_lib."):
                 del sys.modules[mod_name]
         import statusline_lib
-        import statusline_lib.walker as _walker_mod
+        import statusline_lib.walker as walker_module
 
-        # Force the Python fallback path — don't let the native walker
-        # point at the user's real ~/.claude.  Patch the submodule where
-        # _walk_pace_buckets_native/_walker_root_list resolve the name.
-        _original_find = _walker_mod._find_walker_binary
-        _walker_mod._find_walker_binary = lambda: None
+        # Force the Python fallback: stub the native-walker finder so the test
+        # never resolves the user's real ~/.claude.
+        original_find_walker = walker_module._find_walker_binary
+        walker_module._find_walker_binary = lambda: None
 
         roots = statusline_lib._walker_root_list()
         assert os.path.realpath(default_root) in roots, f"default root missing: {roots}"
@@ -107,15 +108,10 @@ def main():
             os.environ.pop("USERPROFILE", None)
         else:
             os.environ["USERPROFILE"] = old_userprofile
-        try:
-            # Restore the real finder so subsequent imports in the same process
-            # don't see the patched no-op.
-            import statusline_lib.walker as _wm
-
-            if "_original_find" in dir():
-                _wm._find_walker_binary = _original_find  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        if walker_module is not None and original_find_walker is not None:
+            # Restore the real finder so later imports in this process don't see
+            # the patched no-op.
+            walker_module._find_walker_binary = original_find_walker
         shutil.rmtree(tmp, ignore_errors=True)
 
 

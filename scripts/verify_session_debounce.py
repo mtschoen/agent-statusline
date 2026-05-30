@@ -61,9 +61,8 @@ def check(failures):
 
     with tempfile.TemporaryDirectory() as tmp:
         sp = fresh_state_path(tmp)
-        # Case 6: a transient that elevates, clears, then re-elevates must
-        # RE-ARM the dwell — i.e. dropping to 1 resets the timer, so the second
-        # blip is suppressed again rather than shown instantly.
+        # Case 6: dropping to 1 re-arms the dwell, so a later re-elevation is
+        # suppressed again rather than shown instantly.
         debounce_session_count(2, CWD, now=2000.0, state_path=sp)  # elevate
         if debounce_session_count(1, CWD, now=2005.0, state_path=sp) != 1:  # clear
             failures.append("drop to 1 should pass through as 1")

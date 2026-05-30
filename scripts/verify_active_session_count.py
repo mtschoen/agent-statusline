@@ -35,7 +35,6 @@ def check_dispatch(failures):
 def check_classifier(failures):
     target = os.path.normcase("/home/user/proj")
 
-    # Positive cases
     if not _process_matches("claude", ["claude"], "/home/user/proj", target):
         failures.append("interactive claude in target cwd should match")
     if not _process_matches("claude.exe", ["claude.exe"], "/home/user/proj", target):

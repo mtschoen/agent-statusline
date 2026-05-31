@@ -10,7 +10,7 @@ thresholds.
 
 ```
 [hostname] /path/to/cwd (branch)
-opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $10.66
+opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h↓ | $10.66
 ● opus4.8 reviewing diff      | 215.4K / 1.00M (21.5%) | 4.21M / 89.3K / 97% hit | $4.82 | 1m23s
 ✓ sonnet4.6 exploring config  | 18.4K  / 200K  ( 9.2%) | 87.3K / 4.2K  / 95% hit | $0.21
 ● haiku4.5 running tests       | 5.1K   / 200K  ( 2.6%) | 18.9K / 1.1K  / 84% hit | $0.04 | 8s
@@ -53,13 +53,28 @@ identity); fields are omitted when their data isn't available:
   typically don't surface it, so these fields silently omit on those
   configurations.
 
-  The 5h projection extrapolates the in-window rate (`util / elapsed`); the
-  weekly projection uses a **trailing-168h burn rate** derived from local
-  JSONL transcripts and calibrated to %/$ via the current window's
-  (util, in-window-$). This stabilizes the wk projection on day 1 of a fresh
-  window where the in-window denominator is too small to be meaningful. The
-  walk is cached to `~/.claude/.statusline-pace-cache.json` with a 5-minute
-  TTL.
+  The 5h projection extrapolates the in-window rate (`util / elapsed`). The
+  weekly projection is **two window-local signals**, both computed only from
+  the current 7-day window (no cross-week history): the **cumulative pace** —
+  `util / elapsed` projected to reset, shown as the `±X.Yh` number — and a
+  **current-rate forecast** that re-weights recent in-window burn (a trailing
+  24h average of per-hour `$` from local JSONL transcripts, calibrated to %/h
+  via the window's own util/$). The current-rate forecast renders as a colored
+  arrow after the number: **↑** when your current rate is hotter than the
+  cumulative pace (eating into the buffer — slow down), **↓** when cooler
+  (banking surplus — go nuts), each colored by its own red/yellow/green
+  verdict. When *both* signals land within ±4h of finishing exactly at reset
+  (and the window is past its warm-up), the arrow is replaced by a green **☯**
+  — you're riding the wave to 100% right at the cutoff. A day-1 prior shrinks
+  both signals toward "on track" early in the window, so a fresh window doesn't
+  read a wild projection off a tiny denominator. The per-hour walk is cached to
+  `~/.claude/.statusline-pace-hourly-cache-v1.json` with a 15s TTL.
+
+  The trailing-24h current-rate estimator was chosen empirically: a backtest
+  (`scripts/backtest_pace.py`) replays candidate estimators against
+  reconstructed historical windows, and trailing-24h was by far the most stable
+  (EWMA/slope variants flap or explode on bursty usage). The shipped default
+  lives in `statusline_lib/project.py` (`DEFAULT_PARAMS`).
 - **Cost** — session spend. Rendered `($parent + $sub~) = $total` when subagents
   ran, else just `$parent`. The parent figure is the harness's authoritative
   `cost.total_cost_usd` (matches `/usage`), but it is PARENT-ONLY — subagents

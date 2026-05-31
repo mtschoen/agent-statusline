@@ -105,18 +105,23 @@ from .cost import (
     walk_transcript,
 )
 from .pace import (
-    _PACE_CACHE_PATH,
     _PACE_CACHE_TTL_SECONDS,
+    _PACE_HOURLY_CACHE_PATH,
+    ARROW_DOWN,
+    ARROW_UP,
+    ON_TARGET_GLYPH,
     _discover_pace_groups,
     _fmt_delta_hours,
-    _pace_buckets_cached,
-    _pace_costs_for_file,
+    _now_unix,
+    _pace_hourly_cached,
+    _pace_hourly_for_file,
     _parse_pace_line,
     _project_pace,
-    _walk_groups_inline,
-    _walk_groups_parallel,
-    _walk_pace_buckets,
-    _walk_session_group,
+    _sum_hourly,
+    _walk_hourly_inline,
+    _walk_hourly_parallel,
+    _walk_pace_hourly,
+    _walk_session_hourly,
     format_quota,
 )
 from .sessions import (
@@ -135,7 +140,6 @@ from .walker import (
     _WALKER_BIN_ENV,
     _WALKER_ROOTS_CONFIG_PATH,
     _find_walker_binary,
-    _walk_pace_buckets_native,
     _walker_root_list,
     _walker_subcommand,
 )

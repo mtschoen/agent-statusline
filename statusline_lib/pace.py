@@ -3,7 +3,7 @@
 Imports:
   base   -- for color constants, _json_loads, color_high_bad
   cost   -- for _cost_for_turn
-  walker -- for _walk_pace_buckets_native, _walker_root_list
+  walker -- for _walker_root_list
 """
 
 import glob
@@ -13,50 +13,29 @@ from datetime import UTC, datetime
 
 from .base import GREEN, RED, RESET, YELLOW, _json_loads, color_high_bad
 from .cost import _cost_for_turn
-from .walker import _walk_pace_buckets_native, _walker_root_list
+from .project import is_on_target, project_delta
+from .walker import _walker_root_list
 
-_PACE_CACHE_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-pace-cache-v2.json"
+# Current-rate arrow glyphs. Up = current rate is HOTTER than cumulative pace
+# (eating your buffer -> slow down); down = cooler (building buffer -> go nuts).
+ARROW_UP = "↑"
+ARROW_DOWN = "↓"
+
+# On-target reward: shown when BOTH pace signals land within
+# _ON_TARGET_MARGIN_SECONDS of a perfect reset-time finish (and warmup is done).
+ON_TARGET_GLYPH = "☯"
+_ON_TARGET_MARGIN_SECONDS = 4 * 3600
+
+
+def _now_unix():
+    """Current unix time. Seam so tests can pin the window clock."""
+    return datetime.now(UTC).timestamp()
+
+
+_PACE_CACHE_TTL_SECONDS = 15  # 15s: spike visible quickly, cache miss still fast
+_PACE_HOURLY_CACHE_PATH = os.path.join(
+    os.path.expanduser("~"), ".claude", ".statusline-pace-hourly-cache-v1.json"
 )
-# Cold pace walk costs ~250ms parallel-Python or ~95ms with the native
-# claude-walker. The cache stays because the statusline fires many times per
-# render, but at sub-100ms cold the TTL can stay tight: 15s means a usage
-# spike shows in the pace projection within ~15s without making cache misses
-# feel sluggish.
-_PACE_CACHE_TTL_SECONDS = 15
-
-
-def _pace_buckets_cached(period_seconds, win_start_unix):
-    """Cached wrapper around _walk_pace_buckets. See _walk_pace_buckets for math."""
-    try:
-        with open(_PACE_CACHE_PATH, encoding="utf-8") as f:
-            c = json.load(f)
-        age = datetime.now(UTC).timestamp() - c.get("computed_at_unix", 0)
-        if (
-            age < _PACE_CACHE_TTL_SECONDS
-            and c.get("period_seconds") == period_seconds
-            and c.get("win_start_unix") == win_start_unix
-        ):
-            return c["trailing_dollars"], c["window_dollars"]
-    except (OSError, ValueError, KeyError):
-        pass
-    trailing, window = _walk_pace_buckets(period_seconds, win_start_unix)
-    try:
-        with open(_PACE_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "computed_at_unix": datetime.now(UTC).timestamp(),
-                    "period_seconds": period_seconds,
-                    "win_start_unix": win_start_unix,
-                    "trailing_dollars": trailing,
-                    "window_dollars": window,
-                },
-                f,
-            )
-    except OSError:
-        # Best-effort cache write; failure just means we recompute next time.
-        pass
-    return trailing, window
 
 
 def _parse_pace_line(line, seen_ids, earliest):
@@ -86,53 +65,6 @@ def _parse_pace_line(line, seen_ids, earliest):
     if ts < earliest:
         return None
     return ts, (msg.get("usage") or {}), (msg.get("model") or "")
-
-
-def _pace_costs_for_file(path, seen_ids, earliest, period_cutoff, win_start_unix):
-    """(trailing_dollars, window_dollars) cost contributed by one JSONL file."""
-    trailing = window_cost = 0.0
-    last_model = ""
-    try:
-        with open(path, "rb") as f:
-            for line in f:
-                parsed = _parse_pace_line(line, seen_ids, earliest)
-                if parsed is None:
-                    continue
-                ts, usage, model_id = parsed
-                if model_id:
-                    last_model = model_id
-                c = _cost_for_turn(usage, model_id or last_model)
-                if ts >= period_cutoff:
-                    trailing += c
-                if ts >= win_start_unix:
-                    window_cost += c
-    except OSError:
-        return 0.0, 0.0
-    return trailing, window_cost
-
-
-def _walk_session_group(paths, period_cutoff, win_start_unix):
-    """Walk one parent+subagents group, return (trailing_dollars, window_dollars).
-
-    Module-level so ProcessPoolExecutor can serialize a reference to it.
-
-    Sequential within a group (a single shared `seen_ids`) so the dedup set
-    catches the parent <-> auto-compact-subagent message.id overlap (the only
-    collision pattern that actually appears -- 146 instances in the working
-    corpus, all parent-vs-its-own-acompact-subagent). Cross-session collisions
-    weren't observed and are not defended against here; if they ever appear in
-    real data the cost impact would still round to zero.
-    """
-    earliest = min(period_cutoff, win_start_unix)
-    trailing = window_cost = 0.0
-    seen_ids = set()
-    for path in paths:
-        t, w = _pace_costs_for_file(
-            path, seen_ids, earliest, period_cutoff, win_start_unix
-        )
-        trailing += t
-        window_cost += w
-    return trailing, window_cost
 
 
 def _discover_pace_groups(roots, earliest):
@@ -165,88 +97,122 @@ def _discover_pace_groups(roots, earliest):
     return groups
 
 
-def _walk_groups_inline(groups, period_cutoff, win_start_unix):
-    """Sequential sum over groups -- used for <=2 groups and as the
-    parallel-path fallback."""
-    trailing = window_cost = 0.0
-    for paths in groups.values():
-        t, w = _walk_session_group(paths, period_cutoff, win_start_unix)
-        trailing += t
-        window_cost += w
-    return trailing, window_cost
-
-
-def _walk_groups_parallel(groups, period_cutoff, win_start_unix):
-    """Dispatch group walks to a ProcessPoolExecutor; fall back to inline if
-    the pool can't start."""
-    workers = min(8, os.cpu_count() or 4)
-    trailing = window_cost = 0.0
+def _pace_hourly_for_file(path, seen_ids, win_start_unix, n_buckets):
+    """Per-file hourly $-burn list, length n_buckets, indexed from window start."""
+    buckets = [0.0] * n_buckets
+    last_model = ""
     try:
-        # Lazy import: pulls in multiprocessing (~26ms). Only paid here, on the
-        # rare >2-group parallel path -- never on a normal statusline render.
+        with open(path, "rb") as f:
+            for line in f:
+                parsed = _parse_pace_line(line, seen_ids, earliest=win_start_unix)
+                if parsed is None:
+                    continue
+                ts, usage, model_id = parsed
+                if model_id:
+                    last_model = model_id
+                index = int((ts - win_start_unix) // 3600)
+                if 0 <= index < n_buckets:
+                    buckets[index] += _cost_for_turn(usage, model_id or last_model)
+    except OSError:
+        return [0.0] * n_buckets
+    return buckets
+
+
+def _walk_session_hourly(paths, win_start_unix, n_buckets):
+    """Hourly $-burn for one parent+subagents group. Module-level so a
+    ProcessPoolExecutor can serialize it. Shared `seen_ids` across the group's
+    files dedups the parent <-> auto-compact-subagent message.id overlap."""
+    seen_ids = set()
+    totals = [0.0] * n_buckets
+    for path in paths:
+        per_file = _pace_hourly_for_file(path, seen_ids, win_start_unix, n_buckets)
+        for i in range(n_buckets):
+            totals[i] += per_file[i]
+    return totals
+
+
+def _sum_hourly(into, addend):
+    for i, value in enumerate(addend):
+        into[i] += value
+
+
+def _walk_hourly_inline(groups, win_start_unix, n_buckets):
+    totals = [0.0] * n_buckets
+    for paths in groups.values():
+        _sum_hourly(totals, _walk_session_hourly(paths, win_start_unix, n_buckets))
+    return totals
+
+
+def _walk_hourly_parallel(groups, win_start_unix, n_buckets):
+    workers = min(8, os.cpu_count() or 4)
+    totals = [0.0] * n_buckets
+    try:
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(_walk_session_group, paths, period_cutoff, win_start_unix)
+                pool.submit(_walk_session_hourly, paths, win_start_unix, n_buckets)
                 for paths in groups.values()
             ]
             for fut in as_completed(futures):
                 try:
-                    t, w = fut.result()
+                    _sum_hourly(totals, fut.result())
                 except Exception:
+                    # Worker failure: skip this group's contribution (it zeros out)
                     continue
-                trailing += t
-                window_cost += w
     except (OSError, RuntimeError):
-        # ProcessPoolExecutor unavailable (sandboxed env, no fork on some
-        # platforms, etc.) -- fall back to inline sequential walk.
-        return _walk_groups_inline(groups, period_cutoff, win_start_unix)
-    return trailing, window_cost
+        return _walk_hourly_inline(groups, win_start_unix, n_buckets)
+    return totals
 
 
-def _walk_pace_buckets(period_seconds, win_start_unix):
-    """Sum assistant-turn cost across all transcripts into two buckets.
+def _walk_pace_hourly(win_start_unix):
+    """Hourly in-window $-burn series from window start to now.
 
-    Returns (trailing_dollars, window_dollars):
-      trailing_dollars -- cost in the trailing `period_seconds` from now
-      window_dollars   -- cost since `win_start_unix` (current rate-limit window)
-
-    Used to project the weekly quota at a stable trailing-period burn rate,
-    calibrated to %/$ via the current window's (util, window_dollars). The
-    in-window-only rate is unstable on day 1 of a fresh window where the
-    elapsed-since-window-start denominator is tiny.
-
-    Implementation:
-      * mtime filter prunes ~80% of files that can't contain in-range entries.
-      * Survivors are grouped by parent session (parent.jsonl + its
-        subagents/agent-*.jsonl) so dedup is local to the group.
-      * Groups dispatch to a ProcessPoolExecutor for true CPU parallelism.
-        Single-group walks run inline to skip ~150ms pool-startup tax.
-
-    Expensive on the typical fleet (~150ms parallel, was ~750ms single-thread);
-    call via _pace_buckets_cached. The native claude-walker binary, if present,
-    runs the same walk in ~80-180ms and short-circuits this path entirely.
+    Index 0 is the first hour of the window. Window-local only -- no trailing
+    cross-week bucket (the redesign dropped it). The native claude-walker bridge
+    is not used here because it returns scalars, not an hourly series.
     """
-    native = _walk_pace_buckets_native(period_seconds, win_start_unix)
-    if native is not None:
-        return native
-
     roots = _walker_root_list()
     if not roots:
-        return 0.0, 0.0
-    now = datetime.now(UTC).timestamp()
-    period_cutoff = now - period_seconds
-    earliest = min(period_cutoff, win_start_unix)
-
-    groups = _discover_pace_groups(roots, earliest)
+        return []
+    now = _now_unix()
+    n_buckets = max(1, int((now - win_start_unix) // 3600) + 1)
+    groups = _discover_pace_groups(roots, win_start_unix)
     if not groups:
-        return 0.0, 0.0
-
-    # Inline walk if the parallelism win wouldn't beat process-pool startup.
+        return [0.0] * n_buckets
     if len(groups) <= 2:
-        return _walk_groups_inline(groups, period_cutoff, win_start_unix)
-    return _walk_groups_parallel(groups, period_cutoff, win_start_unix)
+        return _walk_hourly_inline(groups, win_start_unix, n_buckets)
+    return _walk_hourly_parallel(groups, win_start_unix, n_buckets)
+
+
+def _pace_hourly_cached(win_start_unix):
+    """15s-TTL cache around _walk_pace_hourly (statusline fires many times/render)."""
+    try:
+        with open(_PACE_HOURLY_CACHE_PATH, encoding="utf-8") as f:
+            cached = json.load(f)
+        age = _now_unix() - cached.get("computed_at_unix", 0)
+        if (
+            age < _PACE_CACHE_TTL_SECONDS
+            and cached.get("win_start_unix") == win_start_unix
+        ):
+            return cached["hourly"]
+    except (OSError, ValueError, KeyError):
+        pass
+    hourly = _walk_pace_hourly(win_start_unix)
+    try:
+        with open(_PACE_HOURLY_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "computed_at_unix": _now_unix(),
+                    "win_start_unix": win_start_unix,
+                    "hourly": hourly,
+                },
+                f,
+            )
+    except OSError:
+        # Best-effort cache write; failure just means we recompute next time.
+        pass
+    return hourly
 
 
 def _fmt_delta_hours(seconds):
@@ -254,52 +220,77 @@ def _fmt_delta_hours(seconds):
     return f"{sign}{abs(seconds) / 3600:.1f}h"
 
 
+def _delta_color(delta, warn_threshold):
+    if delta < 0:
+        return RED
+    # 0 = exactly on track; still 'warn' (inside the buffer band) up to warn_threshold
+    if delta <= warn_threshold:
+        return YELLOW
+    return GREEN
+
+
+def _fmt_delta(delta, warn_threshold):
+    return f"{_delta_color(delta, warn_threshold)}{_fmt_delta_hours(delta)}{RESET}"
+
+
+def _rate_arrow(cumulative_delta, current_rate_delta, warn_threshold):
+    """Colored arrow from the current-rate signal, or '' if unavailable.
+
+    Direction: up when the current rate is hotter than the cumulative pace
+    (lands earlier -> eating buffer), down when cooler. Color: the current-rate
+    delta's own threshold verdict.
+    """
+    if current_rate_delta is None:
+        return ""
+    direction = ARROW_UP if current_rate_delta < cumulative_delta else ARROW_DOWN
+    return f"{_delta_color(current_rate_delta, warn_threshold)}{direction}{RESET}"
+
+
 def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
-    """Returns ' +X.Yh' (colored) or '' if not enough data.
+    """Returns ' <±Hh>[arrow]' (colored) or '' if not enough data.
 
-    Two pace estimators:
-      * in-window: extrapolates `util / elapsed_in_window` to reset time. Noisy
-        early in the window (tiny denominator), tightens as elapsed grows.
-      * trailing-period: walks JSONL transcripts for trailing-period $-burn,
-        calibrates to %/$ via (util, current-window $), projects forward. Stable
-        from day 1, slightly biased mid-week by data from the prior period's tail.
-
-    use_trailing=True linearly blends the two by `elapsed / period`: pure
-    trailing at window start, pure in-window at window end. The two converge at
-    week-end (the trailing window aligns with the current window) so the late-
-    week blend is mostly cosmetic; the early-week blend is what stabilizes day
-    1. Falls back to in-window only when JSONL calibration is degenerate (zero
-    $ in window).
+    5h window (use_trailing=False): pure in-window run-rate, unchanged.
+    Weekly (use_trailing=True): cumulative-pace number + a colored current-rate
+    arrow, both sourced from the current window via project.project_delta over an
+    hourly burn series. STATUSLINE_VERBOSE_PACE shows both numeric deltas instead
+    of the arrow.
     """
     if util is None or util <= 0 or not resets_at_unix:
         return ""
     try:
         reset_dt = datetime.fromtimestamp(resets_at_unix, tz=UTC)
-        remaining = (reset_dt - datetime.now(UTC)).total_seconds()
+        remaining = (
+            reset_dt - datetime.fromtimestamp(_now_unix(), tz=UTC)
+        ).total_seconds()
         elapsed = period_seconds - remaining
         if elapsed <= 0 or remaining <= 0:
             return ""
-        in_window_delta = 100.0 * elapsed / util - period_seconds
-        delta = in_window_delta
-        if use_trailing:
-            win_start = resets_at_unix - period_seconds
-            trailing_d, window_d = _pace_buckets_cached(period_seconds, win_start)
-            if trailing_d > 0 and window_d > 0:
-                hourly_pct = trailing_d * util / (window_d * period_seconds / 3600)
-                if hourly_pct > 0:
-                    trailing_delta = (100.0 - util) / hourly_pct * 3600 - remaining
-                    in_window_weight = elapsed / period_seconds
-                    delta = (
-                        1.0 - in_window_weight
-                    ) * trailing_delta + in_window_weight * in_window_delta
         warn_threshold = 0.05 * period_seconds
-        if delta < 0:
-            color = RED
-        elif delta <= warn_threshold:
-            color = YELLOW
-        else:
-            color = GREEN
-        return f" {color}{_fmt_delta_hours(delta)}{RESET}"
+
+        if not use_trailing:
+            delta = 100.0 * elapsed / util - period_seconds
+            return f" {_fmt_delta(delta, warn_threshold)}"
+
+        win_start = resets_at_unix - period_seconds
+        hourly = _pace_hourly_cached(win_start)
+        cumulative_delta, current_rate_delta = project_delta(
+            hourly, util, elapsed, remaining, period_seconds
+        )
+        if cumulative_delta is None:
+            return ""
+        number = _fmt_delta(cumulative_delta, warn_threshold)
+        verbose = os.environ.get("STATUSLINE_VERBOSE_PACE") not in (None, "", "0")
+        if verbose and current_rate_delta is not None:
+            # only show two numbers when the second (current-rate) delta is available
+            return f" {number}/{_fmt_delta(current_rate_delta, warn_threshold)}"
+        if is_on_target(
+            cumulative_delta,
+            current_rate_delta,
+            elapsed,
+            margin_seconds=_ON_TARGET_MARGIN_SECONDS,
+        ):
+            return f" {number}{GREEN}{ON_TARGET_GLYPH}{RESET}"
+        return f" {number}{_rate_arrow(cumulative_delta, current_rate_delta, warn_threshold)}"
     except Exception:
         return ""
 

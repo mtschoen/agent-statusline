@@ -1,4 +1,4 @@
-"""Walker binary discovery, root resolution, and native pace-bucket bridge.
+"""Walker binary discovery and root resolution.
 
 Imports:
   base  -- for _json_loads (used in _walker_subcommand JSON parse)
@@ -115,45 +115,4 @@ def _walker_subcommand(subcommand, *args, timeout=2):
     try:
         return _json_loads(result.stdout)
     except (ValueError, TypeError):
-        return None
-
-
-def _walk_pace_buckets_native(period_seconds, win_start_unix):
-    """Try the native walker. Returns (trailing, window) or None on any failure.
-
-    Per SPEC.md the binary either exits 0 with one JSON line on stdout or the
-    caller falls back -- so any non-zero exit, parse error, or missing field
-    drops cleanly to the Python implementation.
-    """
-    bin_path = _find_walker_binary()
-    if not bin_path:
-        return None
-    try:
-        out = subprocess.run(
-            [
-                bin_path,
-                "--period",
-                str(int(period_seconds)),
-                "--win-start",
-                repr(float(win_start_unix)),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if out.returncode != 0 or not out.stdout.strip():
-        return None
-    try:
-        data = json.loads(out.stdout)
-    except (ValueError, TypeError):
-        return None
-    trailing = data.get("trailing_usd")
-    window = data.get("window_usd")
-    if trailing is None or window is None:
-        return None
-    try:
-        return float(trailing), float(window)
-    except (TypeError, ValueError):
         return None

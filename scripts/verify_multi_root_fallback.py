@@ -1,11 +1,11 @@
 """Stand-alone verifier for statusline_lib._walker_root_list and
-_walk_pace_buckets multi-root behavior.
+_walk_pace_hourly multi-root behavior.
 
 Run:
-    python .claude/scripts/verify_multi_root_fallback.py
+    python scripts/verify_multi_root_fallback.py
 
-Builds a tmp filesystem layout, points HOME at it, asserts dollar totals.
-Cleans up on exit even on failure.
+Builds a tmp filesystem layout, points HOME at it, asserts dollar totals across
+both the default and an extra root.  Cleans up on exit even on failure.
 """
 
 import json
@@ -19,7 +19,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 
-def make_jsonl(path, model, input_tokens, output_tokens):
+def make_jsonl(path, model, output_tokens):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     entry = {
@@ -29,7 +29,7 @@ def make_jsonl(path, model, input_tokens, output_tokens):
             "id": f"msg-{os.path.basename(path)}",
             "model": model,
             "usage": {
-                "input_tokens": input_tokens,
+                "input_tokens": 0,
                 "output_tokens": output_tokens,
                 "cache_read_input_tokens": 0,
                 "cache_creation_input_tokens": 0,
@@ -44,8 +44,8 @@ def main():
     tmp = tempfile.mkdtemp(prefix="walker-fallback-test-")
     old_home = os.environ.get("HOME")
     old_userprofile = os.environ.get("USERPROFILE")
-    walker_module = None
-    original_find_walker = None
+    pace_module = None
+    original_now_unix = None
     try:
         os.environ["HOME"] = tmp
         os.environ["USERPROFILE"] = tmp
@@ -53,18 +53,18 @@ def main():
         default_root = os.path.join(tmp, ".claude", "projects")
         extra_root = os.path.join(tmp, "extra-projects")
 
+        # 1M claude-opus-4-8 output tokens = $25.00 per turn.
+        # Use two turns in separate roots to verify multi-root aggregation.
         make_jsonl(
             os.path.join(default_root, "slug-default", "sess-d.jsonl"),
-            "claude-opus-4-7",
-            1000,
-            500,
-        )  # $0.0175
+            "claude-opus-4-8",
+            1_000_000,
+        )  # $25.00
         make_jsonl(
             os.path.join(extra_root, "slug-extra", "sess-e.jsonl"),
-            "claude-sonnet-4-6",
-            2000,
-            1000,
-        )  # $0.021
+            "claude-opus-4-8",
+            1_000_000,
+        )  # $25.00
 
         config_path = os.path.join(tmp, ".claude", "walker-roots.json")
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
@@ -77,28 +77,30 @@ def main():
             if mod_name == "statusline_lib" or mod_name.startswith("statusline_lib."):
                 del sys.modules[mod_name]
         import statusline_lib
-        import statusline_lib.walker as walker_module
-
-        # Force the Python fallback: stub the native-walker finder so the test
-        # never resolves the user's real ~/.claude.
-        original_find_walker = walker_module._find_walker_binary
-        walker_module._find_walker_binary = lambda: None
+        import statusline_lib.pace as pace_module
 
         roots = statusline_lib._walker_root_list()
         assert os.path.realpath(default_root) in roots, f"default root missing: {roots}"
         assert os.path.realpath(extra_root) in roots, f"extra root missing: {roots}"
 
-        now = datetime.now(UTC).timestamp()
-        trailing, window = statusline_lib._walk_pace_buckets(
-            period_seconds=604800,
-            win_start_unix=now - 86400,
-        )
+        # Win start far enough in the past that both transcripts (timestamped
+        # "now") fall inside the window.
+        win_start = datetime.now(UTC).timestamp() - 3600
 
-        expected = 0.0175 + 0.021
-        assert abs(trailing - expected) < 0.001, (
-            f"trailing got ${trailing:.4f}, expected ${expected:.4f}"
+        # Pin _now_unix so n_buckets covers the window.
+        original_now_unix = pace_module._now_unix
+        pace_module._now_unix = lambda: win_start + 3600
+
+        hourly = pace_module._walk_pace_hourly(win_start)
+
+        total = sum(hourly)
+        expected = 50.0
+        assert abs(total - expected) < 0.01, (
+            f"multi-root total got ${total:.4f}, expected ${expected:.4f}"
         )
-        print(f"OK: trailing=${trailing:.4f} window=${window:.4f}")
+        print(
+            f"OK: multi-root total=${total:.4f} across {len(hourly)} hourly bucket(s)"
+        )
     finally:
         if old_home is None:
             os.environ.pop("HOME", None)
@@ -108,10 +110,8 @@ def main():
             os.environ.pop("USERPROFILE", None)
         else:
             os.environ["USERPROFILE"] = old_userprofile
-        if walker_module is not None and original_find_walker is not None:
-            # Restore the real finder so later imports in this process don't see
-            # the patched no-op.
-            walker_module._find_walker_binary = original_find_walker
+        if pace_module is not None and original_now_unix is not None:
+            pace_module._now_unix = original_now_unix
         shutil.rmtree(tmp, ignore_errors=True)
 
 

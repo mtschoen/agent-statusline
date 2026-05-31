@@ -191,7 +191,9 @@ def _budget_needle(spend_24h, budget):
     if abs(ratio - 1.0) <= _ON_TARGET_RATIO_MARGIN:
         return f"{GREEN}{ON_TARGET_GLYPH}{RESET}"
     arrow = ARROW_DOWN if ratio < 1.0 else ARROW_UP
-    return f"{ramp_color_for(ratio, _BUDGET_GREEN_RATIO, _BUDGET_RED_RATIO)}{arrow}{RESET}"
+    return (
+        f"{ramp_color_for(ratio, _BUDGET_GREEN_RATIO, _BUDGET_RED_RATIO)}{arrow}{RESET}"
+    )
 
 
 def format_burn_rate(rate_limits):

@@ -40,11 +40,25 @@ identity); fields are omitted when their data isn't available:
   consistently.
 - **Context** - `tokens / window (used %)`, e.g. `183.7K / 1.00M (18.0%)`.
   Numerator and percent share the threshold color; denominator is mauve.
-- **Cache** - `reads / writes / hit %`, e.g. `15.41M / 207.4K / 99% hit`.
+- **Cache** - `reads ($R) / writes ($W) / hit %`, e.g.
+  `11.98M ($1.20) / 428.1K ($2.14) / 96% hit`.
   Reads are teal, writes are orange, hit % is threshold-colored. Summed
   across the session transcript and any subagent transcripts (Claude Code's
   stdin payload only carries per-turn cache data, so the script walks the
-  JSONL files to get a session-wide number).
+  JSONL files to get a session-wide number). Each token count is followed
+  by its cumulative session cost in parentheses, colored to match the
+  read (teal) or write (orange) identity. Costs are model-accurate (summed
+  per turn at each turn's model rate, including subagent transcripts,
+  matching the token totals).
+- **TTL evictions** - a loud red `⚠ TTL:N (~$X.XX)` segment, shown only
+  when the session had cache evictions. An eviction is any parent-session
+  turn after the first that paid a substantial cache-write (>=1000 tokens)
+  with zero cache reads
+  (TTL expiry, compaction, `--resume` past the TTL, or the tool-reorder
+  bug) - the cached prefix was gone and had to be rewritten. `~$X.XX`
+  estimates the spend wasted re-warming the prefix (the 1.25x write
+  penalty over the 0.1x a warm read would have cost). Subagent transcripts
+  are excluded (their first turn is always a full write).
 - **Quota** - labeled `5h:` and `wk:`, your 5-hour and 7-day Claude Code
   rate-limit utilization. Each is followed by a **pace projection** in
   absolute hours: `+0.4h` means you're on track to finish the window with 24
@@ -289,6 +303,26 @@ speed; the needle tracks quota/budget pacing). Set `STATUSLINE_TARGET_RATE`
 the coloring and the number stays neutral grey. With `r = rate / target`: teal
 below `0.5x` (cruising), green `0.5-1.5x` (the sane band), a green->yellow->red
 gradient `1.5-4x`, and red at/above `4x`.
+
+The live rate is followed by a green `→$T` arrow showing the configured target
+rate, so the full burn-rate field reads `$0.85/min →$1.00 ↓`. The arrow is
+controlled by `STATUSLINE_TARGET_RATE` - set to `0`/negative/invalid to suppress
+both the coloring and the arrow.
+
+### Compact mode
+
+`STATUSLINE_COMPACT` controls how aggressively line 2 sheds embellishments:
+
+| value | behavior |
+|-------|----------|
+| `auto` (default) | measures the rendered width against `$COLUMNS` (set by Claude Code >= 2.1.153; falls back to the full line on older versions where it is unset) and progressively drops embellishments until line 2 fits |
+| `0` | forces the full line (all embellishments on) |
+| `1` | forces maximum compaction (all embellishments off) |
+
+In `auto` mode, embellishments are dropped in this order until the line fits:
+cache `$` parens, then the target-rate arrow, then cache hit%, then the quota
+pace numbers, then the TTL wasted-$ estimate. The TTL count, session cost,
+context, model badge, and live `$/min` rate are never dropped.
 
 ## Why this and not [other-statusline]?
 

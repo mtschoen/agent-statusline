@@ -196,11 +196,12 @@ def _budget_needle(spend_24h, budget):
     )
 
 
-def format_burn_rate(rate_limits):
-    """Render ` $X.XX/min<needle>` (neutral rate + colored needle), or "".
+def format_burn_rate(rate_limits, show_target=True):
+    """Render `$X.XX/min [→$T.TT] <needle>` (colored rate + optional target arrow + needle), or "".
 
     Rate is the live 5-min global rate. Needle: weekly forecast for subscription
     sessions, 24h-integral budget ratio for API-key sessions, empty otherwise.
+    `show_target=False` (compact mode) drops the target-rate arrow.
     """
     rate = _five_min_rate()
     subscription = _has_quota(rate_limits)
@@ -219,7 +220,12 @@ def format_burn_rate(rate_limits):
         body = f"{_rate_color(rate, target)}{rate_str}{RESET}"
     else:
         body = f"{RATE_COLOR}{rate_str}{RESET}"
-    return f"{body}{needle}"
+    target_part = ""
+    if show_target and target is not None and rate > 0:
+        target_part = f" {GREEN}→${target:.2f}{RESET}"
+    if target_part and needle:
+        return f"{body}{target_part} {needle}"
+    return f"{body}{target_part}{needle}"
 
 
 def _local_midnight_unix():

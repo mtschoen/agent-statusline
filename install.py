@@ -1,5 +1,5 @@
 """Wire statusLine + subagentStatusLine + the 200K /wrap nudge hook into
-~/.claude/settings.json.
+Claude Code or Qwen Code settings.
 
 Idempotent: re-running just refreshes the `command` strings; every other key in
 settings.json -- including any other UserPromptSubmit hooks -- is preserved
@@ -10,8 +10,13 @@ share formatting code, so installing one without the other gives a mismatched
 UI. The nudge hook is the consumer of the per-session occupancy file the
 statusline produces, so it installs in the same pass.
 
+Platform support:
+  --platform claude  (default) Installs to ~/.claude/settings.json
+  --platform qwen    Installs to ~/.qwen/settings.json (ui.statusLine only)
+  --platform both    Installs to both platforms
+
 Usage (typically via the install.sh / install.bat wrappers):
-    python install.py --repo /abs/path/to/repo [--settings PATH] [--dry-run]
+    python install.py --repo /abs/path/to/repo [--platform claude|qwen|both] [--dry-run]
 """
 
 import argparse
@@ -53,9 +58,10 @@ def _parse_args():
         help="Absolute path to the schoen-claude-status checkout",
     )
     parser.add_argument(
-        "--settings",
-        default=None,
-        help="Path to settings.json (default ~/.claude/settings.json)",
+        "--platform",
+        choices=["claude", "qwen", "both"],
+        default="claude",
+        help="Which CLI to install for (default: claude)",
     )
     parser.add_argument(
         "--dry-run",
@@ -93,6 +99,17 @@ def _commands_for_platform(repo):
         f'bash "{main_target}"',
         f'bash "{subagent_target}"',
     )
+
+
+def _qwen_command_for_platform(repo):
+    """Return (target, command) for Qwen Code statusline."""
+    # Qwen Code uses the same platform-aware invocation strategy as Claude Code.
+    target = f"{repo}/qwen_statusline.py"
+    if os.name == "nt":
+        command = f'py -3 "{target}"'
+    else:
+        command = f'bash "{repo}/qwen-statusline-command.sh"'
+    return target, command
 
 
 def _nudge_command(repo):
@@ -155,13 +172,48 @@ def _report_walker(repo):
         )
 
 
+def _qwen_settings_current(settings, command):
+    """True iff Qwen ui.statusLine already matches `command`."""
+    ui = settings.get("ui") or {}
+    status_line = ui.get("statusLine") or {}
+    return (
+        status_line.get("type") == "command" and status_line.get("command") == command
+    )
+
+
+def _merge_qwen_statusline(settings, command):
+    """Insert or update ui.statusLine, preserving other ui keys."""
+    ui = settings.setdefault("ui", {})
+    ui["statusLine"] = {"type": "command", "command": command}
+
+
 def main():
     args = _parse_args()
+    platform = args.platform
 
     # Forward slashes -- bash on Windows (Git Bash, MSYS) handles them and the
     # JSON value stays readable across platforms.
     repo = os.path.abspath(args.repo).replace("\\", "/")
-    settings_path = args.settings or os.path.expanduser("~/.claude/settings.json")
+
+    install_claude = platform in ("claude", "both")
+    install_qwen = platform in ("qwen", "both")
+
+    if install_claude:
+        result = _install_claude(repo, args.dry_run)
+        if result != 0:
+            return result
+
+    if install_qwen:
+        result = _install_qwen(repo, args.dry_run)
+        if result != 0:
+            return result
+
+    return 0
+
+
+def _install_claude(repo, dry_run):
+    """Install statusLine + subagentStatusLine + nudge hook for Claude Code."""
+    settings_path = os.path.expanduser("~/.claude/settings.json")
 
     main_target, subagent_target, main_command, subagent_command = (
         _commands_for_platform(repo)
@@ -184,8 +236,7 @@ def main():
         )
         return 1
     except OSError as e:
-        # CLI error path: report to stderr and exit non-zero. Re-raising would
-        # dump a traceback at the user; returning 1 is the intended handling.
+        # Unreadable settings file: report the cause and abort rather than clobber it.
         print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
         return 1
 
@@ -199,7 +250,7 @@ def main():
     )
 
     if already_current:
-        if args.dry_run:
+        if dry_run:
             print(f"# {settings_path} already current -- nothing to write")
         else:
             print(f"already current: {settings_path}")
@@ -213,7 +264,7 @@ def main():
     settings["subagentStatusLine"] = desired_subagent
     _merge_nudge_hook(settings, nudge_command)
 
-    if args.dry_run:
+    if dry_run:
         print(f"# would write to {settings_path}")
         print(json.dumps(settings, indent=2))
         return 0
@@ -227,6 +278,57 @@ def main():
     _report_walker(repo)
 
     print("Open a new Claude Code session (or trigger a render) to pick it up.")
+    return 0
+
+
+def _install_qwen(repo, dry_run):
+    """Install ui.statusLine for Qwen Code."""
+    settings_path = os.path.expanduser("~/.qwen/settings.json")
+
+    qwen_target, qwen_command = _qwen_command_for_platform(repo)
+
+    if not os.path.exists(qwen_target):
+        print(f"error: expected file not found: {qwen_target}", file=sys.stderr)
+        print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
+        return 1
+
+    try:
+        settings = _load(settings_path)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"error: could not parse {settings_path}: {e}", file=sys.stderr)
+        print(
+            "  refusing to overwrite a malformed settings file -- fix or move it first",
+            file=sys.stderr,
+        )
+        return 1
+    except OSError as e:
+        # Unreadable settings file: report the cause and abort rather than clobber it.
+        print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
+        return 1
+
+    already_current = _qwen_settings_current(settings, qwen_command)
+
+    if already_current:
+        if dry_run:
+            print(f"# {settings_path} already current -- nothing to write")
+        else:
+            print(f"already current: {settings_path}")
+            print(f"  ui.statusLine:      {qwen_command}")
+            print("Nothing to do.")
+        return 0
+
+    _merge_qwen_statusline(settings, qwen_command)
+
+    if dry_run:
+        print(f"# would write to {settings_path}")
+        print(json.dumps(settings, indent=2))
+        return 0
+
+    _atomic_write(settings_path, settings)
+    print(f"updated {settings_path}")
+    print(f"  ui.statusLine:      {qwen_command}")
+
+    print("Open a new Qwen Code session (or trigger a render) to pick it up.")
     return 0
 
 

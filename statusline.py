@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+from typing import NamedTuple
 
 # Force UTF-8 stdout regardless of the Windows console code page. Without
 # this, characters like `⏱` (U+23F1, used in the beacon column) crash with
@@ -36,6 +37,8 @@ from statusline_lib import (
     format_day_budget,
     format_model_badge,
     format_quota,
+    format_ttl,
+    resolve_flags,
     walk_transcript,
 )
 from statusline_lib.nudge import write_ctx_state
@@ -113,6 +116,56 @@ def _beacon_line(session_id):
     return beacon_summary
 
 
+class _Line2(NamedTuple):
+    """Pre-computed, flag-independent inputs to line 2's compact re-render."""
+
+    model_summary: str
+    context_summary: str
+    walk: dict
+    rate_limits: dict | None
+    day_budget_summary: str
+    cost_summary: str
+
+
+def _render_line2(flags, inputs):
+    """Format line 2 at the verbosity given by `flags` (the compact resolver
+    flips entries off to fit $COLUMNS). `inputs` carries the already-computed,
+    flag-independent summaries plus the raw walk/rate_limits; only the cheap
+    formatting re-runs per flag set."""
+    walk = inputs.walk
+    cache_summary = format_cache(
+        walk["read"],
+        walk["write"],
+        walk["input"],
+        walk["read_cost"],
+        walk["write_cost"],
+        show_costs=flags["cache_costs"],
+        show_hit=flags["cache_hit"],
+    )
+    ttl_summary = format_ttl(
+        walk["ttl_evictions"], walk["ttl_wasted"], show_wasted=flags["ttl_wasted"]
+    )
+    quota_summary = format_quota(inputs.rate_limits, show_pace=flags["quota_pace"])
+    burnrate_summary = format_burn_rate(
+        inputs.rate_limits, show_target=flags["burn_target"]
+    )
+    parts = [
+        s
+        for s in (
+            inputs.model_summary,
+            inputs.context_summary,
+            cache_summary,
+            ttl_summary,
+            quota_summary,
+            inputs.day_budget_summary,
+            burnrate_summary,
+            inputs.cost_summary,
+        )
+        if s
+    ]
+    return " | ".join(parts)
+
+
 def main():
     raw = sys.stdin.read()
     # Truncate-on-write dump of the latest payload. Useful when Claude Code
@@ -143,48 +196,36 @@ def main():
     # Bridge occupancy to the 200K /wrap nudge hook (its payload can't see it).
     write_ctx_state(d.get("session_id") or "", ctx_used, window_size, time.time())
 
-    # --- Cache: stdin only carries the current turn, so walk the session
-    # transcript + every subagent JSONL to sum across all assistant turns.
+    # Walk the session + subagent JSONLs to sum cache/cost/TTL across all turns.
     walk = walk_transcript(d.get("transcript_path") or "", include_subagents=True)
-    cache_summary = format_cache(walk["read"], walk["write"], walk["input"])
 
-    # --- Cost: the payload's total_cost_usd is the harness's own figure but is
-    #     PARENT-ONLY -- subagents run as isolated sessions invisible to it
-    #     (Claude Code issue #48040). Show that authoritative parent figure plus
-    #     our estimate of subagent spend. walk["parent_cost"] is our formula over
-    #     the same parent turns; the renderer diffs it against the authoritative
-    #     figure to flag drift (our formula normally matches it to the penny).
+    # Payload total_cost_usd is parent-only (Claude Code issue #48040: subagents
+    # are isolated sessions). Pair it with our subagent estimate; walk["parent_cost"]
+    # lets us flag drift.
     auth_parent = (d.get("cost") or {}).get("total_cost_usd") or 0
     cost_summary = format_cost_with_subagents(
         auth_parent, walk["parent_cost"], walk["subagent_cost"]
     )
 
-    # --- Quota: 5h + weekly utilization with pace projection.
-    quota_summary = format_quota(d.get("rate_limits"))
-
-    # --- Burn rate: live 5-min $/min + needle (subscription weekly or API-key budget).
-    burnrate_summary = format_burn_rate(d.get("rate_limits"))
-
-    # --- Daily budget (API-key only): since-midnight spend vs STATUSLINE_DAILY_BUDGET.
-    day_budget_summary = format_day_budget(d.get("rate_limits"))
+    # Daily budget is flag-independent; compute once outside the compact loop.
+    rate_limits = d.get("rate_limits")
+    day_budget_summary = format_day_budget(rate_limits)
 
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
     line1 = _line1(d, cwd, spinner)
 
-    parts = [
-        s
-        for s in (
-            model_summary,
-            context_summary,
-            cache_summary,
-            quota_summary,
-            day_budget_summary,
-            burnrate_summary,
-            cost_summary,
-        )
-        if s
-    ]
-    line2 = " | ".join(parts)
+    # Resolve compact verbosity (STATUSLINE_COMPACT + $COLUMNS): re-render the
+    # already-walked data at each flag set until it fits, then render once more.
+    line2_inputs = _Line2(
+        model_summary,
+        context_summary,
+        walk,
+        rate_limits,
+        day_budget_summary,
+        cost_summary,
+    )
+    flags = resolve_flags(lambda f: _render_line2(f, line2_inputs))
+    line2 = _render_line2(flags, line2_inputs)
 
     sys.stdout.write(line1)
     if line2:

@@ -330,8 +330,12 @@ def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
         return ""
 
 
-def format_quota(rate_limits):
-    """Returns space-joined '5h: P% +Hh wk: P% +Hh', omitting unavailable windows."""
+def format_quota(rate_limits, show_pace=True):
+    """Returns space-joined '5h: P% +Hh wk: P% +Hh', omitting unavailable windows.
+
+    `show_pace=False` (compact mode) drops the +Hh pace projection, leaving the
+    bare '5h: P% wk: P%' utilization figures.
+    """
     rl = rate_limits or {}
     parts = []
     for win_key, period_seconds, label, use_trailing in (
@@ -343,8 +347,10 @@ def format_quota(rate_limits):
         if util is None:
             continue
         pct_part = color_high_bad(util, 75, 90)
-        proj_part = _project_pace(
-            util, w.get("resets_at"), period_seconds, use_trailing
+        proj_part = (
+            _project_pace(util, w.get("resets_at"), period_seconds, use_trailing)
+            if show_pace
+            else ""
         )
         parts.append(f"{label}: {pct_part}{proj_part}")
     return " ".join(parts)

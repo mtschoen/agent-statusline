@@ -272,6 +272,35 @@ def _check_glyph_text_presentation(failures):
         failures.append("on-target glyph should carry the U+FE0E text selector")
 
 
+def _check_target_rate_arrow(failures):
+    # Default target $1/min. $6 in 5 min -> $1.20/min. Green arrow to target,
+    # needle preserved (no quota/budget here -> no needle, so just the arrow).
+    out = _with_spend({int(_NOW - 300): 6.0}, lambda: burnrate.format_burn_rate(None))
+    if f"{GREEN}→$1.00{RESET}" not in out:
+        failures.append(f"target arrow should be green →$1.00; got {out!r}")
+    # show_target=False suppresses the arrow.
+    off = _with_spend(
+        {int(_NOW - 300): 6.0},
+        lambda: burnrate.format_burn_rate(None, show_target=False),
+    )
+    if "→" in off:
+        failures.append(f"show_target=False must drop the arrow; got {off!r}")
+    # Disabled target (env <=0) -> no arrow even when show_target=True.
+    real = os.environ.get("STATUSLINE_TARGET_RATE")
+    os.environ["STATUSLINE_TARGET_RATE"] = "0"
+    try:
+        none_out = _with_spend(
+            {int(_NOW - 300): 6.0}, lambda: burnrate.format_burn_rate(None)
+        )
+    finally:
+        if real is None:
+            os.environ.pop("STATUSLINE_TARGET_RATE", None)
+        else:
+            os.environ["STATUSLINE_TARGET_RATE"] = real
+    if "→" in none_out:
+        failures.append(f"disabled target must show no arrow; got {none_out!r}")
+
+
 def check(failures):
     _check_cache_dedupes_walk(failures)
     _check_five_min_rate_render(failures)
@@ -286,6 +315,7 @@ def check(failures):
     _check_rate_number_color(failures)
     _check_rate_number_colored_in_field(failures)
     _check_glyph_text_presentation(failures)
+    _check_target_rate_arrow(failures)
 
 
 def main():

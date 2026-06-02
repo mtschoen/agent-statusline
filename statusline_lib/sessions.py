@@ -98,14 +98,14 @@ def count_active_sessions(
 
 def _process_matches(name, cmdline, cwd, target_cwd):
     """Pure classifier: does this (name, cmdline, cwd) tuple represent an
-    interactive Claude session rooted at `target_cwd`? Extracted so unit
+    interactive Claude/Qwen session rooted at `target_cwd`? Extracted so unit
     tests don't need a live or mocked psutil."""
     n = (name or "").lower()
-    if n not in ("claude", "claude.exe", "node", "node.exe"):
+    if n not in ("claude", "claude.exe", "qwen", "qwen.exe", "node", "node.exe"):
         return False
     cl = cmdline or ()
     if n in ("node", "node.exe") and not any(
-        "claude" in (arg or "").lower() for arg in cl
+        "claude" in (arg or "").lower() or "qwen" in (arg or "").lower() for arg in cl
     ):
         return False
     if "-p" in cl or "--print" in cl:
@@ -121,7 +121,7 @@ def _count_via_psutil(target_cwd, psutil):
         name = (p.info.get("name") or "").lower()
         # Cheap name pre-filter -- avoids calling cmdline()/cwd() on every
         # process (hundreds on a typical box).
-        if name not in ("claude", "claude.exe", "node", "node.exe"):
+        if name not in ("claude", "claude.exe", "qwen", "qwen.exe", "node", "node.exe"):
             continue
         try:
             cmdline = p.cmdline()

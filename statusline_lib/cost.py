@@ -1,18 +1,20 @@
-"""Cost calculation, transcript walking, context/cache formatting, model badge.
+"""Cost calculation and transcript walking.
+
+Context/model-badge rendering moved to badge.py to keep this file
+within the 400-line guideline.
 
 Imports:
-  base -- for color constants, _json_loads, fmt, color_high_bad, color_high_good
+  base  -- for color constants, _json_loads, fmt, color_high_good
+  badge -- for COMPACT_BUFFER_TOKENS, RED_MARGIN_TOKENS (re-exported here
+           for back-compat with external callers via statusline_lib.cost)
 """
 
-import contextlib
 import glob
 import os
-import re as _re
 
 from .base import (
     CACHE_READ,
     CACHE_WRITE,
-    CTX_DENOM,
     GREEN,
     ORANGE,
     RED,
@@ -30,6 +32,16 @@ _RATES = {
 }
 
 _WEB_SEARCH_COST_USD = 0.01
+
+# A turn with cache_read==0 and cache_write>0 after the first parent turn is a
+# cache eviction (TTL expiry, compaction, resume, or the tool-reorder bug). The
+# floor suppresses degenerate tiny-write turns from counting. Tunable.
+TTL_MIN_WRITE_TOKENS = 1000
+
+# U+FE0E text-presentation selector keeps the warning glyph monochrome so the
+# ANSI red wins cross-platform (Windows Terminal would otherwise color-font it),
+# matching the on-target yin-yang's treatment.
+TTL_WARN_GLYPH = "⚠︎"
 
 
 def _rates_for(model_id):
@@ -75,6 +87,7 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
         if mid in seen_ids:
             return
         seen_ids.add(mid)
+    acc["assistant_turns"] += 1
     u = msg.get("usage") or {}
     r = int(u.get("cache_read_input_tokens") or 0)
     w = int(u.get("cache_creation_input_tokens") or 0)
@@ -87,7 +100,20 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
     model_id = msg.get("model") or ""
     if model_id:
         acc["last_model"] = model_id
-    acc["cost"] += _cost_for_turn(u, model_id or acc["last_model"])
+    rate_model = model_id or acc["last_model"]
+    acc["cost"] += _cost_for_turn(u, rate_model)
+    inp_rate, _out_rate = _rates_for(rate_model)
+    acc["read_cost"] += r * inp_rate * 0.1 / 1_000_000.0
+    acc["write_cost"] += w * inp_rate * 1.25 / 1_000_000.0
+    # TTL eviction: parent-only non-first turn with full rewrite (no read) above floor; wasted = 1.15x penalty.
+    if (
+        acc.get("track_evictions")
+        and acc["assistant_turns"] > 1
+        and r == 0
+        and w >= TTL_MIN_WRITE_TOKENS
+    ):
+        acc["ttl_evictions"] += 1
+        acc["ttl_wasted"] += w * inp_rate * 1.15 / 1_000_000.0
     acc["last_input"] = i
     acc["last_cache_create"] = w
     acc["last_cache_read"] = r
@@ -130,6 +156,12 @@ def walk_transcript(path, include_subagents=False):
         "input": 0,
         "output": 0,
         "cost": 0.0,
+        "read_cost": 0.0,
+        "write_cost": 0.0,
+        "ttl_evictions": 0,
+        "ttl_wasted": 0.0,
+        "assistant_turns": 0,
+        "track_evictions": False,
         "last_model": "",
         "last_input": 0,
         "last_cache_create": 0,
@@ -139,9 +171,13 @@ def walk_transcript(path, include_subagents=False):
 
     parent_cost = 0.0
     if path and os.path.exists(path):
+        # Eviction tracking is parent-only: a subagent's first turn is a full
+        # write by construction and isn't user-controllable cache behavior.
+        acc["track_evictions"] = True
         _walk_one_transcript(path, acc, seen_ids)
         parent_cost = acc["cost"]
         if include_subagents and path.endswith(".jsonl"):
+            acc["track_evictions"] = False
             sub_dir = path[:-6] + "/subagents"
             if os.path.isdir(sub_dir):
                 for sub in glob.glob(os.path.join(sub_dir, "agent-*.jsonl")):
@@ -153,6 +189,10 @@ def walk_transcript(path, include_subagents=False):
         "input": acc["input"],
         "output": acc["output"],
         "cost": acc["cost"],
+        "read_cost": acc["read_cost"],
+        "write_cost": acc["write_cost"],
+        "ttl_evictions": acc["ttl_evictions"],
+        "ttl_wasted": acc["ttl_wasted"],
         "parent_cost": parent_cost,
         "subagent_cost": acc["cost"] - parent_cost,
         "last_model_id": acc["last_model"],
@@ -162,63 +202,51 @@ def walk_transcript(path, include_subagents=False):
     }
 
 
-COMPACT_BUFFER_TOKENS = 33_000
-RED_MARGIN_TOKENS = 20_000
-ORANGE_THRESHOLD_1M_TOKENS = 500_000  # mid-band warning for 1M-context sessions
+def format_cache(
+    read,
+    write,
+    input_t,
+    read_cost=None,
+    write_cost=None,
+    show_costs=True,
+    show_hit=True,
+):
+    """`reads (cost) / writes (cost) / hit %`.
 
-
-def ctx_window_for_model(model_id):
-    """Best-effort window inference for per-agent rendering. Opus [1m] -> 1M,
-    everything else -> 200K. The main script doesn't need this -- the payload
-    carries `context_window.context_window_size` directly."""
-    return 1_000_000 if "[1m]" in (model_id or "") else 200_000
-
-
-def format_context(ctx_used, window_size, model_id=""):
-    """`usedK / windowK (P.P%)` colored by token-anchored thresholds.
-
-    Yellow at 200K for 1M models (Opus 1M pricing boundary), at 50% otherwise.
-    1M models also get an orange mid-band at 500K so the huge yellow
-    span between the pricing boundary and auto-compact has a visible
-    midpoint cue. Red at `window_size - 33K compact buffer - 20K
-    headroom`; tracks CLAUDE_AUTOCOMPACT_PCT_OVERRIDE if set.
+    The per-figure $ parens render only when both cost args are supplied AND
+    `show_costs` (compact mode and the subagent caller pass neither/False, in
+    which case the output is byte-identical to the pre-cost format). The $ inside
+    each paren reuses that figure's identity color (teal read, orange write).
+    `show_hit=False` drops the trailing hit%.
     """
-    if window_size <= 0:
-        return ""
-    override = os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
-    compact_tokens = max(0, window_size - COMPACT_BUFFER_TOKENS)
-    if override:
-        with contextlib.suppress(ValueError):
-            compact_tokens = int(window_size * float(override) / 100)
-    red_tokens = max(0, compact_tokens - RED_MARGIN_TOKENS)
-    is_1m = window_size >= 1_000_000 or "[1m]" in (model_id or "")
-    yellow_tokens = 200_000 if is_1m else window_size // 2
-    if ctx_used >= red_tokens:
-        ctx_color = RED
-    elif is_1m and ctx_used >= ORANGE_THRESHOLD_1M_TOKENS:
-        ctx_color = ORANGE
-    elif ctx_used >= yellow_tokens:
-        ctx_color = YELLOW
-    else:
-        ctx_color = GREEN
-    pct = 100.0 * ctx_used / window_size
-    return (
-        f"{ctx_color}{fmt(ctx_used)}{RESET} / "
-        f"{CTX_DENOM}{fmt(window_size)}{RESET} "
-        f"({ctx_color}{pct:.1f}%{RESET})"
-    )
-
-
-def format_cache(read, write, input_t):
     total_in = read + write + input_t
     if total_in <= 0:
         return ""
-    hit_pct = read * 100.0 / total_in
-    return (
-        f"{CACHE_READ}{fmt(read)}{RESET} / "
-        f"{CACHE_WRITE}{fmt(write)}{RESET} / "
-        f"{color_high_good(hit_pct, 90, 75)} hit"
-    )
+    with_costs = show_costs and read_cost is not None and write_cost is not None
+    read_part = f"{CACHE_READ}{fmt(read)}{RESET}"
+    write_part = f"{CACHE_WRITE}{fmt(write)}{RESET}"
+    if with_costs:
+        read_part += f" {CACHE_READ}(${read_cost:.2f}){RESET}"
+        write_part += f" {CACHE_WRITE}(${write_cost:.2f}){RESET}"
+    segment = f"{read_part} / {write_part}"
+    if show_hit:
+        hit_pct = read * 100.0 / total_in
+        segment += f" / {color_high_good(hit_pct, 90, 75)} hit"
+    return segment
+
+
+def format_ttl(evictions, wasted, show_wasted=True):
+    """Loud red cache-eviction counter, or "" when there were no evictions.
+
+    `⚠ TTL:N` plus ` (~$X.XX)` of estimated wasted spend when `show_wasted`.
+    Whole segment is red - it is a problem signal, not a routine metric.
+    """
+    if not evictions or evictions <= 0:
+        return ""
+    segment = f"{RED}{TTL_WARN_GLYPH} TTL:{evictions}{RESET}"
+    if show_wasted and wasted and wasted > 0:
+        segment += f" {RED}(~${wasted:.2f}){RESET}"
+    return segment
 
 
 def _cost_threshold_color(cost):
@@ -332,42 +360,3 @@ def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
         return body
     total = authoritative_parent + subagent_cost
     return f"({body}) {_sum_threshold_color(total)}= ${total:.2f}{RESET}"
-
-
-# Model-family badge: substring match -> short label + ANSI color. Distinct
-# from threshold green/yellow/red and the cache identity teal/orange so a
-# coloured badge never reads as a warning or a metric. Shared by the main and
-# subagent statuslines.
-_MODEL_BADGES = [
-    (("opus",), "opus", "\x1b[35m"),  # magenta
-    (("sonnet",), "sonnet", "\x1b[36m"),  # cyan
-    (("haiku",), "haiku", "\x1b[34m"),  # blue
-]
-
-
-def _version_for(mid, key):
-    """Extract a dotted `major.minor` version following the family `key` in a
-    model id, e.g. `claude-opus-4-8` -> "4.8". Returns "" when no version
-    component is present (e.g. an aliased id like `opus`).
-    """
-    match = _re.search(rf"{key}-(\d+)-(\d+)", mid)
-    return f"{match.group(1)}.{match.group(2)}" if match else ""
-
-
-def format_model_badge(model_id):
-    """Colored short model-family badge, e.g. magenta `opus4.8[1m]`.
-
-    Inserts the `major.minor` version when the id carries one and appends the
-    `[1m]` runtime-tier suffix when present. Unknown families render as a mauve
-    `?`; an empty id returns "" so the caller can omit the segment.
-    """
-    if not model_id:
-        return ""
-    mid = model_id.lower()
-    suffix = "[1m]" if "[1m]" in mid else ""
-    for keys, label, color in _MODEL_BADGES:
-        for key in keys:
-            if key in mid:
-                version = _version_for(mid, key)
-                return f"{color}{label}{version}{suffix}{RESET}"
-    return f"{CTX_DENOM}?{RESET}"

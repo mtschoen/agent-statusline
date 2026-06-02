@@ -37,6 +37,18 @@ Package layout (dependency order, no cycles):
 # `statusline_lib._name`, so they MUST appear as package attributes even
 # though nothing inside this file calls them.
 
+from .badge import (
+    _MODEL_BADGES,
+    COMPACT_BUFFER_TOKENS,
+    ORANGE_THRESHOLD_1M_TOKENS,
+    RED_MARGIN_TOKENS,
+    _qwen_size_for,
+    _qwen_version_for,
+    _version_for,
+    ctx_window_for_model,
+    format_context,
+    format_model_badge,
+)
 from .base import (
     CACHE_READ,
     CACHE_WRITE,
@@ -87,6 +99,12 @@ from .burnrate import (
     format_burn_rate,
     format_day_budget,
 )
+from .compact import (
+    DROP_ORDER,
+    full_flags,
+    resolve_flags,
+    visible_width,
+)
 from .cost import (
     _COST_DRIFT_MAJOR_THRESHOLD,
     _COST_DRIFT_OVER_COLOR,
@@ -94,28 +112,23 @@ from .cost import (
     _COST_DRIFT_THRESHOLD,
     _COST_DRIFT_UNDER_COLOR,
     _COST_DRIFT_UNDER_MAJOR_COLOR,
-    _MODEL_BADGES,
     _RATES,
     _SUBAGENT_COST_COLOR,
     _SUM_COST_THRESHOLD_RED,
     _SUM_COST_THRESHOLD_YELLOW,
     _WEB_SEARCH_COST_USD,
-    COMPACT_BUFFER_TOKENS,
-    ORANGE_THRESHOLD_1M_TOKENS,
-    RED_MARGIN_TOKENS,
+    TTL_MIN_WRITE_TOKENS,
+    TTL_WARN_GLYPH,
     _accumulate_assistant_turn,
     _cost_for_turn,
     _cost_threshold_color,
     _rates_for,
     _sum_threshold_color,
-    _version_for,
     _walk_one_transcript,
-    ctx_window_for_model,
     format_cache,
-    format_context,
     format_cost,
     format_cost_with_subagents,
-    format_model_badge,
+    format_ttl,
     walk_transcript,
 )
 from .pace import (
@@ -140,6 +153,13 @@ from .pace import (
     format_quota,
     weekly_needle,
 )
+from .qwen import (
+    format_qwen_api_stats,
+    format_qwen_cache,
+    format_qwen_files,
+    format_qwen_thinking,
+    format_qwen_tokens,
+)
 from .sessions import (
     _SESSION_DEBOUNCE_DWELL_SECONDS,
     _count_via_psutil,
@@ -163,12 +183,11 @@ from .walker import (
 __all__ = [
     "CACHE_READ",
     "CACHE_WRITE",
-    # cost
     "COMPACT_BUFFER_TOKENS",
     "CTX_DENOM",
+    "DROP_ORDER",
     "GREEN",
     "ORANGE",
-    # base
     "RAMP",
     "RED",
     "RED_MARGIN_TOKENS",
@@ -176,12 +195,10 @@ __all__ = [
     "YELLOW",
     "color_high_bad",
     "color_high_good",
-    # sessions
     "count_active_sessions",
     "ctx_window_for_model",
     "debounce_session_count",
     "fmt",
-    # beacon
     "format_beacon",
     "format_burn_rate",
     "format_cache",
@@ -191,10 +208,18 @@ __all__ = [
     "format_cost_with_subagents",
     "format_day_budget",
     "format_model_badge",
-    # pace
     "format_quota",
+    "format_qwen_api_stats",
+    "format_qwen_cache",
+    "format_qwen_files",
+    "format_qwen_thinking",
+    "format_qwen_tokens",
+    "format_ttl",
+    "full_flags",
     "ramp_color",
     "ramp_color_for",
+    "resolve_flags",
+    "visible_width",
     "walk_transcript",
     "weekly_needle",
 ]

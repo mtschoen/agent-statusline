@@ -100,6 +100,30 @@ def _check_needle_empty_window(failures):
         failures.append(f"empty window should omit the arrow; got {out!r}")
 
 
+def _render_quota_with_pace(util, hourly, elapsed_hours, show_pace=True):
+    period, real_now, real_hourly = _pin(hourly, elapsed_hours)
+    rl = {"seven_day": {"used_percentage": util, "resets_at": _WIN_START + period}}
+    try:
+        return format_quota(rl, show_pace=show_pace)
+    finally:
+        pace._now_unix, pace._pace_hourly_cached = real_now, real_hourly
+
+
+def _check_show_pace_toggle(failures):
+    # With show_pace=True (default), the pace projection (+Hh or -Hh) appears.
+    on = _render_quota_with_pace(30.0, [1.0] * 84, 84, show_pace=True)
+    if "h" not in on:
+        failures.append(f"show_pace=True should include an h pace token; got {on!r}")
+    if "%" not in on:
+        failures.append(f"show_pace=True should still show %; got {on!r}")
+    # With show_pace=False, pace projection is omitted but % remains.
+    off = _render_quota_with_pace(30.0, [1.0] * 84, 84, show_pace=False)
+    if "h" in off:
+        failures.append(f"show_pace=False must drop the h pace token; got {off!r}")
+    if "%" not in off:
+        failures.append(f"show_pace=False must keep the % utilization; got {off!r}")
+
+
 def check(failures):
     _check_quota_is_number_only(failures)
     _check_quota_number_color_bands(failures)
@@ -107,6 +131,7 @@ def check(failures):
     _check_needle_cool_down(failures)
     _check_needle_on_target(failures)
     _check_needle_empty_window(failures)
+    _check_show_pace_toggle(failures)
 
 
 def main():

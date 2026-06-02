@@ -321,8 +321,10 @@ both the coloring and the arrow.
 
 In `auto` mode, embellishments are dropped in this order until the line fits:
 cache `$` parens, then the target-rate arrow, then cache hit%, then the quota
-pace numbers, then the TTL wasted-$ estimate. The TTL count, session cost,
-context, model badge, and live `$/min` rate are never dropped.
+pace numbers, then the TTL wasted-$ estimate. The narrowest windows then enter a
+super-minimal tier that drops the whole live `$/min` field, then the context
+percentage, and finally the context window-size denominator. The TTL count,
+session cost, context used-token count, and model badge are never dropped.
 
 ## Why this and not [other-statusline]?
 

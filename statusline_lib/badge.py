@@ -32,7 +32,7 @@ def ctx_window_for_model(model_id):
     return 1_000_000 if "[1m]" in (model_id or "") else 200_000
 
 
-def format_context(ctx_used, window_size, model_id=""):
+def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct=True):
     """`usedK / windowK (P.P%)` colored by token-anchored thresholds.
 
     Yellow at 200K for 1M models (Opus 1M pricing boundary), at 50% otherwise.
@@ -40,6 +40,10 @@ def format_context(ctx_used, window_size, model_id=""):
     span between the pricing boundary and auto-compact has a visible
     midpoint cue. Red at `window_size - 33K compact buffer - 20K
     headroom`; tracks CLAUDE_AUTOCOMPACT_PCT_OVERRIDE if set.
+
+    `show_denom=False` (super-minimal compact) drops the ` / windowK` window
+    size; `show_pct=False` drops the trailing `(P.P%)`. The colored used-token
+    count always stays.
     """
     if window_size <= 0:
         return ""
@@ -59,12 +63,12 @@ def format_context(ctx_used, window_size, model_id=""):
         ctx_color = YELLOW
     else:
         ctx_color = GREEN
-    pct = 100.0 * ctx_used / window_size
-    return (
-        f"{ctx_color}{fmt(ctx_used)}{RESET} / "
-        f"{CTX_DENOM}{fmt(window_size)}{RESET} "
-        f"({ctx_color}{pct:.1f}%{RESET})"
-    )
+    text = f"{ctx_color}{fmt(ctx_used)}{RESET}"
+    if show_denom:
+        text += f" / {CTX_DENOM}{fmt(window_size)}{RESET}"
+    if show_pct:
+        text += f" ({ctx_color}{100.0 * ctx_used / window_size:.1f}%{RESET})"
+    return text
 
 
 # Model-family badge: substring match -> short label + ANSI color. Distinct

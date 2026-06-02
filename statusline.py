@@ -117,10 +117,14 @@ def _beacon_line(session_id):
 
 
 class _Line2(NamedTuple):
-    """Pre-computed, flag-independent inputs to line 2's compact re-render."""
+    """Pre-computed inputs to line 2's compact re-render. Context is carried raw
+    (not pre-rendered) so the compact resolver can drop its denominator and
+    percentage; the cheap format_context call re-runs per flag set."""
 
     model_summary: str
-    context_summary: str
+    ctx_used: int
+    window_size: int
+    model_id: str
     walk: dict
     rate_limits: dict | None
     day_budget_summary: str
@@ -133,6 +137,13 @@ def _render_line2(flags, inputs):
     flag-independent summaries plus the raw walk/rate_limits; only the cheap
     formatting re-runs per flag set."""
     walk = inputs.walk
+    context_summary = format_context(
+        inputs.ctx_used,
+        inputs.window_size,
+        inputs.model_id,
+        show_denom=flags["context_denom"],
+        show_pct=flags["context_pct"],
+    )
     cache_summary = format_cache(
         walk["read"],
         walk["write"],
@@ -146,14 +157,16 @@ def _render_line2(flags, inputs):
         walk["ttl_evictions"], walk["ttl_wasted"], show_wasted=flags["ttl_wasted"]
     )
     quota_summary = format_quota(inputs.rate_limits, show_pace=flags["quota_pace"])
-    burnrate_summary = format_burn_rate(
-        inputs.rate_limits, show_target=flags["burn_target"]
+    burnrate_summary = (
+        format_burn_rate(inputs.rate_limits, show_target=flags["burn_target"])
+        if flags["burn_rate"]
+        else ""
     )
     parts = [
         s
         for s in (
             inputs.model_summary,
-            inputs.context_summary,
+            context_summary,
             cache_summary,
             ttl_summary,
             quota_summary,
@@ -191,7 +204,6 @@ def main():
     )
     model_id = (d.get("model") or {}).get("id") or ""
     model_summary = format_model_badge(model_id)
-    context_summary = format_context(ctx_used, window_size, model_id)
 
     # Bridge occupancy to the 200K /wrap nudge hook (its payload can't see it).
     write_ctx_state(d.get("session_id") or "", ctx_used, window_size, time.time())
@@ -218,7 +230,9 @@ def main():
     # already-walked data at each flag set until it fits, then render once more.
     line2_inputs = _Line2(
         model_summary,
-        context_summary,
+        ctx_used,
+        window_size,
+        model_id,
         walk,
         rate_limits,
         day_budget_summary,

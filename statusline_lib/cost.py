@@ -11,6 +11,7 @@ Imports:
 
 import glob
 import os
+from datetime import datetime
 
 from .base import (
     CACHE_READ,
@@ -34,9 +35,48 @@ _RATES = {
 _WEB_SEARCH_COST_USD = 0.01
 
 # A turn with cache_read==0 and cache_write>0 after the first parent turn is a
-# cache eviction (TTL expiry, compaction, resume, or the tool-reorder bug). The
-# floor suppresses degenerate tiny-write turns from counting. Tunable.
+# cache rewrite. The floor suppresses degenerate tiny-write turns from counting.
+# Tunable.
 TTL_MIN_WRITE_TOKENS = 1000
+
+# ...but a rewrite only counts as a *TTL* eviction when the idle gap since the
+# previous turn exceeds the lifetime the prior turn's cache was written with. A
+# rewrite seconds after the prior turn is a tool-array/compaction/resume bust
+# (e.g. ToolSearch loading a deferred tool reorders the tool block and busts the
+# prefix), not an idle timeout - so it must NOT be blamed on TTL. The lifetime is
+# not fixed: subscription auth writes 1h cache, API-key/Bedrock/Vertex default to
+# 5m, so the gate derives the threshold per-turn from the usage breakdown rather
+# than assuming one value. With no timestamps the gap is unknowable and nothing
+# counts (conservative).
+TTL_5M_SECONDS = 300
+TTL_1H_SECONDS = 3600
+
+
+def _parse_ts(value):
+    """Parse a transcript ISO-8601 timestamp to epoch seconds, or None."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _written_ttl_seconds(usage):
+    """Lifetime (s) of the cache this turn wrote, from the ephemeral breakdown.
+
+    `cache_creation.ephemeral_{5m,1h}_input_tokens` tells us which TTL the write
+    used. Falls back to the longer 1h lifetime when the breakdown is absent so an
+    unknown write is treated conservatively (a longer gap is required to blame an
+    eviction on TTL).
+    """
+    creation = usage.get("cache_creation") or {}
+    hour = int(creation.get("ephemeral_1h_input_tokens") or 0)
+    five_min = int(creation.get("ephemeral_5m_input_tokens") or 0)
+    if hour or five_min:
+        return TTL_1H_SECONDS if hour >= five_min else TTL_5M_SECONDS
+    return TTL_1H_SECONDS
+
 
 # U+FE0E text-presentation selector keeps the warning glyph monochrome so the
 # ANSI red wins cross-platform (Windows Terminal would otherwise color-font it),
@@ -105,15 +145,27 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
     inp_rate, _out_rate = _rates_for(rate_model)
     acc["read_cost"] += r * inp_rate * 0.1 / 1_000_000.0
     acc["write_cost"] += w * inp_rate * 1.25 / 1_000_000.0
-    # TTL eviction: parent-only non-first turn with full rewrite (no read) above floor; wasted = 1.15x penalty.
+    # TTL eviction: parent-only non-first turn with full rewrite (no read) above
+    # floor AND an idle gap since the prior turn exceeding the TTL the prior turn's
+    # cache was written with (so a seconds-later tool-array/compaction bust, and a
+    # warm gap under the cache lifetime, are both excluded); wasted = 1.15x penalty.
+    cur_ts = _parse_ts(entry.get("timestamp"))
+    prev_ts = acc.get("last_turn_ts")
+    prev_ttl = acc.get("last_turn_ttl_seconds") or TTL_1H_SECONDS
+    idle_gap_exceeded = (
+        prev_ts is not None and cur_ts is not None and (cur_ts - prev_ts) > prev_ttl
+    )
     if (
         acc.get("track_evictions")
         and acc["assistant_turns"] > 1
         and r == 0
         and w >= TTL_MIN_WRITE_TOKENS
+        and idle_gap_exceeded
     ):
         acc["ttl_evictions"] += 1
         acc["ttl_wasted"] += w * inp_rate * 1.15 / 1_000_000.0
+    acc["last_turn_ts"] = cur_ts
+    acc["last_turn_ttl_seconds"] = _written_ttl_seconds(u)
     acc["last_input"] = i
     acc["last_cache_create"] = w
     acc["last_cache_read"] = r
@@ -166,6 +218,8 @@ def walk_transcript(path, include_subagents=False):
         "last_input": 0,
         "last_cache_create": 0,
         "last_cache_read": 0,
+        "last_turn_ts": None,
+        "last_turn_ttl_seconds": None,
     }
     seen_ids = set()
 

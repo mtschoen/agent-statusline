@@ -63,8 +63,7 @@ def _check_auto_unset_columns(failures):
 
 
 def _check_auto_drops_in_order(failures):
-    # Full width = 50 + 5*10 = 100. COLUMNS=75 -> drop cache_costs(90),
-    # burn_target(80), cache_hit(70<=75 stop). First three off, last two on.
+    # Full width 50 + 8*10 = 130; COLUMNS=75 sheds the first six (down to 70).
     flags = _with_env(
         {"STATUSLINE_COMPACT": "auto", "COLUMNS": "75"},
         lambda: resolve_flags(_stub_render),
@@ -73,17 +72,30 @@ def _check_auto_drops_in_order(failures):
         "cache_costs": False,
         "burn_target": False,
         "cache_hit": False,
-        "quota_pace": True,
-        "ttl_wasted": True,
+        "quota_pace": False,
+        "ttl_wasted": False,
+        "burn_rate": False,
+        "context_pct": True,
+        "context_denom": True,
     }
     if flags != expected:
         failures.append(f"auto drop order wrong; got {flags}, want {expected}")
 
 
+def _check_auto_super_minimal(failures):
+    # Width 55 forces the super-minimal tier: every droppable flag off (base 50).
+    flags = _with_env(
+        {"STATUSLINE_COMPACT": "auto", "COLUMNS": "55"},
+        lambda: resolve_flags(_stub_render),
+    )
+    if any(flags.values()):
+        failures.append(f"super-minimal width must drop every flag; got {flags}")
+
+
 def _check_never_drops_protected(failures):
-    # The protected items (ttl count, cost, context, model, rate) are simply not
-    # members of DROP_ORDER -> they can never be dropped.
-    for protected in ("ttl_count", "cost", "context", "model", "rate"):
+    # Protected items are simply absent from DROP_ORDER. The live rate is NOT
+    # among them: it drops in the super-minimal tier via burn_rate.
+    for protected in ("ttl_count", "cost", "context", "model"):
         if protected in DROP_ORDER:
             failures.append(f"{protected} must never be droppable")
 
@@ -93,6 +105,7 @@ def check(failures):
     _check_force_modes(failures)
     _check_auto_unset_columns(failures)
     _check_auto_drops_in_order(failures)
+    _check_auto_super_minimal(failures)
     _check_never_drops_protected(failures)
 
 

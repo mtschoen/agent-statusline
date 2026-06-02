@@ -14,9 +14,21 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 # Drop priority for `auto` mode: the first item is shed first when line 2
 # overflows $COLUMNS, the rest in turn until it fits. Tunable. The protected
-# fields (TTL count, cost, context, model badge, live $/min rate) are simply
-# absent from this list, so they are never dropped.
-DROP_ORDER = ["cache_costs", "burn_target", "cache_hit", "quota_pace", "ttl_wasted"]
+# fields (TTL count, cost, context used-token count, model badge) are simply
+# absent from this list, so they are never dropped. The last three are the
+# super-minimal tier: the narrowest windows lose the whole live $/min field,
+# then the context window size and percentage, leaving the bare used-token
+# count and session cost.
+DROP_ORDER = [
+    "cache_costs",
+    "burn_target",
+    "cache_hit",
+    "quota_pace",
+    "ttl_wasted",
+    "burn_rate",
+    "context_pct",
+    "context_denom",
+]
 
 
 def full_flags():

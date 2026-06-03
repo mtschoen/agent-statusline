@@ -1,5 +1,7 @@
 .claude/*
 !.claude/settings.json
+.qwen/*
+!.qwen/settings.json
 *.stackdump
 __pycache__/
 *.pyc

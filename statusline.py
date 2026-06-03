@@ -71,27 +71,45 @@ def _hostname():
         return "unknown"
 
 
-def _git_branch(cwd):
+def _git_command(cwd, *arguments):
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, *arguments],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+_GIT_HASH_COLOR = "\x1b[38;5;137m"  # muted tan - distinct from the blue session badge
+_HOST_COLOR = "\x1b[38;5;96m"  # muted mauve - distinct from the tan hash and blue badge
+
+
+def _git_ref(cwd):
+    """Render the git ref as `branch:hash` (e.g. `main:abc123`) so the commit
+    hash is visually distinct from the session-id badge on line 1. The hash is
+    tinted a muted tan while the branch keeps the default colour. On a detached
+    HEAD there is no branch, so just the short hash is shown."""
     if not cwd:
         return ""
-    for arguments in (
-        ["git", "-C", cwd, "symbolic-ref", "--short", "HEAD"],
-        ["git", "-C", cwd, "rev-parse", "--short", "HEAD"],
-    ):
-        try:
-            out = subprocess.run(arguments, capture_output=True, text=True, timeout=2)
-            if out.returncode == 0 and out.stdout.strip():
-                return out.stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            continue
-    return ""
+    branch = _git_command(cwd, "symbolic-ref", "--short", "HEAD")
+    short_hash = _git_command(cwd, "rev-parse", "--short", "HEAD")
+    tinted_hash = f"{_GIT_HASH_COLOR}{short_hash}{RESET}" if short_hash else ""
+    if branch and tinted_hash:
+        return f"{branch}:{tinted_hash}"
+    return branch or tinted_hash
 
 
 def _line1(d, cwd, spinner):
     local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
         os.path.expanduser("~/.claude/.local-mode")
     )
-    host = _hostname()
+    host = f"{_HOST_COLOR}{_hostname()}{RESET}"
     line1 = (
         f"{spinner} {ORANGE}LOCAL{RESET} [{host}] {cwd}"
         if local_mode
@@ -102,15 +120,30 @@ def _line1(d, cwd, spinner):
     n_sessions = debounce_session_count(count_active_sessions(cwd), cwd)
     if n_sessions >= 2:
         line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
-    branch = _git_branch(cwd)
-    if branch:
-        line1 = f"{line1} ({branch})"
+    ref = _git_ref(cwd)
+    if ref:
+        line1 = f"{line1} ({ref})"
+    line1 = _append_session_id(line1, d.get("session_id"))
     return _append_session_name(line1, d.get("session_name"))
 
 
 # Muted grey so the session title reads as a secondary label, not a headline.
 _SESSION_NAME_COLOR = "\x1b[38;5;245m"
 _SESSION_NAME_MAX = 58
+# Shorten the session UUID to its first hex group - enough to disambiguate
+# concurrent sessions without eating line-1 width.
+_SESSION_ID_COLOR = "\x1b[38;5;67m"  # muted steel blue
+_SESSION_ID_LEN = 8
+
+
+def _append_session_id(line1, session_id):
+    """Append a short session-id hash in brackets after the path/branch.
+    Unconditional - it is tiny and useful for matching a statusline to a
+    transcript file, so unlike the session title it is not width-gated."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return line1
+    return f"{line1} {_SESSION_ID_COLOR}[{sid[:_SESSION_ID_LEN]}]{RESET}"
 
 
 def _append_session_name(line1, session_name):
@@ -125,7 +158,7 @@ def _append_session_name(line1, session_name):
         return line1
     if len(name) > _SESSION_NAME_MAX:
         name = name[: _SESSION_NAME_MAX - 1] + "…"
-    segment = f"  {_SESSION_NAME_COLOR}{name}{RESET}"
+    segment = f" {_SESSION_NAME_COLOR}{name}{RESET}"
     cols = terminal_columns()
     if cols is not None and visible_width(line1) + visible_width(segment) > cols:
         return line1

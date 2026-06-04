@@ -315,18 +315,59 @@ Set a daily target with `STATUSLINE_DAILY_BUDGET` (funny-money dollars per day,
 e.g. `export STATUSLINE_DAILY_BUDGET=100`). It is ignored on subscription
 sessions, where the rate limits already define the budget.
 
-The `$/min` number itself is colored by how it compares to a configurable "sane"
-target rate, **independent of the needle** (the number tracks raw instantaneous
-speed; the needle tracks quota/budget pacing). Set `STATUSLINE_TARGET_RATE`
-(funny-money dollars per minute, default `1.0`); `0`/negative/invalid disables
-the coloring and the number stays neutral grey. With `r = rate / target`: teal
-below `0.5x` (cruising), green `0.5-1.5x` (the sane band), a green->yellow->red
-gradient `1.5-4x`, and red at/above `4x`.
+The `$/min` number itself is colored by how it compares to a target rate,
+**independent of the needle** (the number tracks raw instantaneous speed; the
+needle tracks quota/budget pacing). With `r = rate / target`: teal below `0.5x`
+(cruising), green `0.5-1.5x` (the on-target band), a green->yellow->red gradient
+`1.5-4x`, and red at/above `4x`.
 
-The live rate is followed by a green `→$T` arrow showing the configured target
-rate, so the full burn-rate field reads `$0.85/min →$1.00 ↓`. The arrow is
-controlled by `STATUSLINE_TARGET_RATE` - set to `0`/negative/invalid to suppress
-both the coloring and the arrow.
+The target is resolved in this order:
+
+1. **Explicit override** - `STATUSLINE_TARGET_RATE` (funny-money dollars per
+   minute) always wins when set; `0`/negative/invalid disables the coloring and
+   the arrow, and the number stays neutral grey.
+2. **Subscription sessions** (rate-limit quota present, env var unset) derive an
+   **adaptive weekly-sustainable rate**: the remaining weekly quota (in
+   funny-money dollars, calibrated from the window's own utilization/$ ratio)
+   spread over the time left until the weekly reset. It rises when you are under
+   pace (buffer banked) and falls when over pace. Because this is your *all-week*
+   sustainable pace, it sits well below the instantaneous `$1/min` - an active
+   burst will usually read "over," which is the point. Falls back to the flat
+   default early in the week when utilization is too low (`< 1%`) to calibrate.
+3. **Everything else** (API-key / no quota) uses a flat default of `1.0`.
+
+The live rate is followed by a green `→$T` arrow showing the resolved target
+rate, so the full burn-rate field reads `$0.85/min →$1.00 ↓` (or e.g.
+`$1.20/min →$0.34 ↑` on a subscription). Compact mode and a disabled target both
+suppress the arrow.
+
+### Live control (no restart)
+
+The status line subprocess inherits its environment once, when Claude Code
+launches, so editing the `env` block in `settings.json` only takes effect on the
+next restart. For *live* changes, every `STATUSLINE_*` setting can also be set in
+`~/.claude/.statusline-prefs.json`, which the status line reads fresh on every
+render. Resolution order is **prefs file > `settings.json` env > built-in
+default**.
+
+Manage the prefs file with `statusline_ctl.py` rather than editing it by hand:
+
+```
+python statusline_ctl.py list                 # every setting + effective value
+python statusline_ctl.py set cost off          # hide all $ figures, live
+python statusline_ctl.py set compact always     # force maximum compaction
+python statusline_ctl.py set target-rate auto    # derive the →$ target
+python statusline_ctl.py set beacon off          # hide the progress-beacon ETA
+python statusline_ctl.py reset target-rate        # fall back to env/default
+```
+
+Friendly keys map to the env vars: `cost` (`STATUSLINE_HIDE_COST`, inverted),
+`compact` (`STATUSLINE_COMPACT`), `target-rate` (`STATUSLINE_TARGET_RATE`;
+`<$/min>`, `auto`, or `off`), `daily-budget` (`STATUSLINE_DAILY_BUDGET`),
+`verbose-pace` (`STATUSLINE_VERBOSE_PACE`), and `beacon` (`STATUSLINE_BEACON`,
+gates the beacon-ETA render). In Claude Code, the `/statusline` skill wraps this
+CLI so natural-language requests ("hide the cost", "pin the target to $0.50") map
+to the right command.
 
 ### Compact mode
 

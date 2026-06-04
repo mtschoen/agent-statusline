@@ -5,6 +5,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Isolate _mode()'s pref() read from any real ~/.claude/.statusline-prefs.json
+# so the STATUSLINE_COMPACT env these tests set is what resolves.
+os.environ["STATUSLINE_PREFS_PATH"] = os.devnull
 from statusline_lib.base import GREEN, RED, RESET
 from statusline_lib.compact import (
     DROP_ORDER,

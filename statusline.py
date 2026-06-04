@@ -41,6 +41,7 @@ from statusline_lib import (
     format_quota,
     format_session_timing,
     format_ttl,
+    pref_bool,
     resolve_flags,
     terminal_columns,
     visible_width,
@@ -166,6 +167,12 @@ def _append_session_name(line1, session_name):
 
 
 def _beacon_line(session_id):
+    # STATUSLINE_BEACON (default on) gates the whole beacon row -- the live
+    # `⏱ turn ...` column AND the calibrated-ETA tail. It only suppresses
+    # RENDERING; the agent still emits <progress-beacon> blocks into the
+    # transcript, so flipping it back on resumes mid-lifecycle.
+    if not pref_bool("STATUSLINE_BEACON", default=True):
+        return None
     beacon_summary, beacon_dict = (
         format_beacon(session_id) if session_id else (None, None)
     )
@@ -186,12 +193,7 @@ def _hide_cost():
     non-dollar runway signal) stays, so you keep the useful budgeting info
     without a session-cost figure attached to a run you might have to discard.
     """
-    return os.environ.get("STATUSLINE_HIDE_COST", "").strip().lower() in (
-        "1",
-        "true",
-        "on",
-        "yes",
-    )
+    return pref_bool("STATUSLINE_HIDE_COST", default=False)
 
 
 class _Line2(NamedTuple):

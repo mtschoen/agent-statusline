@@ -4,11 +4,13 @@ Resolves which embellishments are enabled from STATUSLINE_COMPACT and the
 $COLUMNS env var (set by Claude Code >= 2.1.153). No transcript I/O: the caller
 re-runs its cheap render function at the verbosity this module decides.
 
-Imports: none from sibling modules (leaf module).
+Imports: prefs (live STATUSLINE_COMPACT resolution); otherwise a leaf module.
 """
 
 import os
 import re
+
+from .prefs import pref
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -71,7 +73,7 @@ def terminal_columns():
 
 
 def _mode():
-    return (os.environ.get("STATUSLINE_COMPACT") or "auto").strip().lower()
+    return (pref("STATUSLINE_COMPACT") or "auto").strip().lower()
 
 
 def resolve_flags(render):

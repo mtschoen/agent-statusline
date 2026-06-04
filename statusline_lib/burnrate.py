@@ -28,7 +28,9 @@ from .pace import (
     _now_unix,
     _parse_pace_line,
     weekly_needle,
+    weekly_sustainable_rate,
 )
+from .prefs import pref
 from .walker import _walker_root_list
 
 # Neutral grey for the rate number; the needle glyph carries the verdict color.
@@ -141,7 +143,7 @@ def _daily_budget():
 
     Malformed / zero / negative -> None (treated as unset).
     """
-    raw = os.environ.get("STATUSLINE_DAILY_BUDGET")
+    raw = pref("STATUSLINE_DAILY_BUDGET")
     if not raw:
         return None
     try:
@@ -157,9 +159,12 @@ _DEFAULT_TARGET_RATE = 1.0
 
 
 def _target_rate():
-    """STATUSLINE_TARGET_RATE as a positive float ($/min), the default when
-    unset, or None when explicitly disabled (0/negative/malformed)."""
-    raw = os.environ.get("STATUSLINE_TARGET_RATE")
+    """STATUSLINE_TARGET_RATE (prefs file or env) as a positive float ($/min),
+    the default when unset, or None when explicitly disabled (0/negative/
+    malformed -- which includes the "auto" sentinel, so callers that want the
+    derive-or-default behavior must special-case "auto" before calling this; see
+    _resolve_target_rate)."""
+    raw = pref("STATUSLINE_TARGET_RATE")
     if raw is None:
         return _DEFAULT_TARGET_RATE
     try:
@@ -167,6 +172,28 @@ def _target_rate():
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+def _resolve_target_rate(rate_limits):
+    """The target $/min that colors the rate number and fills the →$ arrow.
+
+    Precedence:
+      1. An explicit numeric STATUSLINE_TARGET_RATE (prefs file or env) always
+         wins -- a positive float, or None (disabled) when it is 0/negative/
+         malformed.
+      2. Unset, or set to the literal "auto" sentinel: a subscription session
+         derives the adaptive weekly-sustainable rate (remaining weekly quota $
+         over time to reset) via pace.weekly_sustainable_rate. "auto" exists so
+         a live prefs override can force the derive path even when a numeric env
+         baseline is configured in settings.json.
+      3. Otherwise (API-key / no quota, or weekly data too thin to derive) the
+         flat _DEFAULT_TARGET_RATE.
+    """
+    raw = pref("STATUSLINE_TARGET_RATE")
+    if raw is not None and raw.strip().lower() != "auto":
+        return _target_rate()
+    derived = weekly_sustainable_rate(rate_limits)
+    return derived if derived is not None else _DEFAULT_TARGET_RATE
 
 
 # Needle thresholds (chosen defaults; tune in practice).
@@ -201,7 +228,10 @@ def format_burn_rate(rate_limits, show_target=True):
 
     Rate is the live 5-min global rate. Needle: weekly forecast for subscription
     sessions, 24h-integral budget ratio for API-key sessions, empty otherwise.
-    `show_target=False` (compact mode) drops the target-rate arrow.
+    The target rate (both the →$ arrow and the rate-number coloring) is the
+    adaptive weekly-sustainable rate on subscription sessions, the flat default
+    otherwise, or an explicit STATUSLINE_TARGET_RATE override -- see
+    _resolve_target_rate. `show_target=False` (compact mode) drops the arrow.
     """
     rate = _five_min_rate()
     subscription = _has_quota(rate_limits)
@@ -214,7 +244,7 @@ def format_burn_rate(rate_limits, show_target=True):
         needle = _budget_needle(_window_spend_cached(_now_unix() - 86400), budget)
     else:
         needle = ""
-    target = _target_rate()
+    target = _resolve_target_rate(rate_limits)
     rate_str = f"${rate:.2f}/min"
     if target is not None and rate > 0:
         body = f"{_rate_color(rate, target)}{rate_str}{RESET}"

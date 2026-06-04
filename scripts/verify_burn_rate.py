@@ -1,7 +1,9 @@
 """Verify the burn-rate field: live 5-min $/min, daily-budget needle, day: %.
 
-Injects spend by reassigning burnrate._sum_window_spend (the walk seam) and
-pinning the clock via pace._now_unix, mirroring verify_quota_render.py.
+Injects spend via the shared _with_spend seam (scripts/_burn_rate_harness.py),
+which reassigns burnrate._sum_window_spend and pins the clock via pace._now_unix,
+mirroring verify_quota_render.py. Target-rate resolution (the →$ arrow and the
+adaptive weekly target) lives in its sibling verify_target_rate.py.
 
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
@@ -12,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.burnrate as burnrate
-import statusline_lib.pace as pace
+from scripts._burn_rate_harness import _NOW, _with_spend
 from statusline_lib.base import (
     CACHE_READ,
     GREEN,
@@ -20,30 +22,6 @@ from statusline_lib.base import (
     ramp_color,
 )
 from statusline_lib.pace import ARROW_DOWN, ARROW_UP, ON_TARGET_GLYPH
-
-_NOW = 1_700_000_000.0
-
-
-def _with_spend(window_to_total, fn):
-    """Run fn() with the spend walk stubbed from a {win_start: total} map and
-    the clock pinned to _NOW. burnrate imported _now_unix BY VALUE
-    (`from .pace import _now_unix`), so we patch burnrate._now_unix - patching
-    pace._now_unix alone would not reach the window-key computation."""
-    real_sum = burnrate._sum_window_spend
-    real_cached = burnrate._window_spend_cached
-    real_now_b = burnrate._now_unix
-    real_now_p = pace._now_unix
-    burnrate._sum_window_spend = lambda ws: window_to_total.get(int(ws), 0.0)
-    burnrate._window_spend_cached = lambda ws: window_to_total.get(int(ws), 0.0)
-    burnrate._now_unix = lambda: _NOW
-    pace._now_unix = lambda: _NOW
-    try:
-        return fn()
-    finally:
-        burnrate._sum_window_spend = real_sum
-        burnrate._window_spend_cached = real_cached
-        burnrate._now_unix = real_now_b
-        pace._now_unix = real_now_p
 
 
 def _check_cache_dedupes_walk(failures):
@@ -201,7 +179,8 @@ def _check_day_field_omitted_for_subscription(failures):
 
 def _check_subscription_needle_on_rate(failures):
     # Subscription: rate_limits present. weekly_needle is stubbed to a known glyph;
-    # format_burn_rate must place it on the $/min and ignore any budget env.
+    # format_burn_rate must place it on the $/min and ignore any budget env. No
+    # weekly hourly is injected, so the derived target falls back to the flat $1.
     rl = {"seven_day": {"used_percentage": 22, "resets_at": _NOW + 1000}}
     real_needle = burnrate.weekly_needle
     burnrate.weekly_needle = lambda _rl: f"{GREEN}{ARROW_DOWN}{RESET}"
@@ -244,61 +223,11 @@ def _check_rate_number_colored_in_field(failures):
         failures.append(f"rate number should be wrapped in its band color; got {out!r}")
 
 
-def _check_target_rate_parse(failures):
-    cases = {"2": 2.0, "0.5": 0.5, "0": None, "-1": None, "abc": None}
-    real = os.environ.get("STATUSLINE_TARGET_RATE")
-    try:
-        for raw, expected in cases.items():
-            os.environ["STATUSLINE_TARGET_RATE"] = raw
-            got = burnrate._target_rate()
-            if got != expected:
-                failures.append(
-                    f"target rate {raw!r} -> {got!r}, expected {expected!r}"
-                )
-        os.environ.pop("STATUSLINE_TARGET_RATE", None)
-        if burnrate._target_rate() != 1.0:
-            failures.append("unset target rate should default to 1.0")
-    finally:
-        if real is None:
-            os.environ.pop("STATUSLINE_TARGET_RATE", None)
-        else:
-            os.environ["STATUSLINE_TARGET_RATE"] = real
-
-
 def _check_glyph_text_presentation(failures):
     # U+FE0E forces text (monochrome) presentation so the ANSI green renders
     # cross-platform instead of Windows Terminal's emoji-font color.
     if "︎" not in ON_TARGET_GLYPH:
         failures.append("on-target glyph should carry the U+FE0E text selector")
-
-
-def _check_target_rate_arrow(failures):
-    # Default target $1/min. $6 in 5 min -> $1.20/min. Green arrow to target,
-    # needle preserved (no quota/budget here -> no needle, so just the arrow).
-    out = _with_spend({int(_NOW - 300): 6.0}, lambda: burnrate.format_burn_rate(None))
-    if f"{GREEN}→$1.00{RESET}" not in out:
-        failures.append(f"target arrow should be green →$1.00; got {out!r}")
-    # show_target=False suppresses the arrow.
-    off = _with_spend(
-        {int(_NOW - 300): 6.0},
-        lambda: burnrate.format_burn_rate(None, show_target=False),
-    )
-    if "→" in off:
-        failures.append(f"show_target=False must drop the arrow; got {off!r}")
-    # Disabled target (env <=0) -> no arrow even when show_target=True.
-    real = os.environ.get("STATUSLINE_TARGET_RATE")
-    os.environ["STATUSLINE_TARGET_RATE"] = "0"
-    try:
-        none_out = _with_spend(
-            {int(_NOW - 300): 6.0}, lambda: burnrate.format_burn_rate(None)
-        )
-    finally:
-        if real is None:
-            os.environ.pop("STATUSLINE_TARGET_RATE", None)
-        else:
-            os.environ["STATUSLINE_TARGET_RATE"] = real
-    if "→" in none_out:
-        failures.append(f"disabled target must show no arrow; got {none_out!r}")
 
 
 def check(failures):
@@ -311,11 +240,9 @@ def check(failures):
     _check_day_field(failures)
     _check_day_field_omitted_for_subscription(failures)
     _check_subscription_needle_on_rate(failures)
-    _check_target_rate_parse(failures)
     _check_rate_number_color(failures)
     _check_rate_number_colored_in_field(failures)
     _check_glyph_text_presentation(failures)
-    _check_target_rate_arrow(failures)
 
 
 def main():

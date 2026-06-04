@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from .base import GREEN, RESET, _json_loads, color_high_bad, ramp_color_for
 from .cost import _cost_for_turn
+from .prefs import pref
 from .project import is_on_target, project_delta
 from .walker import _walker_root_list
 
@@ -282,7 +283,7 @@ def weekly_needle(rate_limits):
         if deltas is None:
             return ""
         cumulative_delta, current_rate_delta, warn_threshold, elapsed = deltas
-        verbose = os.environ.get("STATUSLINE_VERBOSE_PACE") not in (None, "", "0")
+        verbose = pref("STATUSLINE_VERBOSE_PACE") not in (None, "", "0")
         if verbose and current_rate_delta is not None:
             return (
                 f" {_fmt_delta(cumulative_delta, warn_threshold)}"
@@ -298,6 +299,55 @@ def weekly_needle(rate_limits):
         return _rate_arrow(cumulative_delta, current_rate_delta, warn_threshold)
     except Exception:
         return ""
+
+
+# Below this weekly-quota utilization the util/$ calibration is too noisy to
+# trust (a tiny denominator early in the window inflates the projected quota), so
+# the adaptive target falls back to the flat default rather than emitting a wild
+# number. The needle guards the same early-window noise with its warmup prior
+# (see project.project_delta).
+_WEEKLY_TARGET_MIN_UTIL_PCT = 1.0
+
+
+def weekly_sustainable_rate(rate_limits):
+    """Adaptive weekly target burn in funny-money $/min, or None when not derivable.
+
+    The "rate you can sustain from now to land exactly on your weekly quota at
+    reset": remaining quota dollars over the time left in the window. The quota's
+    dollar size is calibrated from the window's own util/$ ratio -- util% of the
+    weekly quota corresponds to the funny-money $ actually burned in the window so
+    far (the same calibration project_delta uses to turn $/h into %/h). Reuses the
+    15s-cached hourly series, so on a subscription render where weekly_needle has
+    already walked the window this is a cache hit, not a second walk.
+
+    Returns None (caller falls back to the flat default) when there is no weekly
+    quota, utilization is below the noise floor or at/over 100%, the reset is
+    already past, or the window holds no spend to calibrate against.
+    """
+    rl = rate_limits or {}
+    w = rl.get("seven_day") or {}
+    util = w.get("used_percentage")
+    resets_at = w.get("resets_at")
+    if (
+        util is None
+        or util < _WEEKLY_TARGET_MIN_UTIL_PCT
+        or util >= 100
+        or not resets_at
+    ):
+        return None
+    remaining = resets_at - _now_unix()
+    if remaining <= 0:
+        return None
+    win_start = resets_at - 7 * 86400
+    hourly = _pace_hourly_cached(win_start)
+    window_spend = sum(hourly) if hourly else 0.0
+    if window_spend <= 0:
+        return None
+    quota_dollars = window_spend / (util / 100.0)
+    remaining_dollars = quota_dollars - window_spend
+    if remaining_dollars <= 0:
+        return None
+    return remaining_dollars / (remaining / 60.0)
 
 
 def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):

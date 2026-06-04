@@ -23,6 +23,7 @@ measured 0% error on 28 Opus sessions, including 26M-cache-read ones.
 
 Package layout (dependency order, no cycles):
   base     -- _json_loads (orjson fallback), color constants, fmt, color helpers
+  prefs    -- live ~/.claude/.statusline-prefs.json resolver (pref/pref_bool)
   sessions -- session counting (psutil lazy), debounce state
   walker   -- binary discovery, root resolution, native pace bridge
   cost     -- cost calc, transcript walking, context/cache/model-badge formatting
@@ -163,6 +164,12 @@ from .pace import (
     format_quota,
     weekly_needle,
 )
+from .prefs import (
+    load_prefs,
+    pref,
+    pref_bool,
+    prefs_path,
+)
 from .qwen import (
     format_qwen_api_stats,
     format_qwen_cache,
@@ -228,6 +235,10 @@ __all__ = [
     "format_session_timing",
     "format_ttl",
     "full_flags",
+    "load_prefs",
+    "pref",
+    "pref_bool",
+    "prefs_path",
     "ramp_color",
     "ramp_color_for",
     "resolve_flags",

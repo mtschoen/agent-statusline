@@ -133,8 +133,8 @@ def format_cost(cost):
 # harness, else tinted by the DIRECTION and SEVERITY of the divergence:
 #   under-estimate (our_parent < authoritative -- shown cost low, you may pay MORE):
 #     * moderate (> 4%):  caution-orange
-#     * way off  (> 25%): deep red -- a structural miss (rate hike, a new billed
-#       dimension we don't model yet, or 1M-tier doubling); you may be paying
+#     * way off  (> 25%): deep red -- a structural miss (a rate hike or a new
+#       billed dimension we don't model yet); you may be paying
 #       WAY more than shown.
 #   over-estimate (our_parent > authoritative -- shown cost high, you pay LESS):
 #     * moderate (> 4%):  cyan -- reassuring

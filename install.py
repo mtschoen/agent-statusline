@@ -1,4 +1,4 @@
-"""Wire statusLine + subagentStatusLine + the 200K /wrap nudge hook into
+"""Wire statusLine + subagentStatusLine + the wrap nudge hook into
 Claude Code or Qwen Code settings.
 
 Idempotent: re-running just refreshes the `command` strings; every other key in
@@ -113,17 +113,27 @@ def _qwen_command_for_platform(repo):
 
 
 def _nudge_command(repo):
-    """Platform-aware command for the UserPromptSubmit 200K /wrap nudge hook.
-    Hooks run once per prompt (not per render), so the portable python3/py
-    invocation is fine here -- no .sh speed wrapper like the statuslines use."""
-    target = f"{repo}/nudge_200k.py"
-    command = f'py -3 "{target}"' if os.name == "nt" else f'python3 "{target}"'
+    """Platform-aware command for the UserPromptSubmit wrap nudge hook.
+
+    Wrapped so the hook can never exit 2 -- the one code that BLOCKS prompt
+    submission. A missing target or interpreter error has its stderr appended to
+    ~/.claude/wrap_nudge_hook.log and the command forces a 0 exit, so a broken
+    hook degrades to a log line, never a wedged prompt (and never an error
+    injected into Claude's context). Hooks run once per prompt, so the portable
+    python3/py invocation is fine here."""
+    target = f"{repo}/wrap_nudge.py"
+    if os.name == "nt":
+        log = r"%USERPROFILE%\.claude\wrap_nudge_hook.log"
+        command = f'py -3 "{target}" 2>>"{log}" || ver>nul'
+    else:
+        log = "$HOME/.claude/wrap_nudge_hook.log"
+        command = f'python3 "{target}" 2>>"{log}" || true'
     return target, command
 
 
 # Substring that identifies our hook entry among any other UserPromptSubmit
 # hooks the user has configured, so install updates ours in place.
-_NUDGE_MARKER = "nudge_200k.py"
+_NUDGE_MARKER = "wrap_nudge.py"
 
 
 def _find_nudge_hook(settings):

@@ -1,15 +1,18 @@
-"""200K-token /wrap nudge: the shared state-file contract between the statusline
-(producer) and the UserPromptSubmit hook (consumer).
+"""Wrap nudge: the shared state-file contract between the statusline (producer)
+and the UserPromptSubmit hook (consumer).
 
 Only the statusline's stdin payload carries live context-window occupancy
 (``context_window.current_usage``); a UserPromptSubmit hook's payload does not.
 So the statusline writes the occupancy to a per-session state file on every
 render, and the nudge hook reads that file -- no transcript walk required.
 
-The threshold is 200K tokens: on the Opus 1M-context tier input is billed at
-roughly 2x above this boundary, so crossing it is exactly when "consider
-wrapping" earns its keep. It is also the boundary the statusline already colors
-yellow (see ``cost.format_context``).
+The threshold is 250K tokens. There is NO pricing cliff here: the Opus
+1M-context tier bills at a flat per-token rate (verified 2026-06 against current
+Anthropic docs and against ~/.claude.json billing across 28 Opus[1m] sessions --
+no 2x surcharge above 200K). So the nudge is about context hygiene, not cost
+avoidance: long sessions accumulate cache-read tokens on every turn (real spend,
+just not penalized) and model recall degrades as the window fills, so ~250K is a
+sensible point to start offering a clean wrap before the ~300K soft ceiling.
 
 State lives under ``~/.claude/state`` (override with ``CLAUDE_STATE_DIR`` for
 tests). Both files are keyed by session id so concurrent sessions never clobber
@@ -19,18 +22,30 @@ each other's occupancy or one-shot marker.
 import json
 import os
 
-# Opus 1M-tier 2x input-pricing boundary; matches the statusline yellow line.
-NUDGE_THRESHOLD_TOKENS = 200_000
+# Context-hygiene caution line; also the statusline yellow anchor on 1M models.
+# NOT a pricing boundary -- the 1M tier bills flat (see module docstring).
+NUDGE_THRESHOLD_TOKENS = 250_000
 
-# UserPromptSubmit additionalContext: offer /wrap, never run it (user-initiated).
-NUDGE_MESSAGE = (
-    "This session has crossed 200K tokens of context. On the Opus 1M-context "
-    "tier, input is billed at roughly 2x above this point. If you are at a "
-    "natural stopping point, consider suggesting `/wrap` to the user to close "
-    "the session cleanly. Do not interrupt in-progress work -- finish the "
-    "current thread first, and skip the suggestion entirely if a wrap was "
-    "already offered or declined this session."
-)
+# Soft ceiling the nudge text points at; past here a wrap is overdue.
+NUDGE_SOFT_CEILING_TOKENS = 300_000
+
+
+def format_nudge(ctx_used):
+    """UserPromptSubmit additionalContext: offer /wrap, never run it
+    (user-initiated). Reports live occupancy so the agent can frame the
+    suggestion concretely instead of citing a bare threshold."""
+    used_k = round((ctx_used or 0) / 1000)
+    ceiling_k = NUDGE_SOFT_CEILING_TOKENS // 1000
+    return (
+        f"This session is around {used_k}K tokens of context. Long sessions "
+        "accumulate cache-read cost on every turn and model recall degrades as "
+        f"the window fills, so past ~{ceiling_k}K it is usually worth winding "
+        "down. If you are at a natural stopping point, consider suggesting "
+        "`/wrap` to the user to close the session cleanly. Do not interrupt "
+        "in-progress work -- finish the current thread first, and skip the "
+        "suggestion entirely if a wrap was already offered or declined this "
+        "session."
+    )
 
 
 def _state_dir(state_dir=None):
@@ -53,7 +68,7 @@ def ctx_state_path(session_id, state_dir=None):
 
 
 def marker_path(session_id, state_dir=None):
-    return os.path.join(_state_dir(state_dir), f"nudge-200k-{_sanitize(session_id)}")
+    return os.path.join(_state_dir(state_dir), f"wrap-nudge-{_sanitize(session_id)}")
 
 
 def write_ctx_state(session_id, ctx_used, window_size, now, state_dir=None):

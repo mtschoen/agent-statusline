@@ -19,6 +19,7 @@ from .base import (
     YELLOW,
     fmt,
 )
+from .nudge import NUDGE_THRESHOLD_TOKENS
 
 COMPACT_BUFFER_TOKENS = 33_000
 RED_MARGIN_TOKENS = 20_000
@@ -35,9 +36,10 @@ def ctx_window_for_model(model_id):
 def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct=True):
     """`usedK / windowK (P.P%)` colored by token-anchored thresholds.
 
-    Yellow at 200K for 1M models (Opus 1M pricing boundary), at 50% otherwise.
+    Yellow at the wrap-nudge line (250K) for 1M models -- a context-hygiene
+    caution, NOT a pricing boundary (the 1M tier bills flat), at 50% otherwise.
     1M models also get an orange mid-band at 500K so the huge yellow
-    span between the pricing boundary and auto-compact has a visible
+    span between the caution line and auto-compact has a visible
     midpoint cue. Red at `window_size - 33K compact buffer - 20K
     headroom`; tracks CLAUDE_AUTOCOMPACT_PCT_OVERRIDE if set.
 
@@ -54,7 +56,7 @@ def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct
             compact_tokens = int(window_size * float(override) / 100)
     red_tokens = max(0, compact_tokens - RED_MARGIN_TOKENS)
     is_1m = window_size >= 1_000_000 or "[1m]" in (model_id or "")
-    yellow_tokens = 200_000 if is_1m else window_size // 2
+    yellow_tokens = NUDGE_THRESHOLD_TOKENS if is_1m else window_size // 2
     if ctx_used >= red_tokens:
         ctx_color = RED
     elif is_1m and ctx_used >= ORANGE_THRESHOLD_1M_TOKENS:

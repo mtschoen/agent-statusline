@@ -192,13 +192,13 @@ turn opens a new beacon lifecycle.
 ## Color thresholds
 
 Context thresholds gate on raw token counts (the underlying limits - 33K
-compact buffer, 200K Opus-1M pricing boundary - are themselves token
+compact buffer, 250K wrap-nudge caution line - are themselves token
 quantities, not fractions, so the gating compares tokens directly):
 
 | field          | green       | yellow      | orange      | red             |
 |----------------|-------------|-------------|-------------|-----------------|
 | context (200K) | < 100K      | 100–147K    | -           | ≥ 147K          |
-| context (1M)   | < 200K      | 200–500K    | 500–947K    | ≥ 947K          |
+| context (1M)   | < 250K      | 250–500K    | 500–947K    | ≥ 947K          |
 | cache hit %    | ≥ 90%       | 75–90%      | -           | < 75%           |
 | 5h / wk %      | < 75%       | 75–90%      | -           | ≥ 90%           |
 | cost (each)    | < $25       | $25–$50     | -           | ≥ $50           |
@@ -217,14 +217,15 @@ giving ~1–2 turns of headroom before auto-compact fires. Set
 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1–100) to override the compact point,
 and the red band tracks it.
 
-Context yellow is **token-anchored on 1M models** (200K, the boundary where
-Opus 1M pricing doubles) and **fraction-anchored otherwise** (50%, where
-model accuracy starts to degrade - a fill-fraction signal, not a token
-target). The 1M case keeps the higher-cost zone visually distinct.
+Context yellow is **token-anchored on 1M models** (250K, the wrap-nudge caution
+line - the 1M tier bills flat, so this is a context-hygiene cue, not a pricing
+boundary) and **fraction-anchored otherwise** (50%, where model accuracy starts
+to degrade - a fill-fraction signal, not a token target). The 1M case keeps the
+caution zone visually distinct.
 
 1M models also get an **orange mid-band at 500K** to break up the otherwise
-huge yellow span between the pricing boundary and auto-compact - a halfway
-cue that the session is genuinely full, not just past the pricing line.
+huge yellow span between the caution line and auto-compact - a halfway
+cue that the session is genuinely full.
 
 The cost thresholds reflect a personal per-session shape; tweak the
 constants in the script if your scale differs.
@@ -435,15 +436,19 @@ If you want progress bars, themes, or powerline glyphs,
 want pace tracking with burn-rate % deltas,
 [claude-pace](https://github.com/Astro-Han/claude-pace) is great.
 
-## 200K-token /wrap nudge
+## Wrap nudge
 
-On the Opus 1M-context tier, input is billed at roughly **2× above 200K
-tokens** - the same boundary the context field colors yellow. Past it, a long
-session is quietly twice as expensive per turn, which is a natural moment to
-wind down. This repo ships an optional [`UserPromptSubmit`
-hook](https://code.claude.com/docs/en/hooks) that injects a **one-shot**,
-gentle reminder to the agent - "you've crossed 200K, consider suggesting
-`/wrap`" - the first time a session crosses the line.
+The Opus 1M-context tier bills at a **flat per-token rate** - there is no
+surcharge above 200K (confirmed against current Anthropic docs and against
+`~/.claude.json` billing across 28 Opus[1m] sessions). So the wrap nudge is
+about **context hygiene**, not cost avoidance: long sessions accumulate
+cache-read tokens on every turn (real spend, just not penalized) and model
+recall degrades as the window fills. This repo ships an optional
+[`UserPromptSubmit` hook](https://code.claude.com/docs/en/hooks) that injects a
+**one-shot**, gentle reminder to the agent - "you're around NK of context,
+consider offering `/wrap` before ~300K" - the first time a session crosses
+**250K**. The message carries the live occupancy so the agent can frame it
+concretely.
 
 It does **not** run `/wrap` or interrupt anything; it only nudges the agent to
 *offer* a wrap at the next natural stopping point. Wrap stays user-initiated.
@@ -451,7 +456,7 @@ It does **not** run `/wrap` or interrupt anything; it only nudges the agent to
 **How it works.** A `UserPromptSubmit` hook's payload can't see context-window
 occupancy, but the statusline's payload can. So `statusline.py` writes the live
 occupancy to a per-session file under `~/.claude/state/` on each render, and the
-`nudge_200k.py` hook reads that file (no transcript walk) when you submit a
+`wrap_nudge.py` hook reads that file (no transcript walk) when you submit a
 prompt. A per-session marker file makes it fire at most once. Both files are
 keyed by session id, so concurrent sessions never cross signals.
 
@@ -463,7 +468,7 @@ manual entry is:
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "python3 ~/schoen-claude-status/nudge_200k.py" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 ~/schoen-claude-status/wrap_nudge.py" } ] }
     ]
   }
 }

@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Check syntax
-        run: python -m py_compile statusline.py subagent_statusline.py install.py nudge_200k.py statusline_lib/*.py
+        run: python -m py_compile statusline.py subagent_statusline.py install.py wrap_nudge.py statusline_lib/*.py
       - name: Lint (ruff)
         # The validation gate. Config lives in pyproject.toml; 0 findings is
         # the bar. This step is the hard gate that blocks merge on regression.
@@ -137,7 +137,7 @@ jobs:
         shell: pwsh
         run: |
           $files = Get-ChildItem statusline_lib/*.py | ForEach-Object { $_.FullName }
-          $files += 'statusline.py', 'subagent_statusline.py', 'install.py', 'nudge_200k.py'
+          $files += 'statusline.py', 'subagent_statusline.py', 'install.py', 'wrap_nudge.py'
           python -m py_compile @files
 
       - name: Run verification scripts

@@ -1,5 +1,5 @@
-"""Verify the 200K-token /wrap nudge: the shared state-file contract
-(``statusline_lib/nudge.py``) and the hook entry point (``nudge_200k.py``).
+"""Verify the wrap nudge: the shared state-file contract
+(``statusline_lib/nudge.py``) and the hook entry point (``wrap_nudge.py``).
 
 Covers the threshold gate, the one-shot marker, the producer/consumer file
 round-trip, corrupt/absent state, concurrent-session keying, and an end-to-end
@@ -94,7 +94,7 @@ def check_concurrent_keying(failures):
 def _run_hook(tmp, payload):
     """Invoke the real hook script with CLAUDE_STATE_DIR pointed at ``tmp``."""
     return subprocess.run(
-        [sys.executable, os.path.join(REPO, "nudge_200k.py")],
+        [sys.executable, os.path.join(REPO, "wrap_nudge.py")],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -140,7 +140,7 @@ def main():
         for failure in failures:
             print(f"FAIL: {failure}")
         sys.exit(1)
-    print("OK: 200K /wrap nudge fires once past threshold, keyed per session")
+    print("OK: wrap nudge fires once past threshold, keyed per session")
 
 
 if __name__ == "__main__":

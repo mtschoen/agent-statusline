@@ -305,7 +305,7 @@ def main():
     model_id = (d.get("model") or {}).get("id") or ""
     model_summary = format_model_badge(model_id)
 
-    # Bridge occupancy to the 200K /wrap nudge hook (its payload can't see it).
+    # Bridge occupancy to the wrap nudge hook (its payload can't see it).
     write_ctx_state(d.get("session_id") or "", ctx_used, window_size, time.time())
 
     # Walk the session + subagent JSONLs to sum cache/cost/TTL across all turns.

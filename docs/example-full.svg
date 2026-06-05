@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="108" viewBox="0 0 1920 108" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+  <rect width="100%" height="100%" rx="6" fill="#1e1e1e"/>
+
+  <!-- full-width layout: every embellishment on (wide terminal, nothing shed).
+       Line 2 shows the four-component cost breakdown (input/read/write/output, each
+       with its cumulative $), the TTL eviction counter, quota pace, the live rate
+       with target arrow + weekly needle, the subagent cost split, and the diffstat. -->
+  <text x="14" y="30" fill="#dcdcdc" xml:space="preserve">⠹ [<tspan fill="#875f87">my-laptop</tspan>] ~/projects/example-app (feature/example:<tspan fill="#af875f">3f2c9a1</tspan>) <tspan fill="#5f87af">[a1da9354]</tspan> <tspan fill="#8a8a8a">Investigating the flaky test</tspan></text>
+
+  <text x="14" y="56" fill="#dcdcdc" xml:space="preserve"><tspan fill="#d670d6">opus4.8[1m]</tspan> | <tspan fill="#00af00">183.7K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#00af00">18.0%</tspan>) | <tspan fill="#5f87af">12.1K ($0.06)</tspan> / <tspan fill="#00afd7">15.41M</tspan> <tspan fill="#00afd7">($1.54)</tspan> / <tspan fill="#af5a00">207.4K</tspan> <tspan fill="#af5a00">($1.29)</tspan> / <tspan fill="#af87ff">48.2K ($1.21)</tspan> / <tspan fill="#00af00">99%</tspan> hit | <tspan fill="#af0000">⚠ TTL:1 (~$0.31)</tspan> | 5h: <tspan fill="#00af00">6%</tspan> <tspan fill="#00af00">+0.4h</tspan> wk: <tspan fill="#00af00">21%</tspan> <tspan fill="#00af00">+9.7h</tspan> | <tspan fill="#00af00">$1.02/min</tspan> <tspan fill="#00af00">→$1.35</tspan> <tspan fill="#00af00">↓</tspan> | (<tspan fill="#00af00">$10.66</tspan> + <tspan fill="#00af00">$4.82</tspan><tspan fill="#8a8a8a">~</tspan>) = <tspan fill="#00af00">$15.48</tspan> | <tspan fill="#00af00">+543</tspan>/<tspan fill="#af0000">-113</tspan></text>
+
+  <text x="14" y="82" fill="#dcdcdc" xml:space="preserve"><tspan fill="#8a8a8a">⏳ 1h02m · 27m api</tspan>  ·  <tspan fill="#00af00">⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict</tspan>  ·  ~17m calibrated (3.5×)</text>
+</svg>

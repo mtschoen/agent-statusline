@@ -36,3 +36,17 @@ the logic:
 - So "shrinking never happens" usually just means the terminal is wider than
   line 2 (e.g. 316 cols) - drag the window narrow, or force it with
   `STATUSLINE_COMPACT=always`, to see fields drop in `DROP_ORDER`.
+
+## Live prefs override env (debugging "my setting isn't taking effect")
+
+Every `STATUSLINE_*` setting resolves as: `~/.claude/.statusline-prefs.json`
+(written by `statusline_ctl.py`) > `settings.json` `env` block > built-in
+default. The prefs file is read fresh on every render; the env block is only
+inherited at Claude Code launch. Two consequences when debugging:
+
+- An env edit in `settings.json` does nothing until restart AND can still be
+  silently shadowed by a forgotten prefs override. Check
+  `python statusline_ctl.py list` first - it shows every key's effective
+  source.
+- To change behavior live (no restart), go through `statusline_ctl.py set` /
+  `reset`, not the env block.

@@ -7,12 +7,25 @@ pace projection, total session cost, a live `$/min` burn rate, and (when a
 is active) a live ETA for the current turn - all colored by configurable
 thresholds.
 
+What it looks like at a typical terminal width (compact auto-shedding has
+dropped the widest embellishments so the line fits):
+
 ![statusline example](docs/example.svg)
 
+On a wide terminal everything renders: the four-component cost breakdown
+(`input / read / write / output`, each with its cumulative `$`), the TTL
+eviction counter, the quota pace numbers, the target-rate arrow with the
+pace needle, the subagent cost split, and the diffstat. Shown zoomed out so
+the colors read at a glance - click for full size:
+
+![full-width statusline example](docs/example-full.svg)
+
+The same full-width render as text:
+
 ```
-[hostname] /path/to/cwd (branch)  Investigating the flaky test
-opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $1.02/min↓ | $10.66 | +543/-113
-⏳ 1h02m · 27m api  ·  ⏱ turn 14:32 (8m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
+⠹ [my-laptop] ~/projects/example-app (feature/example:3f2c9a1) [a1da9354] Investigating the flaky test
+opus4.8[1m] | 183.7K / 1.00M (18.0%) | 12.1K ($0.06) / 15.41M ($1.54) / 207.4K ($1.29) / 48.2K ($1.21) / 99% hit | ⚠ TTL:1 (~$0.31) | 5h: 6% +0.4h wk: 21% +9.7h | $1.02/min →$1.35 ↓ | ($10.66 + $4.82~) = $15.48 | +543/-113
+⏳ 1h02m · 27m api  ·  ⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
 # API-key session (no rate_limits), STATUSLINE_DAILY_BUDGET=100:
 opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | day: 47% | $1.02/min↓ | $10.66 | +543/-113
 ● opus4.8 reviewing diff      | 215.4K / 1.00M (21.5%) | 4.21M / 89.3K / 97% hit | $4.82 | 1m23s
@@ -22,17 +35,23 @@ opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | day: 47% | $1
 
 ## What you see
 
-**Line 1** - hostname, current working directory, an optional red
-`[N sessions]` warning when two or more interactive Claude Code
-sessions are running in this cwd, and current git branch (if any).
-Detection enumerates `claude` processes whose cwd matches, excluding
-`-p` headless subagents, so the warning clears the moment the other
+**Line 1** - a render-tick spinner, hostname (muted mauve), current working
+directory, an optional red `[N sessions]` warning when two or more interactive
+Claude Code sessions are running in this cwd, the git ref as `branch:hash`
+(the short commit hash tinted tan so it reads apart from the branch), a short
+`[session-id]` badge (first hex group of the session UUID, steel blue - handy
+for matching a statusline to its transcript file), and the session title.
+The spinner advances on every render, so a frozen glyph means the statusline
+subprocess has stopped being invoked. An orange `LOCAL` tag appears before the
+hostname when `CLAUDE_LOCAL_MODE=1` is set or `~/.claude/.local-mode` exists.
+Multi-session detection enumerates `claude` processes whose cwd matches,
+excluding `-p` headless subagents, so the warning clears the moment the other
 session exits. Requires `psutil`; without it the badge stays off
 entirely (see [Requirements](#requirements)). When Claude Code supplies a
 `session_name` (its auto-generated title for the session) and there's room
-for it within `$COLUMNS`, it's appended in muted grey after the branch -
+for it within `$COLUMNS`, it's appended in muted grey after the badges -
 dropped first if the terminal is too narrow, so it never pushes the path off
-screen.
+screen. The session-id badge, by contrast, is tiny and always shown.
 
 **Line 2** - pipe-separated metrics with no inline labels (colors carry the
 identity); fields are omitted when their data isn't available:
@@ -426,8 +445,9 @@ public in case it's useful. What it emphasizes:
   signal reads as time rather than ratio.
 - **Session-wide cache hit %** by walking the transcript and any subagent
   JSONLs (Claude Code's stdin payload only carries per-turn cache data).
-- **Single file** with no `jq` dependency - Python heredoc inside bash, no
-  install step beyond `git clone`.
+- **Stdlib-only Python** with no `jq` / node dependency - a thin bash shim
+  forwards to `statusline.py` + the `statusline_lib` package; no install step
+  beyond `git clone` (optional `psutil` / `orjson` only add a feature / speed).
 - **Layered layout** - location row stays uncluttered on line 1, metrics
   on line 2, live turn ETA on line 3 only when a beacon is active.
 
@@ -461,18 +481,26 @@ prompt. A per-session marker file makes it fire at most once. Both files are
 keyed by session id, so concurrent sessions never cross signals.
 
 `install.sh` / `install.bat` register the hook alongside the two statuslines,
-preserving every other hook already in your `settings.json`. The equivalent
-manual entry is:
+preserving every other hook already in your `settings.json`. The registered
+command wraps the script so it can never exit 2 (the one code that would BLOCK
+prompt submission): stderr is appended to `~/.claude/wrap_nudge_hook.log` and
+the exit code is forced to 0, so a broken hook degrades to a log line, never a
+wedged prompt. The equivalent manual entry on macOS / Linux is:
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "python3 ~/schoen-claude-status/wrap_nudge.py" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 ~/schoen-claude-status/wrap_nudge.py 2>>\"$HOME/.claude/wrap_nudge_hook.log\" || true" } ] }
     ]
   }
 }
 ```
+
+On Windows, Claude Code runs hooks via PowerShell (not cmd), so the command
+uses PowerShell-compatible syntax: `py -3 "...\wrap_nudge.py"
+2>>"$HOME\.claude\wrap_nudge_hook.log"; exit 0`. Prefer the installer there -
+it writes the right form for the platform.
 
 Set `CLAUDE_STATE_DIR` to relocate the state and marker files (the test suite
 uses this to avoid touching real state). The threshold and message text live in

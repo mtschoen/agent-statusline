@@ -1,22 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="248" viewBox="0 0 1000 248" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+<svg xmlns="http://www.w3.org/2000/svg" width="1020" height="248" viewBox="0 0 1020 248" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
   <rect width="100%" height="100%" rx="6" fill="#1e1e1e"/>
 
-  <!-- main statusline: location row + metrics row (subscription + API-key variants) + live beacon row -->
-  <text x="14" y="30" fill="#dcdcdc" xml:space="preserve">[my-laptop] ~/projects/example-app (feature/example)</text>
+  <!-- main statusline at a typical terminal width (compact auto has shed the widest
+       embellishments: cost breakdown, cache $ parens, target arrow). Threshold colors
+       sit on the muted #af truecolor plane; identity colors are 256-color hues. -->
+  <text x="14" y="30" fill="#dcdcdc" xml:space="preserve">⠹ [<tspan fill="#875f87">my-laptop</tspan>] ~/projects/example-app (feature/example:<tspan fill="#af875f">3f2c9a1</tspan>) <tspan fill="#5f87af">[a1da9354]</tspan> <tspan fill="#8a8a8a">Investigating the flaky test</tspan></text>
 
   <!-- subscription session: 5h/wk quota with pace, burn rate carries the weekly needle -->
-  <text x="14" y="56" fill="#dcdcdc" xml:space="preserve"><tspan fill="#d670d6">opus4.8[1m]</tspan> | <tspan fill="#23d18b">183.7K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#23d18b">18.0%</tspan>) | <tspan fill="#00afdf">15.41M</tspan> / <tspan fill="#ff8700">207.4K</tspan> / <tspan fill="#23d18b">99%</tspan> hit | 5h: <tspan fill="#23d18b">6%</tspan> <tspan fill="#23d18b">+0.4h</tspan> wk: <tspan fill="#23d18b">21%</tspan> <tspan fill="#23d18b">+9.7h</tspan> | <tspan fill="#23d18b">$1.02/min</tspan><tspan fill="#23d18b">↓</tspan> | <tspan fill="#23d18b">$10.66</tspan></text>
+  <text x="14" y="56" fill="#dcdcdc" xml:space="preserve"><tspan fill="#d670d6">opus4.8[1m]</tspan> | <tspan fill="#00af00">183.7K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#00af00">18.0%</tspan>) | <tspan fill="#00afd7">15.41M</tspan> / <tspan fill="#af5a00">207.4K</tspan> / <tspan fill="#00af00">99%</tspan> hit | 5h: <tspan fill="#00af00">6%</tspan> <tspan fill="#00af00">+0.4h</tspan> wk: <tspan fill="#00af00">21%</tspan> <tspan fill="#00af00">+9.7h</tspan> | <tspan fill="#00af00">$1.02/min</tspan><tspan fill="#00af00">↓</tspan> | <tspan fill="#00af00">$10.66</tspan></text>
 
   <!-- alternate render: API-key session (no rate_limits) with STATUSLINE_DAILY_BUDGET set -->
   <text x="14" y="82" fill="#6a6a6a" xml:space="preserve"># or, on an API-key session (no rate_limits) with STATUSLINE_DAILY_BUDGET set:</text>
-  <text x="14" y="108" fill="#dcdcdc" xml:space="preserve"><tspan fill="#d670d6">opus4.8[1m]</tspan> | <tspan fill="#23d18b">183.7K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#23d18b">18.0%</tspan>) | <tspan fill="#00afdf">15.41M</tspan> / <tspan fill="#ff8700">207.4K</tspan> / <tspan fill="#23d18b">99%</tspan> hit | day: <tspan fill="#23d18b">47%</tspan> | <tspan fill="#23d18b">$1.02/min</tspan><tspan fill="#23d18b">↓</tspan> | <tspan fill="#23d18b">$10.66</tspan></text>
+  <text x="14" y="108" fill="#dcdcdc" xml:space="preserve"><tspan fill="#d670d6">opus4.8[1m]</tspan> | <tspan fill="#00af00">183.7K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#00af00">18.0%</tspan>) | <tspan fill="#00afd7">15.41M</tspan> / <tspan fill="#af5a00">207.4K</tspan> / <tspan fill="#00af00">99%</tspan> hit | day: <tspan fill="#00af00">47%</tspan> | <tspan fill="#00af00">$1.02/min</tspan><tspan fill="#00af00">↓</tspan> | <tspan fill="#00af00">$10.66</tspan></text>
 
-  <!-- beacon row: live turn ETA, present only while a progress-beacon is active; colored by drift (green = nominal) -->
-  <text x="14" y="134" fill="#23d18b" xml:space="preserve">⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)</text>
+  <!-- line 3: grey session timing, then the live beacon (drift-colored, green = nominal),
+       then the calibrated-ETA tail in the default foreground -->
+  <text x="14" y="134" fill="#dcdcdc" xml:space="preserve"><tspan fill="#8a8a8a">⏳ 1h02m · 27m api</tspan>  ·  <tspan fill="#00af00">⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict</tspan>  ·  ~17m calibrated (3.5×)</text>
 
   <!-- subagent panel: one row per visible task in the agent panel -->
-  <line x1="14" y1="150" x2="986" y2="150" stroke="#3a3a3a" stroke-width="1"/>
-  <text x="14" y="170" fill="#dcdcdc" xml:space="preserve"><tspan fill="#f5f543">●</tspan> <tspan fill="#d670d6">opus4.8</tspan> reviewing diff | <tspan fill="#f5f543">215.4K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#f5f543">21.5%</tspan>) | <tspan fill="#00afdf">4.21M</tspan> / <tspan fill="#ff8700">89.3K</tspan> / <tspan fill="#23d18b">97%</tspan> hit | <tspan fill="#23d18b">$4.82</tspan> | 1m23s</text>
-  <text x="14" y="196" fill="#dcdcdc" xml:space="preserve"><tspan fill="#23d18b">✓</tspan> <tspan fill="#29b8db">sonnet4.6</tspan> exploring config | <tspan fill="#23d18b">18.4K</tspan> / <tspan fill="#af87af">200K</tspan> (<tspan fill="#23d18b">9.2%</tspan>) | <tspan fill="#00afdf">87.3K</tspan> / <tspan fill="#ff8700">4.2K</tspan> / <tspan fill="#23d18b">95%</tspan> hit | <tspan fill="#23d18b">$0.21</tspan></text>
-  <text x="14" y="222" fill="#dcdcdc" xml:space="preserve"><tspan fill="#f5f543">●</tspan> <tspan fill="#3b8eea">haiku4.5</tspan> running tests | <tspan fill="#23d18b">5.1K</tspan> / <tspan fill="#af87af">200K</tspan> (<tspan fill="#23d18b">2.6%</tspan>) | <tspan fill="#00afdf">18.9K</tspan> / <tspan fill="#ff8700">1.1K</tspan> / <tspan fill="#f5f543">84%</tspan> hit | <tspan fill="#23d18b">$0.04</tspan> | 8s</text>
+  <line x1="14" y1="150" x2="1006" y2="150" stroke="#3a3a3a" stroke-width="1"/>
+  <text x="14" y="170" fill="#dcdcdc" xml:space="preserve"><tspan fill="#afaf00">●</tspan> <tspan fill="#d670d6">opus4.8</tspan> reviewing diff | <tspan fill="#00af00">215.4K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#00af00">21.5%</tspan>) | <tspan fill="#00afd7">4.21M</tspan> / <tspan fill="#af5a00">89.3K</tspan> / <tspan fill="#00af00">97%</tspan> hit | <tspan fill="#00af00">$4.82</tspan> | 1m23s</text>
+  <text x="14" y="196" fill="#dcdcdc" xml:space="preserve"><tspan fill="#00af00">✓</tspan> <tspan fill="#29b8db">sonnet4.6</tspan> exploring config | <tspan fill="#00af00">18.4K</tspan> / <tspan fill="#af87af">200K</tspan> (<tspan fill="#00af00">9.2%</tspan>) | <tspan fill="#00afd7">87.3K</tspan> / <tspan fill="#af5a00">4.2K</tspan> / <tspan fill="#00af00">95%</tspan> hit | <tspan fill="#00af00">$0.21</tspan></text>
+  <text x="14" y="222" fill="#dcdcdc" xml:space="preserve"><tspan fill="#afaf00">●</tspan> <tspan fill="#3b8eea">haiku4.5</tspan> running tests | <tspan fill="#00af00">5.1K</tspan> / <tspan fill="#af87af">200K</tspan> (<tspan fill="#00af00">2.6%</tspan>) | <tspan fill="#00afd7">18.9K</tspan> / <tspan fill="#af5a00">1.1K</tspan> / <tspan fill="#afaf00">84%</tspan> hit | <tspan fill="#00af00">$0.04</tspan> | 8s</text>
 </svg>

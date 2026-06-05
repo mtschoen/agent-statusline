@@ -113,21 +113,24 @@ def _qwen_command_for_platform(repo):
 
 
 def _nudge_command(repo):
-    """Platform-aware command for the UserPromptSubmit wrap nudge hook.
+    """Shell-aware command for the UserPromptSubmit wrap nudge hook.
 
     Wrapped so the hook can never exit 2 -- the one code that BLOCKS prompt
     submission. A missing target or interpreter error has its stderr appended to
     ~/.claude/wrap_nudge_hook.log and the command forces a 0 exit, so a broken
     hook degrades to a log line, never a wedged prompt (and never an error
-    injected into Claude's context). Hooks run once per prompt, so the portable
-    python3/py invocation is fine here."""
+    injected into Claude's context).
+
+    Claude Code runs hook commands through a shell: PowerShell on Windows (NOT
+    cmd.exe -- so %VAR% / ver>nul / || are wrong there; verified empirically by
+    the stray-`nul`-file artifact), POSIX sh elsewhere. `$HOME` resolves in both
+    PowerShell and sh. `; exit 0` forces non-blocking under PowerShell (works in
+    pwsh 7 and Windows PowerShell 5.1, neither of which needs `||`)."""
     target = f"{repo}/wrap_nudge.py"
     if os.name == "nt":
-        log = r"%USERPROFILE%\.claude\wrap_nudge_hook.log"
-        command = f'py -3 "{target}" 2>>"{log}" || ver>nul'
+        command = f'py -3 "{target}" 2>>"$HOME\\.claude\\wrap_nudge_hook.log"; exit 0'
     else:
-        log = "$HOME/.claude/wrap_nudge_hook.log"
-        command = f'python3 "{target}" 2>>"{log}" || true'
+        command = f'python3 "{target}" 2>>"$HOME/.claude/wrap_nudge_hook.log" || true'
     return target, command
 
 

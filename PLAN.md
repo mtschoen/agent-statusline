@@ -33,6 +33,13 @@
       session count) fits. The <10ms cached path is also the Pi bridge's
       per-keypress budget. Blocking on first/second render (cwd/git basics)
       stays acceptable per the cold budget (8s, realistically ~1s).
+- [ ] install.py dedup bug: `_find_nudge_hook` returns only the FIRST
+  `UserPromptSubmit` entry whose command contains `wrap_nudge.py`. If two ever
+  coexist (e.g. an old plain-format entry plus the current logging+`exit 0`
+  one), `_upsert_nudge_hook` updates one and leaves the duplicate, so the nudge
+  fires twice per prompt. Fix: scan ALL `UserPromptSubmit` groups, keep/update a
+  single matching hook, and remove the extras. Found in schoen's live
+  settings.json on 2026-06-08 (manually deduped there).
 
 ## Done
 

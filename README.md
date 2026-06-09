@@ -35,8 +35,11 @@ opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | day: 47% | $1
 
 ## What you see
 
-**Line 1** - a render-tick spinner, hostname (muted mauve), current working
-directory, an optional red `[N sessions]` warning when two or more interactive
+**Line 1** - a render-tick spinner, hostname (muted mauve), the session's
+launch directory (`workspace.project_dir`) as a stable anchor - and, when the
+session has `cd`'d elsewhere, the current directory as a desaturated-teal
+relative hop after it (so the home stays the visual anchor while the move reads
+as secondary), an optional red `[N sessions]` warning when two or more interactive
 Claude Code sessions are running in this cwd, the git ref as `branch:hash`
 (the short commit hash tinted tan so it reads apart from the branch), a short
 `[session-id]` badge (first hex group of the session UUID, steel blue - handy

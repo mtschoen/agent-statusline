@@ -1,6 +1,6 @@
 """Main statusline entry point. Reads Claude Code's JSON payload from stdin
 and prints up to three lines:
-  line 1: [host] cwd (branch) <session title, if it fits>
+  line 1: [host] home [rel-cwd] (branch) <session title, if it fits>
   line 2: ctx | cache | ttl | quota | cost | +/-lines  (fields omitted when their data is absent)
   line 3: session wall/api timing  ·  live turn beacon + calibrated ETA
 
@@ -106,15 +106,46 @@ def _git_ref(cwd):
     return branch or tinted_hash
 
 
-def _line1(d, cwd, spinner):
+# Desaturated teal (256-color 66, #5f8787): when the session has cd'd away
+# from its launch dir, the relative hop is rendered in this muted teal so the
+# fixed "home" stays the visual anchor and the move reads as secondary.
+_CWD_REL_COLOR = "\x1b[38;5;66m"
+
+
+def _format_cwd(home, current):
+    """Render the session's launch dir as the stable anchor, appending the
+    current working dir as a desaturated-teal relative hop when it has moved.
+
+    Claude Code's payload carries both: workspace.project_dir is fixed at
+    launch while workspace.current_dir follows shell `cd`. Anchoring on home
+    keeps the statusline readable even after the session wanders.
+    """
+    if not home:
+        return current
+    if not current or os.path.normcase(os.path.normpath(home)) == os.path.normcase(
+        os.path.normpath(current)
+    ):
+        return home
+    try:
+        relative = os.path.relpath(current, home)
+    except ValueError:
+        # Different drive on Windows: no relative path exists.
+        relative = None
+    # A leading ".." means the session has stepped out above home; a relative
+    # path there is more confusing than helpful, so show the absolute dir.
+    hop = current if relative is None or relative.startswith("..") else relative
+    return f"{home} {_CWD_REL_COLOR}{hop}{RESET}"
+
+
+def _line1(d, cwd, cwd_display, spinner):
     local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
         os.path.expanduser("~/.claude/.local-mode")
     )
     host = f"{_HOST_COLOR}{_hostname()}{RESET}"
     line1 = (
-        f"{spinner} {ORANGE}LOCAL{RESET} [{host}] {cwd}"
+        f"{spinner} {ORANGE}LOCAL{RESET} [{host}] {cwd_display}"
         if local_mode
-        else f"{spinner} [{host}] {cwd}"
+        else f"{spinner} [{host}] {cwd_display}"
     )
     # Suppress the brief 2-process overlap during a session restart (old process
     # still winding down as the new one starts) -- only badge a sustained count.
@@ -290,7 +321,10 @@ def main():
     except Exception:
         d = {}
 
-    cwd = (d.get("workspace") or {}).get("current_dir") or d.get("cwd") or ""
+    workspace = d.get("workspace") or {}
+    # current_dir follows shell `cd`; project_dir is the fixed launch dir.
+    cwd = workspace.get("current_dir") or d.get("cwd") or ""
+    cwd_display = _format_cwd(workspace.get("project_dir") or "", cwd)
 
     # --- Context: anchored on token counts (avoids the 1% rounding in the
     # payload's used_percentage -- 10K-token slop on a 1M window).
@@ -330,7 +364,7 @@ def main():
     day_budget_summary = format_day_budget(rate_limits)
 
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
-    line1 = _line1(d, cwd, spinner)
+    line1 = _line1(d, cwd, cwd_display, spinner)
 
     # Resolve compact verbosity (STATUSLINE_COMPACT + $COLUMNS): re-render the
     # already-walked data at each flag set until it fits, then render once more.

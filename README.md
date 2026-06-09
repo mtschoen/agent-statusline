@@ -37,9 +37,11 @@ opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | day: 47% | $1
 
 **Line 1** - a render-tick spinner, hostname (muted mauve), the session's
 launch directory (`workspace.project_dir`) as a stable anchor - and, when the
-session has `cd`'d elsewhere, the current directory as a desaturated-teal
-relative hop after it (so the home stays the visual anchor while the move reads
-as secondary), an optional red `[N sessions]` warning when two or more interactive
+session has `cd`'d elsewhere, the current directory appended after it in
+desaturated teal (so the home stays the visual anchor while the move reads as
+secondary): a path relative to home when the move stayed nested inside it, or
+the absolute path when it broke out above home or onto another drive, an
+optional red `[N sessions]` warning when two or more interactive
 Claude Code sessions are running in this cwd, the git ref as `branch:hash`
 (the short commit hash tinted tan so it reads apart from the branch), a short
 `[session-id]` badge (first hex group of the session UUID, steel blue - handy
@@ -67,16 +69,24 @@ identity); fields are omitted when their data isn't available:
   consistently.
 - **Context** - `tokens / window (used %)`, e.g. `183.7K / 1.00M (18.0%)`.
   Numerator and percent share the threshold color; denominator is mauve.
-- **Cache** - `reads ($R) / writes ($W) / hit %`, e.g.
-  `11.98M ($1.20) / 428.1K ($2.14) / 96% hit`.
-  Reads are teal, writes are orange, hit % is threshold-colored. Summed
-  across the session transcript and any subagent transcripts (Claude Code's
-  stdin payload only carries per-turn cache data, so the script walks the
-  JSONL files to get a session-wide number). Each token count is followed
-  by its cumulative session cost in parentheses, colored to match the
-  read (teal) or write (orange) identity. Costs are model-accurate (summed
-  per turn at each turn's model rate, including subagent transcripts,
-  matching the token totals).
+- **Cache** - the per-token cost breakdown. Its essential core is
+  `reads ($R) / writes ($W) / hit %`, e.g.
+  `15.41M ($1.54) / 207.4K ($1.29) / 99% hit` - reads teal, writes orange,
+  hit % threshold-colored. On a wide enough terminal this expands to the full
+  **four-component** form
+  `input ($I) / read ($R) / write ($W) / output ($O) / hit %`, e.g.
+  `12.1K ($0.06) / 15.41M ($1.54) / 207.4K ($1.29) / 48.2K ($1.21) / 99% hit`:
+  the **input** figure (steel blue) is fresh full-price input tokens and the
+  **output** figure (violet) is generated output - the two components the cache
+  pair alone omits, so all four together sum to the session token cost. Input
+  and output are the first fields to shed under width pressure (see
+  [Compact mode](#compact-mode)), leaving the read/write/hit% core. All of it is
+  summed across the session transcript and any subagent transcripts (Claude
+  Code's stdin payload only carries per-turn cache data, so the script walks the
+  JSONL files to get a session-wide number). Each token count is followed by its
+  cumulative session cost in parentheses, colored to match its figure's identity.
+  Costs are model-accurate (summed per turn at each turn's model rate, including
+  subagent transcripts, matching the token totals).
 - **TTL evictions** - a loud red `⚠ TTL:N (~$X.XX)` segment, shown only
   when the session had cache evictions. An eviction is any parent-session
   turn after the first that paid a substantial cache-write (>=1000 tokens)

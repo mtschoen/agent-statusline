@@ -341,8 +341,9 @@ def main():
         + (cu.get("cache_creation_input_tokens") or 0)
         + (cu.get("cache_read_input_tokens") or 0)
     )
-    model_id = (d.get("model") or {}).get("id") or ""
-    model_summary = format_model_badge(model_id)
+    model_obj = d.get("model") or {}
+    model_id = model_obj.get("id") or ""
+    model_summary = format_model_badge(model_id, model_obj.get("display_name") or "")
 
     # Bridge occupancy to the wrap nudge hook (its payload can't see it).
     write_ctx_state(d.get("session_id") or "", ctx_used, window_size, time.time())

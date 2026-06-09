@@ -63,8 +63,10 @@ screen. The session-id badge, by contrast, is tiny and always shown.
 identity); fields are omitted when their data isn't available:
 
 - **Model** - the active model family as a colored badge, e.g. `opus4.8[1m]`
-  (magenta Opus, cyan Sonnet, blue Haiku; mauve `?` for an unrecognized
-  family). The `major.minor` version is included when the id carries one, and
+  (magenta Opus, cyan Sonnet, blue Haiku, green Fable). An unrecognized family
+  falls back to the payload's human-readable name (e.g. `Fable 5`), or the raw
+  id sans `claude-` prefix when none is given - a mauve `?` only when there's
+  nothing else to show. The version is included when the id carries one, and
   the `[1m]` suffix marks the 1M-context runtime tier. Same badge
   the per-agent rows use, so the main line and the agent panel read
   consistently.
@@ -317,8 +319,8 @@ JSONL transcript at
 `~/.claude/projects/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl`.
 The status icon is colored (green ✓ complete, red ✗ failed, yellow ●
 running, mauve ○ queued); the model badge is magenta for Opus, cyan for
-Sonnet, blue for Haiku. Elapsed is dropped once the row reaches a terminal
-state.
+Sonnet, blue for Haiku, green for Fable. Elapsed is dropped once the row
+reaches a terminal state.
 
 The same color thresholds apply per agent. The quota field is omitted -
 it's account-global, identical for every agent, so it would just clutter

@@ -27,10 +27,15 @@ ORANGE_THRESHOLD_1M_TOKENS = 500_000  # mid-band warning for 1M-context sessions
 
 
 def ctx_window_for_model(model_id):
-    """Best-effort window inference for per-agent rendering. Opus [1m] -> 1M,
-    everything else -> 200K. The main script doesn't need this -- the payload
-    carries `context_window.context_window_size` directly."""
-    return 1_000_000 if "[1m]" in (model_id or "") else 200_000
+    """Best-effort window inference for per-agent rendering. Fable is natively
+    1M; Opus/Sonnet expose 1M only via the opt-in runtime tier, marked by the
+    `[1m]` id suffix -- a bare opus/sonnet session is 200K. Everything else
+    -> 200K. The main script doesn't need this -- the payload carries
+    `context_window.context_window_size` directly."""
+    mid = model_id or ""
+    if "fable" in mid or "[1m]" in mid:
+        return 1_000_000
+    return 200_000
 
 
 def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct=True):
@@ -81,6 +86,7 @@ _MODEL_BADGES = [
     (("opus",), "opus", "\x1b[35m"),  # magenta
     (("sonnet",), "sonnet", "\x1b[36m"),  # cyan
     (("haiku",), "haiku", "\x1b[34m"),  # blue
+    (("fable",), "fable", "\x1b[32m"),  # green
     # Qwen model families (for Qwen Code port)
     (("qwen-coder", "qwen2.5-coder"), "qwen-coder", "\x1b[96m"),  # bright cyan
     (("qwen",), "qwen", "\x1b[94m"),  # bright blue
@@ -88,12 +94,15 @@ _MODEL_BADGES = [
 
 
 def _version_for(mid, key):
-    """Extract a dotted `major.minor` version following the family `key` in a
-    model id, e.g. `claude-opus-4-8` -> "4.8". Returns "" when no version
-    component is present (e.g. an aliased id like `opus`).
+    """Extract a dotted version following the family `key` in a model id, e.g.
+    `claude-opus-4-8` -> "4.8" and `claude-fable-5` -> "5". Returns "" when no
+    version component is present (e.g. an aliased id like `opus`).
     """
-    match = _re.search(rf"{key}-(\d+)-(\d+)", mid)
-    return f"{match.group(1)}.{match.group(2)}" if match else ""
+    match = _re.search(rf"{key}-(\d+)(?:-(\d+))?", mid)
+    if not match:
+        return ""
+    major, minor = match.group(1), match.group(2)
+    return f"{major}.{minor}" if minor else major
 
 
 def _qwen_version_for(mid):
@@ -110,14 +119,18 @@ def _qwen_size_for(mid):
     return match.group(1).lower() if match else ""
 
 
-def format_model_badge(model_id):
+def format_model_badge(model_id, display_name=""):
     """Colored short model-family badge, e.g. magenta `opus4.8[1m]`.
 
-    Inserts the `major.minor` version when the id carries one and appends the
-    `[1m]` runtime-tier suffix when present. Unknown families render as a mauve
-    `?`; an empty id returns "" so the caller can omit the segment.
+    Inserts the version when the id carries one and appends the `[1m]`
+    runtime-tier suffix when present. An empty id returns "" so the caller can
+    omit the segment.
 
     For Qwen models (e.g. 'qwen-3-235b'), shows version + size like 'qwen3·235b'.
+
+    Unknown families fall back to the payload's human-readable `display_name`
+    (e.g. "Fable 5"), or the raw id sans `claude-` prefix when no display name
+    is given - a bare `?` only when we have nothing else to show.
     """
     if not model_id:
         return ""
@@ -133,4 +146,5 @@ def format_model_badge(model_id):
                     return f"{color}{label}{version}{size_part}{RESET}"
                 version = _version_for(mid, key)
                 return f"{color}{label}{version}{suffix}{RESET}"
-    return f"{CTX_DENOM}?{RESET}"
+    fallback = display_name.strip() or _re.sub(r"^claude-", "", model_id)
+    return f"{CTX_DENOM}{fallback or '?'}{RESET}"

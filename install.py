@@ -119,10 +119,11 @@ def _qwen_command_for_platform(repo):
     return target, command
 
 
-def _report_walker(repo):
+def _report_walker():
     # Optional native pace-walker (claude-walker). Pure speedup -- the Python
-    # fallback runs identically when it isn't found.
-    sys.path.insert(0, repo)
+    # fallback runs identically when it isn't found. statusline_lib is already
+    # imported (top-level nudge_install import), so no sys.path setup is needed
+    # here; the guard only covers _find_walker_binary being absent.
     try:
         from statusline_lib import _find_walker_binary
 
@@ -242,7 +243,7 @@ def _install_claude(repo, dry_run):
     print(f"  subagentStatusLine: {subagent_command}")
     print(f"  UserPromptSubmit:   {nudge_command}")
 
-    _report_walker(repo)
+    _report_walker()
 
     print("Open a new Claude Code session (or trigger a render) to pick it up.")
     return 0

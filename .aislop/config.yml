@@ -1,6 +1,9 @@
 # aislop (AI-slop gate) config. See LINTER-SETUP.md "AI-slop gate" section.
-# aislop 0.9.4 has no per-rule config -- only whole-engine toggles, exclude
-# globs, and ci.failBelow.
+# The gate runs the @schoen/aislop 0.10.1 fork (lockfile-pinned; `npm run
+# lint:aislop`). 0.10.1 supports per-rule severity overrides
+# (rules: {"<rule>": error|warning|off}) plus exclude/include globs, engine
+# toggles, and ci.failBelow -- but overrides are repo-wide, not per-file, so
+# house policy is restructure-first (see AGENTS.md); none are set here.
 #
 # After the cleanup pass the repo scores 100/100. failBelow is set to 90 as a
 # "stay healthy" floor with a little headroom (one stray finding won't break

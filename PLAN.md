@@ -2,6 +2,16 @@
 
 ## Inbox
 
+- [ ] Qwen cache-column semantics: research Qwen API pricing (is `cached`
+      discounted vs non-cached prompt tokens? TTL? tiered rates?). The cache
+      column (`read / write / hit%`, statusline_lib/qwen.py) maps
+      read=cached, write=prompt-cached, hit%=cached/prompt, which is
+      semantically unlike Claude's (Qwen exposes no priced write side). If
+      caching isn't priced differently, the column misleads as a cost
+      signal: repurpose (hit% only) or drop it. Distilled from
+      QWEN-STATUSLINE-HANDOFF.md (deleted 2026-06-10; full port notes in git
+      history).
+
 ## Done
 
 - Quality gate back to green (2026-06-10): moved the nudge-hook merge

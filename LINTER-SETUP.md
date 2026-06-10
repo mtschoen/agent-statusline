@@ -4,7 +4,26 @@ One-line: stand up a three-tier "lint as you write → validate → CI" setup fo
 this repo's Python (+ shell) so style/bugs are caught at the keystroke, gated
 before "done", and enforced at merge.
 
-## Current state
+## Current state (as-built — rollout completed; this doc is the decision record)
+
+> **Status 2026-06-10:** everything below was executed. The survey text and
+> recipes are kept as the rationale record; live gate state and numbers are in
+> `TEST-REPORT.md`. As-built summary:
+>
+> - **ruff** configured in `pyproject.toml`; `ruff check .` +
+>   `ruff format --check .` are hard CI gates (0 findings is the bar).
+> - **aislop** runs the `@schoen/aislop` **0.10.1** fork via
+>   `npm run lint:aislop` (lockfile-pinned local binary, `npm ci
+>   --ignore-scripts`); `.aislop/config.yml` sets `failBelow: 90`, repo
+>   scores 100/100.
+> - **CI** (`.gitea/workflows/ci.yml`): lint job (ruff + aislop hard;
+>   pyright + shellcheck non-blocking) plus the `scripts/verify_*.py` suite
+>   on Linux and Windows.
+> - **On-save hooks** in `.claude/settings.json`: ruff + the pinned aislop
+>   binary per `.py` edit.
+
+The original 2026-05-29 survey of the pre-rollout state follows.
+
 - **Languages:** Python (the statusline/cost library + tests) and a few shell
   scripts (`*.sh`).
 - **Existing linter/formatter config:** none — no `[tool.ruff]`/`[tool.mypy]`/
@@ -100,6 +119,13 @@ This repo is **Python** — aislop supports Python, so the full integration appl
 >   `exclude` globs, `extends`, and whole-engine on/off, but NOT per-rule
 >   disable/severity. If `__future__` imports dominate this repo's findings and the
 >   score looks misleadingly low, hold off gating until per-rule config lands.
+>
+> **Update (fork 0.10.1, pinned since 2026-06-03):** per-rule severity overrides
+> exist now — `rules: {"ai-slop/<rule>": error|warning|off}` in
+> `.aislop/config.yml` — but they are repo-wide, not per-file. House policy when
+> a rule fires wrong: restructure first, contribute the rule fix upstream
+> (scanaislop/aislop mainline) second; the fork diverges for C# support only.
+> This repo sets no overrides and no excludes.
 
 ### Per-edit (① on-save)
 
@@ -164,14 +190,18 @@ exclude:
 # engines: { ai-slop: off }  # uncomment to disable if __future__ FPs tank score
 ```
 
-Supported keys: `ci.failBelow`, `exclude`, `extends`, whole-engine on/off
-(`format`, `lint`, `code-quality`, `ai-slop`, `security`, `architecture`).
-Per-rule config is not available in 0.9.4.
+Supported keys (0.10.1): `ci.failBelow`, `exclude`, `include`, `extends`,
+whole-engine on/off (`format`, `lint`, `code-quality`, `ai-slop`, `security`,
+`architecture`), `quality` size limits, `scoring` weights, and per-rule
+severity overrides (`rules: {"ai-slop/<rule>": error|warning|off}` — repo-wide,
+not per-file). This repo's actual config: `failBelow: 90`, no excludes, no
+rule overrides.
 
 ### Rollout
 
-Clean up first, then gate — do not ratchet from a noisy baseline. Run
-`npx aislop@0.9.4 scan . -d` to see all findings, fix real slop, tune `exclude`
+Clean up first, then gate — do not ratchet from a noisy baseline. Run the
+pinned local binary (`node_modules/.bin/aislop scan . -d`, never `npx` against
+the live registry) to see all findings, fix real slop, tune `exclude`
 for irreducible FPs, then set `failBelow` to a score you can maintain. Reference:
 git-wizard's gate is `failBelow: 80`.
 

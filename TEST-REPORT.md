@@ -109,6 +109,5 @@ python -m coverage report -m --include="statusline_lib/*"
 | | |
 |---|---|
 | **Config** | `pyproject.toml` (`[tool.ruff]`), `.aislop/config.yml` |
-| **Rollout doc** | `LINTER-SETUP.md` |
 | **CI** | `.gitea/workflows/ci.yml` - ruff + aislop hard gates; pyright + shellcheck non-blocking |
 | **Package** | `statusline_lib/` (base, sessions, walker, cost, beacon, pace, badge, compact, qwen, nudge, nudge_install, project, `__init__`) |

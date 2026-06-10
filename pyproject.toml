@@ -2,8 +2,7 @@
 #
 # This repo is NOT a distributable Python package (it is installed via
 # install.py / install.sh). pyproject.toml exists only to hold the ruff
-# lint + format gate. See LINTER-SETUP.md for the rollout rationale and
-# TEST-REPORT.md for the current gate status.
+# lint + format gate. See TEST-REPORT.md for the current gate status.
 #
 # Dev tooling: `pip install ruff` (>=0.6). CI installs it directly; see
 # .gitea/workflows/ci.yml. The validation gate is `ruff check .` with the

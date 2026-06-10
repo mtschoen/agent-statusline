@@ -1,4 +1,4 @@
-# aislop (AI-slop gate) config. See LINTER-SETUP.md "AI-slop gate" section.
+# aislop (AI-slop gate) config.
 # The gate runs the @schoen/aislop 0.10.1 fork (lockfile-pinned; `npm run
 # lint:aislop`). 0.10.1 supports per-rule severity overrides
 # (rules: {"<rule>": error|warning|off}) plus exclude/include globs, engine

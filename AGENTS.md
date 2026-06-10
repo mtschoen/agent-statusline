@@ -41,6 +41,11 @@ Current numbers: `TEST-REPORT.md`. No pragmas or exclusions: dead code gets
 deleted, "unreachable" lines get restructured until the guard is live - the
 same restructure-first policy as the aislop gate.
 
+Tests must build their own fixtures (temp dirs, `os.utime`-pinned mtimes
+against a synthetic window start) and never lean on live `~/.claude` data:
+coverage that comes from the dev machine's real transcripts evaporates on a
+clean CI runner (13 lines failed the gate's first run exactly this way).
+
 ## Debugging the compact-mode width gate
 
 `statusline_lib/compact.py` auto-sheds line-2 fields only when the rendered width

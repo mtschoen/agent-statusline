@@ -16,12 +16,6 @@ jobs:
     name: Lint (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      # aislop (@schoen scope) installs from the self-hosted Gitea npm registry,
-      # which serves a self-signed (mkcert) cert. Point Node at the committed
-      # public root CA so npm trusts it. NODE_EXTRA_CA_CERTS *appends* to the
-      # default CA bundle, so transitive deps from public npm still verify.
-      NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.gitea-ca.pem
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

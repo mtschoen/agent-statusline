@@ -20,7 +20,6 @@ import argparse
 import glob
 import json
 import os
-import ssl
 import sys
 import urllib.request
 import xml.etree.ElementTree as ElementTree
@@ -76,10 +75,10 @@ def _post(state: str, description: str) -> None:
             "Content-Type": "application/json",
         },
     )
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE  # Gitea uses a self-signed mkcert cert
-    urllib.request.urlopen(request, context=context).read()
+    # Gitea serves a publicly-trusted Let's Encrypt cert, so urllib's default
+    # verifying context validates it with no custom CA handling - verification
+    # stays ON so a cert problem fails loudly rather than leaking the token.
+    urllib.request.urlopen(request).read()
 
 
 def main(argv: list[str]) -> int:

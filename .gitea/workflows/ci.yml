@@ -93,7 +93,22 @@ jobs:
             python -m coverage run -a "$t" || fail=1
           done
           python -m coverage report -m --include="statusline_lib/*" --fail-under=100 || fail=1
+          # Emit coverage.json (statusline_lib scope, matching the gate above) for
+          # the pr-crew/coverage status post below. Generated even when the gate
+          # fails so pr-crew reads the real number, not a missing status.
+          python -m coverage json --include="statusline_lib/*" -o coverage.json || fail=1
           exit $fail
+
+      - name: Post pr-crew/coverage status
+        # Posts the measured percent as a Gitea commit status (context
+        # pr-crew/coverage) that pr-crew's coverage gate reads. Runs on every
+        # event including failure (if: always()) so the status always reflects
+        # the latest run; the helper posts state=error if coverage.json is
+        # missing. Only the Linux job posts to avoid double-posting the same SHA.
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 ci/post-coverage-status.py
 
   test-windows:
     name: Unit tests (Windows)

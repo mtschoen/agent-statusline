@@ -1,13 +1,24 @@
 # schoen-claude-status - Test Report
 
-`2026-06-10`
+`2026-06-20`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
 | **Tests** | 31 `scripts/verify_*.py`, all passing (Linux + Windows in CI) |
-| **Git** | `9c89bfc` (main; working tree includes the 100%-coverage push) |
+| **Git** | `47893ac` (main; working tree adds the pr-crew/coverage status post) |
+
+**This run (Phase 1, pr-crew onboarding):** statusline_lib coverage is
+unchanged at **100%** (1341/1341); no behavior or test logic changed. The
+change is CI plumbing only - the repo measured 100% but never *posted* it, so
+pr-crew's coverage gate read a missing `pr-crew/coverage` status as 0.00% and
+filed issue #12. CI now vendors the stdlib-only `ci/post-coverage-status.py`
+helper, emits a statusline_lib-scoped `coverage.json` (same scope as the 100%
+gate), and POSTs a `pr-crew/coverage` success status on the Linux test job
+(`if: always()`, single poster to avoid double-posting the SHA). This resolves
+issue #12 and onboards the repo to pr-crew. Entry-point glue (statusline.py et
+al.) remains out of the measured scope by design (Phase 2 will revisit that).
 
 **This run (close-the-gap, completed):** statusline_lib line coverage went
 76% -> **100%** (1341/1341 statements, all 17 modules) in one parallel

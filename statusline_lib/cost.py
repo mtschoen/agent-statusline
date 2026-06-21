@@ -27,6 +27,15 @@ _RATES = {
 
 _WEB_SEARCH_COST_USD = 0.01
 
+# Cache-write cost depends on the write's TTL: a 5-minute write bills at 1.25x
+# base input, a 1-hour write at 2.0x (platform.claude.com/docs/en/about-claude/
+# pricing -> the "5m Cache Writes" / "1h Cache Writes" columns). The split lives
+# in usage.cache_creation.ephemeral_{5m,1h}_input_tokens. Claude Code subscription
+# sessions write 1h cache, so a flat 1.25x under-bills them by the 0.75x delta -
+# the dominant source of drift from the harness's authoritative total_cost_usd.
+WRITE_MULT_5M = 1.25
+WRITE_MULT_1H = 2.0
+
 # A turn with cache_read==0 and cache_write>0 after the first parent turn is a
 # cache rewrite. The floor suppresses degenerate tiny-write turns from counting.
 # Tunable.
@@ -81,23 +90,41 @@ def _rates_for(model_id):
     return _RATES["sonnet"]
 
 
+def _write_cost(usage, inp_rate):
+    """Dollar cost of this turn's cache writes, split by TTL.
+
+    5-minute writes bill at WRITE_MULT_5M x base input, 1-hour writes at
+    WRITE_MULT_1H x. The ephemeral_{5m,1h} breakdown in usage.cache_creation says
+    which. When that breakdown is absent (older or API-key/Bedrock transcripts
+    that only carry the flat cache_creation_input_tokens), fall back to the 5m
+    multiplier - the single value used before the TTL split existed.
+    """
+    creation = usage.get("cache_creation") or {}
+    five = int(creation.get("ephemeral_5m_input_tokens") or 0)
+    hour = int(creation.get("ephemeral_1h_input_tokens") or 0)
+    if five or hour:
+        return (five * WRITE_MULT_5M + hour * WRITE_MULT_1H) * inp_rate / 1_000_000.0
+    flat = int(usage.get("cache_creation_input_tokens") or 0)
+    return flat * WRITE_MULT_5M * inp_rate / 1_000_000.0
+
+
 def _cost_for_turn(usage, model_id):
     """Per-Mtok token cost for one assistant turn, plus per-request web search.
 
     Web search is billed per request, not per token; $0.01 each was verified
-    against ~/.claude.json's authoritative per-model costUSD.
+    against ~/.claude.json's authoritative per-model costUSD. Cache writes are
+    billed by TTL via _write_cost (5m at 1.25x, 1h at 2.0x).
     """
     inp_rate, out_rate = _rates_for(model_id)
     i = int(usage.get("input_tokens") or 0)
     r = int(usage.get("cache_read_input_tokens") or 0)
-    w = int(usage.get("cache_creation_input_tokens") or 0)
     o = int(usage.get("output_tokens") or 0)
     web_searches = int(
         (usage.get("server_tool_use") or {}).get("web_search_requests") or 0
     )
     token_cost = (
-        i * inp_rate + r * (inp_rate * 0.1) + w * (inp_rate * 1.25) + o * out_rate
-    ) / 1_000_000.0
+        i * inp_rate + r * (inp_rate * 0.1) + o * out_rate
+    ) / 1_000_000.0 + _write_cost(usage, inp_rate)
     return token_cost + web_searches * _WEB_SEARCH_COST_USD
 
 
@@ -131,7 +158,7 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
     acc["cost"] += _cost_for_turn(u, rate_model)
     inp_rate, out_rate = _rates_for(rate_model)
     acc["read_cost"] += r * inp_rate * 0.1 / 1_000_000.0
-    acc["write_cost"] += w * inp_rate * 1.25 / 1_000_000.0
+    acc["write_cost"] += _write_cost(u, inp_rate)
     # The other two cost dimensions, so the full breakdown reconciles to total:
     # fresh (uncached) input at the plain input rate, output at the output rate.
     acc["input_cost"] += i * inp_rate / 1_000_000.0

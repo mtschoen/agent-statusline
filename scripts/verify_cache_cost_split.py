@@ -26,8 +26,10 @@ def _turn(
         "cache_creation_input_tokens": write,
         "output_tokens": out,
     }
-    if write:
+    if write and ttl is not None:
         # Mirror the real transcript: a write carries the TTL bucket it used.
+        # ttl=None omits the breakdown (older/API-key transcript) so the
+        # _write_cost fallback path is exercised.
         key = f"ephemeral_{'1h' if ttl == '1h' else '5m'}_input_tokens"
         usage["cache_creation"] = {key: write}
     entry = {
@@ -65,7 +67,8 @@ def _check_components_and_evictions(failures):
     walk = walk_transcript(parent, include_subagents=True)
 
     exp_read_cost = 20000 * 5.0 * 0.1 / 1e6
-    exp_write_cost = (5000 + 2000 + 30000 + 500) * 5.0 * 1.25 / 1e6
+    # All four turns default to a 1h cache write -> 2.0x base input (not 1.25x).
+    exp_write_cost = (5000 + 2000 + 30000 + 500) * 5.0 * 2.0 / 1e6
     exp_wasted = 30000 * 5.0 * 1.15 / 1e6
 
     if not _approx(walk["read_cost"], exp_read_cost):
@@ -100,6 +103,33 @@ def _check_components_and_evictions(failures):
         )
 
 
+def _check_write_cost_ttl_split(failures):
+    # The core fix: a write's cost depends on its TTL. 5-minute writes bill at
+    # 1.25x base input, 1-hour writes at 2.0x; a write with no ephemeral_{5m,1h}
+    # breakdown (older/API-key transcript) falls back to the 1.25x path. Each
+    # case is a single-turn session so write_cost isolates the multiplier.
+    cases = [
+        ("5m", "5m", 1.25),
+        ("1h", "1h", 2.0),
+        ("legacy", None, 1.25),  # no breakdown -> fallback to 1.25x
+    ]
+    for label, ttl, mult in cases:
+        tmp = tempfile.mkdtemp(prefix=f"cost-wsplit-{label}-")
+        parent = os.path.join(tmp, "sess.jsonl")
+        _write_jsonl(parent, [_turn("w1", read=0, write=40000, ttl=ttl)])
+        walk = walk_transcript(parent, include_subagents=False)
+        exp = 40000 * 5.0 * mult / 1e6
+        if not _approx(walk["write_cost"], exp):
+            failures.append(
+                f"{label} write_cost {walk['write_cost']!r} != {exp!r} (mult {mult})"
+            )
+        # write_cost must equal the write portion of the turn's total cost too,
+        # so the rendered breakdown stays consistent with the cost figure.
+        if not _approx(walk["cost"], walk["write_cost"] + walk["input_cost"]
+                       + walk["read_cost"] + walk["output_cost"]):
+            failures.append(f"{label}: components must reconcile to cost")
+
+
 def _check_subagent_evictions_excluded(failures):
     # A subagent's first turn is a full write by construction; it must NOT count
     # as a parent TTL eviction, but its write_cost MUST still accumulate.
@@ -120,8 +150,8 @@ def _check_subagent_evictions_excluded(failures):
         failures.append(
             f"subagent writes must not count as evictions; got {walk['ttl_evictions']}"
         )
-    # write_cost spans parent + both subagent turns.
-    exp_write_cost = (4000 + 8000 + 9000) * 5.0 * 1.25 / 1e6
+    # write_cost spans parent + both subagent turns (all 1h -> 2.0x).
+    exp_write_cost = (4000 + 8000 + 9000) * 5.0 * 2.0 / 1e6
     if not _approx(walk["write_cost"], exp_write_cost):
         failures.append(
             f"write_cost should include subagents: {walk['write_cost']!r} != {exp_write_cost!r}"
@@ -335,6 +365,7 @@ def _check_format_cache_zero_tokens(failures):
 def check(failures):
     _check_model_rates(failures)
     _check_components_and_evictions(failures)
+    _check_write_cost_ttl_split(failures)
     _check_subagent_evictions_excluded(failures)
     _check_small_gap_not_evicted(failures)
     _check_ttl_threshold_derived_from_write(failures)

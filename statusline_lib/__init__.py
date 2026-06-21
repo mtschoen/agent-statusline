@@ -13,13 +13,14 @@ Cost handling differs between the two callers:
   since the per-task fields don't include cost. The walker computes parent and
   subagent costs in one pass so neither path needs a second iteration.
 
-Per-Mtok rates, the 1.25x cache-write multiplier, and the $0.01/web-search
+Per-Mtok rates, the TTL-split cache-write multipliers (1.25x for 5-minute
+writes, 2.0x for 1-hour writes - see _write_cost), and the $0.01/web-search
 charge match the canonical constants in ~/.claude/CLAUDE.md ("Cost-estimation
 formula") and were verified against ~/.claude.json's authoritative per-model
-costUSD: our formula matches the harness to the penny across the fleet (Opus,
-and -- once web search is included -- every model). The Opus 1M-context tier
-doubling is NOT modeled because the harness does not apply it in practice:
-measured 0% error on 28 Opus sessions, including 26M-cache-read ones.
+costUSD: our formula matches the harness to the penny across the fleet (every
+deviating project reconciles exactly once 1-hour writes bill at 2.0x). The Opus
+1M-context tier doubling is NOT modeled because the harness does not apply it
+(official "Long context pricing": the full 1M window bills at standard rates).
 
 Package layout (dependency order, no cycles):
   base     -- _json_loads (orjson fallback), color constants, fmt, color helpers

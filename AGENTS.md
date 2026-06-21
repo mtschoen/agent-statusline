@@ -1,5 +1,24 @@
 # schoen-claude-status
 
+## Local pre-commit gate (ruff format + check)
+
+CI's "Lint (Linux)" job runs two hard ruff gates: `ruff format --check .` and
+`ruff check .`. The Claude PostToolUse hook (`.claude/settings.json`) runs
+`ruff check` + aislop and now auto-applies `ruff format` on each edited `.py`,
+but only during Claude sessions - manual edits and other machines bypass it.
+The committed git hook at `hooks/pre-commit` is the authoritative gate: it
+re-runs both CI ruff commands and blocks the commit on any finding, so an
+unformatted file can never reach CI again (it slipped through twice before:
+PR #7 burnrate.py, then verify_cache_cost_split.py - both format-only).
+
+`core.hooksPath` is per-clone local config and is NOT auto-installed. Wire it up
+once per machine after cloning:
+
+    git config core.hooksPath hooks
+
+Verify with `git config core.hooksPath` (should print `hooks`). The hook resolves
+`ruff` from PATH, falling back to `python -m ruff` / `python3 -m ruff`.
+
 ## Quality gate: aislop
 
 This project uses **aislop** as a deterministic quality gate for AI-written code

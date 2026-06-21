@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Pre-commit gate mirroring the CI "Lint (Linux)" job's two HARD ruff gates:
+#   ruff format --check .   and   ruff check .
+# If this hook passes, the CI ruff gate passes. It blocks the commit on any
+# finding so unformatted/unlinted Python never reaches CI again -- the
+# recurring failure was an unformatted file slipping through (PR #7
+# burnrate.py, then verify_cache_cost_split.py); the PostToolUse hook runs
+# ruff check + aislop but not "ruff format --check", so format-only drift was
+# invisible locally.
+#
+# This is NOT auto-installed. core.hooksPath is per-clone local config, so wire
+# it up once per machine:
+#   git config core.hooksPath hooks
+set -euo pipefail
+
+# Resolve a ruff invocation: prefer the standalone binary (how CI runs it after
+# `pip install ruff`), fall back to the Python module (how the repo is linted on
+# the dev machines). Keep the same array for both forms so quoting stays sane.
+if command -v ruff >/dev/null 2>&1; then
+  RUFF=(ruff)
+elif command -v python >/dev/null 2>&1 && python -m ruff --version >/dev/null 2>&1; then
+  RUFF=(python -m ruff)
+elif command -v python3 >/dev/null 2>&1 && python3 -m ruff --version >/dev/null 2>&1; then
+  RUFF=(python3 -m ruff)
+else
+  echo "pre-commit: ruff not found. Install it (pip install ruff) -- this gate mirrors CI." >&2
+  exit 1
+fi
+
+fail=0
+if ! "${RUFF[@]}" format --check .; then
+  echo "pre-commit: 'ruff format --check' failed -- run 'ruff format .' and re-stage." >&2
+  fail=1
+fi
+if ! "${RUFF[@]}" check .; then
+  echo "pre-commit: 'ruff check' failed -- fix the findings above and re-stage." >&2
+  fail=1
+fi
+exit "$fail"

@@ -125,8 +125,13 @@ def _check_write_cost_ttl_split(failures):
             )
         # write_cost must equal the write portion of the turn's total cost too,
         # so the rendered breakdown stays consistent with the cost figure.
-        if not _approx(walk["cost"], walk["write_cost"] + walk["input_cost"]
-                       + walk["read_cost"] + walk["output_cost"]):
+        if not _approx(
+            walk["cost"],
+            walk["write_cost"]
+            + walk["input_cost"]
+            + walk["read_cost"]
+            + walk["output_cost"],
+        ):
             failures.append(f"{label}: components must reconcile to cost")
 
 

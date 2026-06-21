@@ -1,6 +1,6 @@
 # aislop (AI-slop gate) config.
-# The gate runs the @schoen/aislop 0.10.1 fork (lockfile-pinned; `npm run
-# lint:aislop`). 0.10.1 supports per-rule severity overrides
+# The gate runs the @schoen/aislop 0.12.3 fork (lockfile-pinned; `npm run
+# lint:aislop`). 0.12.3 supports per-rule severity overrides
 # (rules: {"<rule>": error|warning|off}) plus exclude/include globs, engine
 # toggles, and ci.failBelow -- but overrides are repo-wide, not per-file, so
 # house policy is restructure-first (see AGENTS.md); none are set here.

@@ -1,5 +1,5 @@
 """Wire statusLine + subagentStatusLine + the wrap nudge hook into
-Claude Code or Qwen Code settings.
+Claude Code, Qwen Code, or Antigravity CLI settings.
 
 Idempotent: re-running just refreshes the `command` strings; every other key in
 settings.json -- including any other UserPromptSubmit hooks -- is preserved
@@ -11,12 +11,13 @@ UI. The nudge hook is the consumer of the per-session occupancy file the
 statusline produces, so it installs in the same pass.
 
 Platform support:
-  --platform claude  (default) Installs to ~/.claude/settings.json
-  --platform qwen    Installs to ~/.qwen/settings.json (ui.statusLine only)
-  --platform both    Installs to both platforms
+  --platform claude       (default) Installs to ~/.claude/settings.json
+  --platform qwen         Installs to ~/.qwen/settings.json (ui.statusLine only)
+  --platform both         Installs to both Claude and Qwen platforms
+  --platform antigravity  Installs to ~/.gemini/antigravity-cli/settings.json
 
 Usage (typically via the install.sh / install.bat wrappers):
-    python install.py --repo /abs/path/to/repo [--platform claude|qwen|both] [--dry-run]
+    python install.py --repo /abs/path/to/repo [--platform claude|qwen|both|antigravity] [--dry-run]
 """
 
 import argparse
@@ -66,7 +67,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--platform",
-        choices=["claude", "qwen", "both"],
+        choices=["claude", "qwen", "both", "antigravity"],
         default="claude",
         help="Which CLI to install for (default: claude)",
     )
@@ -78,7 +79,7 @@ def _parse_args():
     return parser.parse_args()
 
 
-def _commands_for_platform(repo):
+def _commands_for_platform(repo, platform="claude"):
     """Return (main_target, subagent_target, main_command, subagent_command)."""
     # On Windows, bare python/python3 resolve to the Microsoft Store alias shim,
     # whose ~750ms per-invocation launch overhead dominated every render. Invoke
@@ -92,6 +93,13 @@ def _commands_for_platform(repo):
     if os.name == "nt":
         main_target = f"{repo}/statusline.py"
         subagent_target = f"{repo}/subagent_statusline.py"
+        if platform == "antigravity":
+            return (
+                main_target,
+                subagent_target,
+                f"py -3 {main_target}",
+                f"py -3 {subagent_target}",
+            )
         return (
             main_target,
             subagent_target,
@@ -164,6 +172,7 @@ def main():
 
     install_claude = platform in ("claude", "both")
     install_qwen = platform in ("qwen", "both")
+    install_antigravity = platform == "antigravity"
 
     if install_claude:
         result = _install_claude(repo, args.dry_run)
@@ -175,6 +184,11 @@ def main():
         if result != 0:
             return result
 
+    if install_antigravity:
+        result = _install_antigravity(repo, args.dry_run)
+        if result != 0:
+            return result
+
     return 0
 
 
@@ -183,9 +197,9 @@ def _install_claude(repo, dry_run):
     settings_path = os.path.expanduser("~/.claude/settings.json")
 
     main_target, subagent_target, main_command, subagent_command = (
-        _commands_for_platform(repo)
+        _commands_for_platform(repo, platform="claude")
     )
-    nudge_target, nudge_command = _nudge_command(repo)
+    nudge_target, nudge_command = _nudge_command(repo, platform="claude")
     nudge_markers = _nudge_markers(nudge_target)
 
     for script in (main_target, subagent_target, nudge_target):
@@ -297,6 +311,75 @@ def _install_qwen(repo, dry_run):
     print(f"  ui.statusLine:      {qwen_command}")
 
     print("Open a new Qwen Code session (or trigger a render) to pick it up.")
+    return 0
+
+
+def _install_antigravity(repo, dry_run):
+    """Install statusLine + subagentStatusLine + nudge hook for Antigravity CLI."""
+    settings_path = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
+
+    main_target, subagent_target, main_command, subagent_command = (
+        _commands_for_platform(repo, platform="antigravity")
+    )
+    nudge_target, nudge_command = _nudge_command(repo, platform="antigravity")
+    nudge_markers = _nudge_markers(nudge_target)
+
+    for script in (main_target, subagent_target, nudge_target):
+        if not os.path.exists(script):
+            print(f"error: expected file not found: {script}", file=sys.stderr)
+            print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
+            return 1
+
+    try:
+        settings = _load(settings_path)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"error: could not parse {settings_path}: {e}", file=sys.stderr)
+        print(
+            "  refusing to overwrite a malformed settings file -- fix or move it first",
+            file=sys.stderr,
+        )
+        return 1
+    except OSError as e:
+        # Unreadable settings file: report the cause and abort rather than clobber it.
+        print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
+        return 1
+
+    desired_statusline = {"type": "command", "command": main_command}
+    desired_subagent = {"type": "command", "command": subagent_command}
+
+    already_current = (
+        settings.get("statusLine") == desired_statusline
+        and settings.get("subagentStatusLine") == desired_subagent
+        and _nudge_hook_current(settings, nudge_markers, nudge_command)
+    )
+
+    if already_current:
+        if dry_run:
+            print(f"# {settings_path} already current -- nothing to write")
+        else:
+            print(f"already current: {settings_path}")
+            print(f"  statusLine:         {main_command}")
+            print(f"  subagentStatusLine: {subagent_command}")
+            print(f"  UserPromptSubmit:   {nudge_command}")
+            print("Nothing to do.")
+        return 0
+
+    settings["statusLine"] = desired_statusline
+    settings["subagentStatusLine"] = desired_subagent
+    _merge_nudge_hook(settings, nudge_markers, nudge_command)
+
+    if dry_run:
+        print(f"# would write to {settings_path}")
+        print(json.dumps(settings, indent=2))
+        return 0
+
+    _atomic_write(settings_path, settings)
+    print(f"updated {settings_path}")
+    print(f"  statusLine:         {main_command}")
+    print(f"  subagentStatusLine: {subagent_command}")
+    print(f"  UserPromptSubmit:   {nudge_command}")
+
+    print("Open a new Antigravity CLI session (or trigger a render) to pick it up.")
     return 0
 
 

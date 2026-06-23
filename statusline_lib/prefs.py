@@ -22,16 +22,18 @@ Imports: stdlib only (leaf module, like base).
 import json
 import os
 
-_DEFAULT_PREFS_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-prefs.json"
-)
+from .base import app_dir
+
+
+def default_prefs_path():
+    return os.path.join(app_dir(), ".statusline-prefs.json")
 
 
 def prefs_path():
     """The prefs file path: the STATUSLINE_PREFS_PATH override, else the default
-    ~/.claude/.statusline-prefs.json. The override is a test/relocation seam and
+    prefs file path. The override is a test/relocation seam and
     is read from the real environment (not pref(), which would recurse)."""
-    return os.environ.get("STATUSLINE_PREFS_PATH") or _DEFAULT_PREFS_PATH
+    return os.environ.get("STATUSLINE_PREFS_PATH") or default_prefs_path()
 
 
 def load_prefs():

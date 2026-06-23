@@ -1,17 +1,27 @@
 # schoen-claude-status - Test Report
 
-`2026-06-20`
+`2026-06-23`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
-| **Tests** | 31 `scripts/verify_*.py`, all passing (Linux + Windows in CI) |
-| **Git** | `47893ac` (main; working tree adds the pr-crew/coverage status post) |
+| **Tests** | 32 `scripts/verify_*.py`, all passing locally |
+| **Git** | `26882ff` (working tree adds the Pi extension port) |
 
-**This run (Phase 1, pr-crew onboarding):** statusline_lib coverage is
+**This run (Pi extension port):** statusline_lib coverage is unchanged at
+**100%** (1379/1379); the new Pi port lives in `pi-extension/` and is verified
+with a Node/Jiti render smoke against the real global loader at
+`~/.pi/agent/extensions/agent-statusline/index.ts`. The Pi extension reuses Pi's
+native session usage totals for context, cache, costs, burn rate, diffstat, and
+session/turn timing rather than translating through Claude Code's stdin payload.
+Ruff is clean. Aislop is **Healthy** (99) with one pre-existing style warning:
+`statusline_lib/pace.py` exceeds the 400-line reviewability threshold; the new
+Pi files are below the threshold and add 0 findings.
+
+**Prior run (Phase 1, pr-crew onboarding):** statusline_lib coverage was
 unchanged at **100%** (1341/1341); no behavior or test logic changed. The
-change is CI plumbing only - the repo measured 100% but never *posted* it, so
+change was CI plumbing only - the repo measured 100% but never *posted* it, so
 pr-crew's coverage gate read a missing `pr-crew/coverage` status as 0.00% and
 filed issue #12. CI now vendors the stdlib-only `ci/post-coverage-status.py`
 helper, emits a statusline_lib-scoped `coverage.json` (same scope as the 100%
@@ -40,7 +50,7 @@ reported, deliberately not fixed mid-push.
 | Tool | Result | Gate |
 |------|--------|------|
 | ruff | 0 findings | `ruff check .` + `ruff format --check .` |
-| aislop | 100 / 100, 0 findings | `npm run lint:aislop` (`aislop ci .`, failBelow 90) |
+| aislop | Healthy (99), 0 errors; 1 pre-existing style warning | `npm run lint:aislop` (`aislop ci .`, failBelow 90) |
 | pyright | non-blocking | CI runs with `\|\| true`; not run to clean |
 | shellcheck | non-blocking | CI runs with `\|\| true`; not run to clean |
 
@@ -50,13 +60,13 @@ overrides.
 
 ## Coverage (hard gate, 100%)
 
-Measured by running all 31 `verify_*.py` under coverage.py and reporting
+Measured by running all 32 `verify_*.py` under coverage.py and reporting
 `statusline_lib/` - the package that holds all logic. CI fails below 100%.
 
-**Total: 1341 / 1341 statements (100%)** - every module:
+**Total: 1379 / 1379 statements (100%)** - every module:
 `__init__` 14, `badge` 67, `base` 44, `beacon` 206, `burnrate` 145,
-`compact` 37, `cost` 105, `costfmt` 68, `diffstat` 7, `nudge` 52,
-`nudge_install` 35, `pace` 240, `prefs` 29, `project` 61, `qwen` 53,
+`compact` 37, `cost` 114, `costfmt` 68, `diffstat` 7, `nudge` 52,
+`nudge_install` 35, `pace` 269, `prefs` 29, `project` 61, `qwen` 53,
 `sessions` 114, `walker` 64.
 
 **Scope:** entry-point glue is outside the measured set, by design -

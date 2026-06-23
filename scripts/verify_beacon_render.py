@@ -18,6 +18,8 @@ from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import contextlib
+
 import statusline_lib.beacon as _beacon_mod
 from statusline_lib.beacon import (
     _compute_objective_drift,
@@ -119,6 +121,37 @@ def _check_find_session_jsonl(failures):
             os.rmdir(test_dir)
         except OSError as exc:
             failures.append(f"cleanup _find_session_jsonl test dir failed: {exc}")
+
+    # Test Antigravity path
+    anti_dir = os.path.join(
+        home,
+        ".gemini",
+        "antigravity-cli",
+        "brain",
+        test_sid,
+        ".system_generated",
+        "logs",
+    )
+    anti_path = os.path.join(anti_dir, "transcript.jsonl")
+    os.makedirs(anti_dir, exist_ok=True)
+    try:
+        with open(anti_path, "w", encoding="utf-8") as f:
+            f.write("{}\n")
+        result = _beacon_mod._find_session_jsonl(test_sid)
+        if result != anti_path:
+            failures.append(
+                f"_find_session_jsonl with real antigravity file: expected {anti_path!r}, got {result!r}"
+            )
+    finally:
+        if os.path.exists(anti_path):
+            os.unlink(anti_path)
+        # clean up directories
+        curr = anti_dir
+        for _ in range(4):
+            if os.path.exists(curr):
+                with contextlib.suppress(OSError):
+                    os.rmdir(curr)
+                curr = os.path.dirname(curr)
 
 
 def _check_iter_beacons_in_text(failures):

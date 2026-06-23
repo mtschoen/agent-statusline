@@ -36,6 +36,7 @@ from statusline_lib import (
     RED,
     RESET,
     YELLOW,
+    app_dir,
     ctx_window_for_model,
     format_beacon,
     format_cache,
@@ -45,12 +46,12 @@ from statusline_lib import (
     walk_transcript,
 )
 
-_INPUT_LOG = os.path.expanduser("~/.claude/.subagent-statusline-input.log")
-_ERROR_LOG = os.path.expanduser("~/.claude/.subagent-statusline-error.log")
+_INPUT_LOG = os.path.join(app_dir(), ".subagent-statusline-input.log")
+_ERROR_LOG = os.path.join(app_dir(), ".subagent-statusline-error.log")
 # Main statusline writes its latest payload here -- carries the authoritative
 # context_window_size, which the lead's transcript can't tell us (the JSONL
 # stores `claude-opus-4-7`, dropping the `[1m]` runtime tier suffix).
-_MAIN_INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
+_MAIN_INPUT_LOG = os.path.join(app_dir(), ".statusline-input.log")
 
 # Status -> (icon, color). Substring match so `running` / `in_progress` /
 # `completed` / `succeeded` / `error` / `failed` / `paused` / `queued` /
@@ -93,6 +94,41 @@ def _agent_jsonl_path(parent_transcript_path, task_id):
     """
     if not parent_transcript_path:
         return ""
+
+    # Check if we are running under Antigravity
+    if (
+        "antigravity-cli" in parent_transcript_path
+        or os.environ.get("ANTIGRAVITY_AGENT") == "1"
+    ):
+        home = os.path.expanduser("~")
+        direct = os.path.join(
+            home,
+            ".gemini",
+            "antigravity-cli",
+            "brain",
+            task_id,
+            ".system_generated",
+            "logs",
+            "transcript.jsonl",
+        )
+        if os.path.exists(direct):
+            return direct
+        import glob
+
+        pattern = os.path.join(
+            home,
+            ".gemini",
+            "antigravity-cli",
+            "brain",
+            "*",
+            ".system_generated",
+            "logs",
+            "transcript.jsonl",
+        )
+        for path in glob.glob(pattern):
+            if task_id in path:
+                return path
+
     base, ext = os.path.splitext(parent_transcript_path)
     if ext.lower() != ".jsonl":
         return ""
@@ -149,7 +185,7 @@ def _live_payload_for_session(session_id):
             d = json.load(f)
     except (OSError, ValueError):
         return None
-    if d.get("session_id") != session_id:
+    if (d.get("session_id") or d.get("conversation_id")) != session_id:
         return None
     return {
         "window_size": int(
@@ -238,12 +274,18 @@ def main():
     except Exception:
         d = {}
 
+    session_id = d.get("session_id") or d.get("conversation_id") or ""
     parent = d.get("transcript_path") or ""
-    session_id = d.get("session_id") or ""
+    if not parent and session_id:
+        from statusline_lib.beacon import _find_session_jsonl
+
+        parent = _find_session_jsonl(session_id) or ""
     out = sys.stdout
 
-    _local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
-        os.path.expanduser("~/.claude/.local-mode")
+    _local_mode = (
+        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
+        or os.environ.get("ANTIGRAVITY_LOCAL_MODE") == "1"
+        or os.path.isfile(os.path.join(app_dir(), ".local-mode"))
     )
     _local_prefix = f"{ORANGE}LOCAL{RESET} | " if _local_mode else ""
 

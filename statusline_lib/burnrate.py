@@ -15,6 +15,7 @@ from .base import (
     CACHE_READ,
     GREEN,
     RESET,
+    app_dir,
     color_high_bad,
     ramp_color,
     ramp_color_for,
@@ -50,9 +51,7 @@ def _rate_color(rate, target):
 
 
 _SPEND_CACHE_TTL_SECONDS = 15
-_SPEND_CACHE_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-burnrate-cache-v1.json"
-)
+_SPEND_CACHE_PATH = os.path.join(app_dir(), ".statusline-burnrate-cache-v1.json")
 
 
 def _spend_from_path(path, seen_ids, win_start):

@@ -11,7 +11,7 @@ import os
 import re as _re
 from datetime import UTC, datetime
 
-from .base import GREEN, RED, RESET, YELLOW, _json_loads
+from .base import GREEN, RED, RESET, YELLOW, _json_loads, app_dir
 from .walker import _walker_subcommand
 
 _BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
@@ -74,6 +74,20 @@ def _find_session_jsonl(session_id):
     if not session_id:
         return None
     home = os.path.expanduser("~")
+    # For Antigravity CLI:
+    antigravity_path = os.path.join(
+        home,
+        ".gemini",
+        "antigravity-cli",
+        "brain",
+        session_id,
+        ".system_generated",
+        "logs",
+        "transcript.jsonl",
+    )
+    if os.path.exists(antigravity_path):
+        return antigravity_path
+    # For Claude Code:
     pattern = os.path.join(home, ".claude", "projects", "*", f"{session_id}.jsonl")
     for path in glob.glob(pattern):
         return path
@@ -249,9 +263,7 @@ def format_beacon(session_id):
     return (f"{RED}⏱ no begin · ~{eta_min}m · {summary}{RESET}", beacon)
 
 
-_BIAS_CACHE_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-bias-cache.json"
-)
+_BIAS_CACHE_PATH = os.path.join(app_dir(), ".statusline-bias-cache.json")
 _BIAS_CACHE_TTL_SECONDS = 60
 _CALIBRATION_MIN_PAIRS = 20
 

@@ -9,7 +9,7 @@ import os
 import shutil
 import subprocess
 
-from .base import _json_loads
+from .base import _json_loads, app_dir
 
 _WALKER_BIN_ENV = "CLAUDE_WALKER_BIN"
 
@@ -45,9 +45,7 @@ def _find_walker_binary():
     return None
 
 
-_WALKER_ROOTS_CONFIG_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", "walker-roots.json"
-)
+_WALKER_ROOTS_CONFIG_PATH = os.path.join(app_dir(), "walker-roots.json")
 
 
 def _walker_root_list():
@@ -58,7 +56,21 @@ def _walker_root_list():
     into the result. Realpath-deduped.
     """
     home = os.path.expanduser("~")
-    default = os.path.join(home, ".claude", "projects")
+    if os.environ.get("STATUSLINE_PLATFORM") == "antigravity":
+        default = os.path.join(home, ".gemini", "antigravity-cli", "brain")
+    elif os.environ.get("STATUSLINE_PLATFORM") == "claude":
+        default = os.path.join(home, ".claude", "projects")
+    elif os.environ.get("ANTIGRAVITY_AGENT") == "1" or os.environ.get(
+        "ANTIGRAVITY_CONVERSATION_ID"
+    ):
+        if not os.path.exists(
+            os.path.join(home, ".gemini", "antigravity-cli")
+        ) and os.path.exists(os.path.join(home, ".claude")):
+            default = os.path.join(home, ".claude", "projects")
+        else:
+            default = os.path.join(home, ".gemini", "antigravity-cli", "brain")
+    else:
+        default = os.path.join(home, ".claude", "projects")
     all_paths = [default]
     try:
         with open(_WALKER_ROOTS_CONFIG_PATH, encoding="utf-8") as f:

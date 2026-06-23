@@ -15,6 +15,8 @@ import json
 import os
 import time
 
+from .base import app_dir
+
 _psutil = None  # cached module handle within a process; None if unavailable.
 
 
@@ -31,7 +33,7 @@ def _resolve_psutil():
 
 
 _SESSION_COUNT_CACHE_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-sessioncount-cache.json"
+    app_dir(), ".statusline-sessioncount-cache.json"
 )
 _SESSION_COUNT_CACHE_TTL_SECONDS = 8
 _SESSION_COUNT_CACHE_MAX_AGE_SECONDS = 86400  # prune entries older than a day
@@ -148,9 +150,7 @@ def _count_via_psutil(target_cwd, psutil):
 # previous episode's clearing render was missed (lazy refresh), so we treat
 # the new observation as a fresh episode and re-arm rather than trust a stale
 # "first" stamp.
-_SESSION_DEBOUNCE_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-session-debounce.json"
-)
+_SESSION_DEBOUNCE_PATH = os.path.join(app_dir(), ".statusline-session-debounce.json")
 _SESSION_DEBOUNCE_DWELL_SECONDS = 20
 _SESSION_DEBOUNCE_GAP_SECONDS = 30
 _SESSION_DEBOUNCE_MAX_AGE_SECONDS = 86400  # prune entries older than a day

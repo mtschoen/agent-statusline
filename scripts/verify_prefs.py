@@ -149,12 +149,42 @@ def _check_broken_file_is_empty(failures):
             failures.append(f"{why} prefs should degrade to env; got {got!r}")
 
 
+def _check_app_dir(failures):
+    from statusline_lib.base import app_dir
+
+    original_environ = os.environ.copy()
+    try:
+        # 1. STATUSLINE_PLATFORM = "antigravity"
+        os.environ.clear()
+        os.environ["STATUSLINE_PLATFORM"] = "antigravity"
+        res = app_dir()
+        if not res.endswith(os.path.join(".gemini", "antigravity-cli")):
+            failures.append(f"app_dir with platform=antigravity failed: {res}")
+
+        # 2. STATUSLINE_PLATFORM = "claude"
+        os.environ.clear()
+        os.environ["STATUSLINE_PLATFORM"] = "claude"
+        res = app_dir()
+        if not res.endswith(".claude"):
+            failures.append(f"app_dir with platform=claude failed: {res}")
+
+        # 3. No env variables
+        os.environ.clear()
+        res = app_dir()
+        if not res.endswith(".claude"):
+            failures.append(f"app_dir with no env failed: {res}")
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+
+
 def check(failures):
     _check_precedence(failures)
     _check_null_is_absent(failures)
     _check_non_string_coerced(failures)
     _check_pref_bool(failures)
     _check_broken_file_is_empty(failures)
+    _check_app_dir(failures)
 
 
 def main():

@@ -11,7 +11,7 @@ import json
 import os
 from datetime import UTC, datetime
 
-from .base import GREEN, RESET, _json_loads, color_high_bad, ramp_color_for
+from .base import GREEN, RESET, _json_loads, app_dir, color_high_bad, ramp_color_for
 from .cost import _cost_for_turn
 from .prefs import pref
 from .project import is_on_target, project_delta
@@ -35,7 +35,7 @@ def _now_unix():
 
 _PACE_CACHE_TTL_SECONDS = 15  # 15s: spike visible quickly, cache miss still fast
 _PACE_HOURLY_CACHE_PATH = os.path.join(
-    os.path.expanduser("~"), ".claude", ".statusline-pace-hourly-cache-v1.json"
+    app_dir(), ".statusline-pace-hourly-cache-v1.json"
 )
 
 

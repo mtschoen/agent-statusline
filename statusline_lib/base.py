@@ -4,6 +4,7 @@ No imports from sibling modules — keeps the dependency order clean.
 """
 
 import json
+import os
 
 # orjson: optional, ~3-5x faster per-line parse; stdlib json fallback.
 try:
@@ -84,3 +85,26 @@ def ramp_color_for(value, warn, danger):
     if warn == danger:
         return ramp_color(1.0 if value >= warn else 0.0)
     return ramp_color((value - warn) / (danger - warn))
+
+
+def app_dir():
+    """Return the absolute path to the app's configuration/data directory.
+    Defaults to ~/.claude, but switches to ~/.gemini/antigravity-cli
+    if running under Antigravity CLI."""
+    if os.environ.get("STATUSLINE_PLATFORM") == "antigravity":
+        return os.path.join(os.path.expanduser("~"), ".gemini", "antigravity-cli")
+    if os.environ.get("STATUSLINE_PLATFORM") == "claude":
+        return os.path.join(os.path.expanduser("~"), ".claude")
+
+    if os.environ.get("ANTIGRAVITY_AGENT") == "1" or os.environ.get(
+        "ANTIGRAVITY_CONVERSATION_ID"
+    ):
+        home = os.path.expanduser("~")
+        # Test isolation check: if home is mocked in verify tests, .gemini/antigravity-cli won't exist
+        # but .claude might.
+        if not os.path.exists(
+            os.path.join(home, ".gemini", "antigravity-cli")
+        ) and os.path.exists(os.path.join(home, ".claude")):
+            return os.path.join(home, ".claude")
+        return os.path.join(home, ".gemini", "antigravity-cli")
+    return os.path.join(os.path.expanduser("~"), ".claude")

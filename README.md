@@ -5,7 +5,8 @@ context, session-wide cache hit %, 5-hour and weekly rate-limit usage with
 pace projection, total session cost, a live `$/min` burn rate, and (when a
 [progress-beacon](https://github.com/mtschoen/skills-progress-beacon)
 is active) a live ETA for the current turn - all colored by configurable
-thresholds.
+thresholds. A Pi extension port lives under `pi-extension/` and reuses the
+same visual language against Pi's native session usage data.
 
 What it looks like at a typical terminal width (compact auto-shedding has
 dropped the widest embellishments so the line fits):
@@ -282,23 +283,28 @@ constants in the script if your scale differs.
 git clone https://github.com/mtschoen/schoen-claude-status.git ~/schoen-claude-status
 ```
 
-Then wire both the lead and per-agent statuslines into `~/.claude/settings.json`.
-The repo ships an installer that does the JSON merge for you, preserving every
-other key:
+Then wire the statuslines and nudge hooks into the configuration file. The repo ships an installer that does the JSON merge for you, preserving every other key:
 
 ```sh
-# macOS / Linux / Git Bash
+# macOS / Linux / Git Bash (Claude Code by default)
 ~/schoen-claude-status/install.sh
 
-# Windows (cmd / PowerShell)
+# Windows cmd / PowerShell (Claude Code by default)
 %USERPROFILE%\schoen-claude-status\install.bat
+
+# For Antigravity CLI:
+~/schoen-claude-status/install.sh --platform antigravity
 ```
 
-It's idempotent - re-run any time and it'll just refresh the two `command`
-strings to point at the current checkout. Pass `--dry-run` to preview the
-merged JSON without writing.
+It's idempotent - re-run any time and it'll just refresh the configuration strings to point at the current checkout. Pass `--dry-run` to preview the merged JSON without writing.
 
-If you'd rather edit `~/.claude/settings.json` by hand, the equivalent block
+Options:
+- `--platform claude`       (default) Installs to `~/.claude/settings.json`
+- `--platform antigravity`  Installs to `~/.gemini/antigravity-cli/settings.json`
+- `--platform qwen`         Installs to `~/.qwen/settings.json`
+- `--platform both`         Installs to both Claude and Qwen
+
+If you'd rather edit settings by hand, the equivalent block
 is:
 
 ```json
@@ -320,6 +326,29 @@ one leaves the other half of the UI on the default rendering. The next render
 picks up the change with no restart needed. Omitting `subagentStatusLine`
 keeps Claude Code's default `name · description · token count` rendering in
 the agent panel.
+
+### Pi extension
+
+Pi does not run command-style `statusLine` scripts. Instead, it loads a
+TypeScript extension that replaces the footer with a multi-line render. The
+repo-owned entry point is `pi-extension/index.ts`; install it globally by adding
+a loader at `~/.pi/agent/extensions/agent-statusline/index.ts` with an absolute
+path to your checkout:
+
+```ts
+export { default } from "/home/you/schoen-claude-status/pi-extension/index.ts";
+// Windows example: export { default } from "C:/Users/you/schoen-claude-status/pi-extension/index.ts";
+```
+
+The current Pi port renders the same core signals from Pi's native session
+objects: host/cwd/git/session id, model badge, context occupancy, session-wide
+input/cache-read/cache-write/output cost split, cache hit %, TTL rewrite count,
+API response rate-limit headers when providers expose them, daily-budget and
+live burn-rate signals, total cost, diffstat, and session/turn timing. Claude
+Code-specific signals that Pi does not currently expose as the same payload
+(`rate_limits` weekly quota projections, subagent transcript split, and
+progress-beacon calibration) are omitted until Pi surfaces equivalent data or a
+separate walker is added.
 
 ### Per-agent status lines
 

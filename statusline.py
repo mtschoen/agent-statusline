@@ -27,6 +27,7 @@ from statusline_lib import (
     ORANGE,
     RED,
     RESET,
+    app_dir,
     count_active_sessions,
     debounce_session_count,
     format_beacon,
@@ -50,8 +51,8 @@ from statusline_lib import (
 )
 from statusline_lib.nudge import write_ctx_state
 
-_INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
-_ERROR_LOG = os.path.expanduser("~/.claude/.statusline-error.log")
+_INPUT_LOG = os.path.join(app_dir(), ".statusline-input.log")
+_ERROR_LOG = os.path.join(app_dir(), ".statusline-error.log")
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -144,8 +145,10 @@ def _format_cwd(home, current):
 
 
 def _line1(d, cwd, cwd_display, spinner):
-    local_mode = os.environ.get("CLAUDE_LOCAL_MODE") == "1" or os.path.isfile(
-        os.path.expanduser("~/.claude/.local-mode")
+    local_mode = (
+        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
+        or os.environ.get("ANTIGRAVITY_LOCAL_MODE") == "1"
+        or os.path.isfile(os.path.join(app_dir(), ".local-mode"))
     )
     host = f"{_HOST_COLOR}{_hostname()}{RESET}"
     line1 = (
@@ -161,8 +164,10 @@ def _line1(d, cwd, cwd_display, spinner):
     ref = _git_ref(cwd)
     if ref:
         line1 = f"{line1} ({ref})"
-    line1 = _append_session_id(line1, d.get("session_id"))
-    return _append_session_name(line1, d.get("session_name"))
+    session_id = d.get("session_id") or d.get("conversation_id")
+    session_name = d.get("session_name") or d.get("session_title") or d.get("title")
+    line1 = _append_session_id(line1, session_id)
+    return _append_session_name(line1, session_name)
 
 
 # Muted grey so the session title reads as a secondary label, not a headline.
@@ -346,11 +351,18 @@ def main():
     model_id = model_obj.get("id") or ""
     model_summary = format_model_badge(model_id, model_obj.get("display_name") or "")
 
+    session_id = d.get("session_id") or d.get("conversation_id") or ""
+
     # Bridge occupancy to the wrap nudge hook (its payload can't see it).
-    write_ctx_state(d.get("session_id") or "", ctx_used, window_size, time.time())
+    write_ctx_state(session_id, ctx_used, window_size, time.time())
 
     # Walk the session + subagent JSONLs to sum cache/cost/TTL across all turns.
-    walk = walk_transcript(d.get("transcript_path") or "", include_subagents=True)
+    transcript_path = d.get("transcript_path")
+    if not transcript_path and session_id:
+        from statusline_lib.beacon import _find_session_jsonl
+
+        transcript_path = _find_session_jsonl(session_id)
+    walk = walk_transcript(transcript_path or "", include_subagents=True)
 
     # Payload total_cost_usd is parent-only (Claude Code issue #48040: subagents
     # are isolated sessions). Pair it with our subagent estimate; walk["parent_cost"]
@@ -403,7 +415,7 @@ def main():
         for part in (
             format_session_timing(cost),
             weekly_exhaustion(rate_limits),
-            _beacon_line(d.get("session_id") or ""),
+            _beacon_line(session_id),
         )
         if part
     )
@@ -430,6 +442,8 @@ if __name__ == "__main__":
     except Exception:
         _log_error()
         with contextlib.suppress(Exception):
-            sys.stdout.write(
-                f"{RED}STATUSLINE ERROR{RESET} — see ~/.claude/.statusline-error.log"
+            log_path = os.path.join(app_dir(), ".statusline-error.log")
+            readable_log_path = log_path.replace(os.path.expanduser("~"), "~").replace(
+                "\\", "/"
             )
+            sys.stdout.write(f"{RED}STATUSLINE ERROR{RESET} — see {readable_log_path}")

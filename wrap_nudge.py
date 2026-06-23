@@ -20,6 +20,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from statusline_lib.base import app_dir
 from statusline_lib.nudge import (
     format_nudge,
     read_ctx_used,
@@ -35,7 +36,7 @@ def _log_error(message):
     file rather than stdout on purpose: stdout would inject the error into
     Claude's context on every prompt while the hook is broken."""
     try:
-        log = os.path.join(os.path.expanduser("~/.claude"), "wrap_nudge_hook.log")
+        log = os.path.join(app_dir(), "wrap_nudge_hook.log")
         os.makedirs(os.path.dirname(log), exist_ok=True)
         stamp = datetime.datetime.now().isoformat(timespec="seconds")
         with open(log, "a", encoding="utf-8") as f:
@@ -66,7 +67,7 @@ def run(stdin_text):
         payload = json.loads(stdin_text or "{}")
     except ValueError:
         return None
-    session_id = payload.get("session_id") or ""
+    session_id = payload.get("session_id") or payload.get("conversation_id") or ""
     if not session_id:
         return None
     ctx_used = read_ctx_used(session_id)

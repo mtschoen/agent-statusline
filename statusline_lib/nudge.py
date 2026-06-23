@@ -22,6 +22,8 @@ each other's occupancy or one-shot marker.
 import json
 import os
 
+from .base import app_dir
+
 # Context-hygiene caution line; also the statusline yellow anchor on 1M models.
 # NOT a pricing boundary -- the 1M tier bills flat (see module docstring).
 NUDGE_THRESHOLD_TOKENS = 250_000
@@ -53,7 +55,8 @@ def _state_dir(state_dir=None):
     return (
         state_dir
         or os.environ.get("CLAUDE_STATE_DIR")
-        or os.path.expanduser("~/.claude/state")
+        or os.environ.get("ANTIGRAVITY_STATE_DIR")
+        or os.path.join(app_dir(), "state")
     )
 
 

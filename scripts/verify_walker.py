@@ -312,6 +312,50 @@ def _check_subcommand_json_parse_failure(failures):
         restore_walker_state(state)
 
 
+def _check_root_list_platform_branches(failures):
+    state = save_walker_state()
+    original_expanduser = walker_module.os.path.expanduser
+    original_environ = os.environ.copy()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            # We want default paths to exist so they aren't filtered out of _walker_root_list()
+            # default = ~/.gemini/antigravity-cli/brain
+            anti_brain = os.path.join(tmp, ".gemini", "antigravity-cli", "brain")
+            os.makedirs(anti_brain, exist_ok=True)
+            # default = ~/.claude/projects
+            claude_projects = os.path.join(tmp, ".claude", "projects")
+            os.makedirs(claude_projects, exist_ok=True)
+
+            walker_module.os.path.expanduser = _fake_expanduser_for(
+                tmp, original_expanduser
+            )
+            # 1. STATUSLINE_PLATFORM = "antigravity"
+            os.environ.clear()
+            os.environ["STATUSLINE_PLATFORM"] = "antigravity"
+            res = _walker_root_list()
+            if os.path.realpath(anti_brain) not in res:
+                failures.append(f"platform=antigravity missing anti_brain, got {res!r}")
+
+            # 2. STATUSLINE_PLATFORM = "claude"
+            os.environ.clear()
+            os.environ["STATUSLINE_PLATFORM"] = "claude"
+            res = _walker_root_list()
+            if os.path.realpath(claude_projects) not in res:
+                failures.append(f"platform=claude missing claude_projects, got {res!r}")
+
+            # 3. No env variables at all
+            os.environ.clear()
+            res = _walker_root_list()
+            if os.path.realpath(claude_projects) not in res:
+                failures.append(f"no platform env missing claude_projects, got {res!r}")
+
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        restore_walker_state(state)
+        walker_module.os.path.expanduser = original_expanduser
+
+
 def main():
     failures = []
 
@@ -321,6 +365,7 @@ def main():
     _check_root_list_dedup(failures)
     _check_root_list_non_list_extra_roots(failures)
     _check_root_list_realpath_oserror(failures)
+    _check_root_list_platform_branches(failures)
 
     _check_subcommand_no_binary(failures)
     _check_subcommand_success(failures)

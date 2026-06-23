@@ -2,7 +2,7 @@
 and prints up to three lines:
   line 1: [host] home [rel-cwd] (branch) <session title, if it fits>
   line 2: ctx | cache | ttl | quota | cost | +/-lines  (fields omitted when their data is absent)
-  line 3: session wall/api timing  ·  live turn beacon + calibrated ETA
+  line 3: session wall/api timing  ·  weekly-quota exhaustion clock (>90%)  ·  live turn beacon + calibrated ETA
 
 See README.md for layout, color thresholds, and install instructions.
 """
@@ -46,6 +46,7 @@ from statusline_lib import (
     terminal_columns,
     visible_width,
     walk_transcript,
+    weekly_exhaustion,
 )
 from statusline_lib.nudge import write_ctx_state
 
@@ -393,13 +394,15 @@ def main():
     if line2:
         sys.stdout.write("\n" + line2)
 
-    # Line 3: session wall/api timing (always available) ahead of the live turn
-    # beacon + calibrated ETA (only while a turn is in flight). Either may be
-    # absent; join with the same separator the beacon uses internally.
+    # Line 3: session wall/api timing (always available), then the weekly-quota
+    # exhaustion clock (only past 90% and projected to run out before reset),
+    # then the live turn beacon + calibrated ETA (only while a turn is in
+    # flight). Any may be absent; join with the same separator the beacon uses.
     line3 = "  ·  ".join(
         part
         for part in (
             format_session_timing(cost),
+            weekly_exhaustion(rate_limits),
             _beacon_line(d.get("session_id") or ""),
         )
         if part

@@ -163,6 +163,7 @@ from .pace import (
     _walk_session_hourly,
     _weekly_deltas,
     format_quota,
+    weekly_exhaustion,
     weekly_needle,
 )
 from .prefs import (
@@ -246,5 +247,6 @@ __all__ = [
     "terminal_columns",
     "visible_width",
     "walk_transcript",
+    "weekly_exhaustion",
     "weekly_needle",
 ]

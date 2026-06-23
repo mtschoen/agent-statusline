@@ -167,10 +167,12 @@ identity); fields are omitted when their data isn't available:
   fields it **survives `STATUSLINE_HIDE_COST`**; it's gated only by width
   (drops fairly early in compact mode). Omitted until something has changed.
 
-**Line 3** - session timing, then the live turn beacon. Either part may be
-absent: the timing shows whenever the payload carries durations (almost
-always), the beacon only while a turn is in flight, so line 3 appears more
-often than before. Example:
+**Line 3** - session timing, then the weekly-quota exhaustion clock (only past
+90%), then the live turn beacon. Any part may be absent: the timing shows
+whenever the payload carries durations (almost always), the exhaustion clock
+only when the weekly quota is over 90% _and_ projected to run out before reset,
+the beacon only while a turn is in flight, so line 3 appears more often than
+before. Example:
 
 ```
 ⏳ 1h02m · 27m api  ·  ⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
@@ -181,6 +183,15 @@ often than before. Example:
   (`cost.total_api_duration_ms`), so the pair shows how compute-bound the
   session has been. Muted grey - ambient context, not a warning. The `⏳`
   hourglass is deliberately distinct from the beacon's `⏱` turn timer.
+
+- **Weekly-quota exhaustion clock** (`wk 100% ~6:02am`) - the local clock time
+  the weekly quota is projected to hit 100% at the _current_ burn rate. Shown
+  only past 90% utilization _and_ when that forecast lands before the window
+  resets (if you are on pace to make it to reset you will not run out, so it
+  stays hidden). The weekday is prefixed only when it is not today
+  (`wk 100% ~Tue 6:02am`). Tinted with the same color as line 2's `wk:` quota %,
+  so past 90% it reads solid red - running out this early means the quota burned
+  too fast.
 
 The remainder of the line is the **progress-beacon** (only when one is active),
 field-by-field:

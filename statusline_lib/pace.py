@@ -346,6 +346,63 @@ def weekly_sustainable_rate(rate_limits):
     return remaining_dollars / (remaining / 60.0)
 
 
+# Past this weekly utilization the window is close enough to running out that an
+# absolute "hits 100% at <clock>" beats the relative +Hh pace number on line 2;
+# below it the field stays hidden. ">90%" -> show strictly above 90.
+_WEEKLY_EXHAUSTION_MIN_UTIL_PCT = 90.0
+
+
+def _fmt_local_clock(unix_ts):
+    """`unix_ts` as a local 12-hour clock, weekday-prefixed only when it is not
+    today: "6:00pm" today, "Tue 6:00pm" otherwise. strftime's %I/%p are avoided
+    (%I zero-pads the hour and %p casing/availability vary by platform), so the
+    12-hour parts are assembled by hand for stable cross-platform output."""
+    dt = datetime.fromtimestamp(unix_ts, tz=UTC).astimezone()
+    hour12 = dt.hour % 12 or 12
+    ampm = "am" if dt.hour < 12 else "pm"
+    clock = f"{hour12}:{dt.minute:02d}{ampm}"
+    today = datetime.fromtimestamp(_now_unix(), tz=UTC).astimezone().date()
+    if dt.date() == today:
+        return clock
+    return f"{dt:%a} {clock}"
+
+
+def weekly_exhaustion(rate_limits):
+    """Line-3 field "wk 100% ~<clock>": the local time the weekly quota is
+    projected to reach 100% at the *current* burn rate, tinted to match line 2's
+    weekly quota % (red past 90% -- running out this early means the quota burned
+    too fast). "" unless utilization is past _WEEKLY_EXHAUSTION_MIN_UTIL_PCT AND
+    the current-rate forecast lands 100% before the window resets -- if you are
+    on pace to make it to reset you will not run out, so nothing is shown.
+
+    Mirrors weekly_needle's degrade-not-raise contract: malformed rate_limits
+    yields no field rather than crashing the statusline.
+    """
+    try:
+        rl = rate_limits or {}
+        w = rl.get("seven_day") or {}
+        util = w.get("used_percentage")
+        resets_at = w.get("resets_at")
+        if util is None or util <= _WEEKLY_EXHAUSTION_MIN_UTIL_PCT or not resets_at:
+            return ""
+        deltas = _weekly_deltas(util, resets_at, 7 * 86400)
+        if deltas is None:
+            return ""
+        _cumulative, current_rate_delta, _warn_threshold, _elapsed = deltas
+        if current_rate_delta is None or current_rate_delta >= 0:
+            # No live-rate calibration, or the forecast lands at/after reset
+            # (you make it to the window reset -- not going to run out).
+            return ""
+        exhaustion_unix = resets_at + current_rate_delta
+        # Same hue as line 2's weekly quota %: ramp_color_for(util, 75, 90)
+        # mirrors format_quota's color_high_bad(util, 75, 90). This field only
+        # shows past 90%, so it tracks that number into solid red.
+        color = ramp_color_for(util, 75, 90)
+        return f"{color}wk 100% ~{_fmt_local_clock(exhaustion_unix)}{RESET}"
+    except Exception:
+        return ""
+
+
 def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
     """Returns ' <+-Hh>' (colored cumulative pace) or '' if not enough data.
 

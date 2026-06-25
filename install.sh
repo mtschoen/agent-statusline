@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Wire both statusLine and subagentStatusLine into ~/.claude/settings.json.
-# Re-run any time -- it preserves every other key in settings.json.
+# Install statusline hooks/settings for the selected platform.
+# Re-run any time -- it preserves unrelated existing keys.
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY=python3

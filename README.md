@@ -294,6 +294,9 @@ Then wire the statuslines and nudge hooks into the configuration file. The repo 
 
 # For Antigravity CLI:
 ~/schoen-claude-status/install.sh --platform antigravity
+
+# For Pi:
+~/schoen-claude-status/install.sh --platform pi
 ```
 
 It's idempotent - re-run any time and it'll just refresh the configuration strings to point at the current checkout. Pass `--dry-run` to preview the merged JSON without writing.
@@ -303,6 +306,7 @@ Options:
 - `--platform antigravity`  Installs to `~/.gemini/antigravity-cli/settings.json`
 - `--platform qwen`         Installs to `~/.qwen/settings.json`
 - `--platform both`         Installs to both Claude and Qwen
+- `--platform pi`           Installs Pi extension loader to `~/.pi/agent/extensions/agent-statusline/index.ts`
 
 If you'd rather edit settings by hand, the equivalent block
 is:
@@ -334,6 +338,13 @@ TypeScript extension that replaces the footer with a multi-line render. The
 repo-owned entry point is `pi-extension/index.ts`; install it globally by adding
 a loader at `~/.pi/agent/extensions/agent-statusline/index.ts` with an absolute
 path to your checkout:
+
+```sh
+# Or run installer:
+~/schoen-claude-status/install.sh --platform pi
+```
+
+to generate this file automatically from the checkout:
 
 ```ts
 export { default } from "/home/you/schoen-claude-status/pi-extension/index.ts";

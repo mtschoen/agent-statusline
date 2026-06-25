@@ -12,9 +12,20 @@ export default function (pi: any) {
 		spendCache: new Map(),
 		gitCache: undefined,
 		diffCache: undefined,
+		gitRepoCache: undefined,
+		totalsCache: undefined,
+		spendSessionPath: undefined,
+		spendSessionId: undefined,
 	};
 
 	pi.on("session_start", async (_event: any, ctx: any) => {
+		state.totalsCache = undefined;
+		state.spendCache = new Map();
+		state.spendSessionPath = undefined;
+		state.spendSessionId = undefined;
+		state.gitCache = undefined;
+		state.diffCache = undefined;
+		state.gitRepoCache = undefined;
 		if (ctx.hasUI) installStatuslineFooter(ctx, state);
 	});
 	pi.on("turn_start", async (event: any) => {

@@ -1,6 +1,6 @@
 @echo off
-rem Wire both statusLine and subagentStatusLine into %USERPROFILE%\.claude\settings.json.
-rem Re-run any time -- it preserves every other key in settings.json.
+rem Install statusline hooks/settings for the selected platform.
+rem Re-run any time -- it preserves unrelated existing keys.
 setlocal
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"

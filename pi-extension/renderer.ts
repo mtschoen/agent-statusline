@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join, normalize, relative } from "node:path";
+import { dirname, join, normalize, relative } from "node:path";
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
@@ -26,9 +26,13 @@ export interface RenderState {
 	turnIndex: number;
 	lastProviderStatus: number | undefined;
 	lastHeaders: Record<string, string>;
-	spendCache: Map<string, { computedAt: number; spend: number }>;
+	spendCache: Map<string, { computedAt: number; spend: number; sourcePath?: string }>;
 	gitCache: { cwd: string; computedAt: number; value: string } | undefined;
 	diffCache: { cwd: string; computedAt: number; value: string } | undefined;
+	gitRepoCache: { cwd: string; computedAt: number; value: boolean } | undefined;
+	totalsCache: CachedTotals | undefined;
+	spendSessionPath: string | undefined;
+	spendSessionId: string | undefined;
 }
 
 interface Totals {
@@ -45,6 +49,12 @@ interface Totals {
 	lastModel: string;
 	ttlEvictions: number;
 	ttlWasted: number;
+	currentContextTokens: number;
+}
+
+interface CachedTotals {
+	fingerprint: string;
+	value: Totals;
 }
 
 function color(text: string, ansi: string): string {
@@ -135,45 +145,51 @@ function timestampMs(value: string | number | undefined): number | undefined {
 	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function latestContextEstimate(ctx: any): number {
-	for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		const usage = entry.message.usage;
-		return (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+function branchFingerprint(branch: any[]): string {
+	const count = branch.length;
+	if (count === 0) return "0";
+
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
+		const usage = entry.message.usage ?? {};
+		const model = entry.message.responseModel ?? entry.message.model ?? "";
+		const currentTimestamp = timestampMs(entry.timestamp) ?? entry.message.timestamp;
+		return `${count}|${index}|${currentTimestamp ?? ""}|${model}|${usage.input ?? 0}|${usage.cacheRead ?? 0}|${usage.cacheWrite ?? 0}|${usage.output ?? 0}|${usage.cost?.total ?? 0}`;
 	}
-	return 0;
+
+	return String(count);
 }
 
-function contextSummary(ctx: any): string {
-	const usage = ctx.getContextUsage();
-	const windowSize = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-	const tokens = usage?.tokens ?? latestContextEstimate(ctx);
-	if (!tokens || !windowSize) return "";
-	const percent = (tokens / windowSize) * 100;
-	const ansi = highBadColor(percent, windowSize >= 1_000_000 ? 50 : 60, 85);
-	return `${color(humanNumber(tokens), ansi)} / ${color(humanNumber(windowSize), MAUVE)} (${color(`${percent.toFixed(1)}%`, ansi)})`;
-}
-
-function cacheTtlSeconds(usage: any): number {
-	const oneHour = usage.cacheWrite1h ?? 0;
-	const fiveMinute = Math.max(0, (usage.cacheWrite ?? 0) - oneHour);
-	if (oneHour || fiveMinute) return oneHour >= fiveMinute ? 3600 : 300;
-	return 3600;
-}
-
-function totalsFromBranch(ctx: any): Totals {
-	const totals: Totals = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, inputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, outputCost: 0, totalCost: 0, turns: 0, lastModel: ctx.model?.id ?? "", ttlEvictions: 0, ttlWasted: 0 };
+function totalsFromBranch(branch: any[]): Totals {
+	const totals: Totals = {
+		input: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		output: 0,
+		inputCost: 0,
+		cacheReadCost: 0,
+		cacheWriteCost: 0,
+		outputCost: 0,
+		totalCost: 0,
+		turns: 0,
+		lastModel: "",
+		ttlEvictions: 0,
+		ttlWasted: 0,
+		currentContextTokens: 0,
+	};
 	let previousTimestamp: number | undefined;
 	let previousTtlSeconds = 3600;
-	for (const entry of ctx.sessionManager.getBranch()) {
+	for (const entry of branch) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		const message = entry.message;
-		const usage = message.usage;
+		const usage = message.usage ?? {};
 		totals.turns += 1;
 		totals.input += usage.input ?? 0;
 		totals.cacheRead += usage.cacheRead ?? 0;
 		totals.cacheWrite += usage.cacheWrite ?? 0;
 		totals.output += usage.output ?? 0;
+		totals.currentContextTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
 		totals.inputCost += usage.cost?.input ?? 0;
 		totals.cacheReadCost += usage.cost?.cacheRead ?? 0;
 		totals.cacheWriteCost += usage.cost?.cacheWrite ?? 0;
@@ -184,12 +200,98 @@ function totalsFromBranch(ctx: any): Totals {
 		const idleGapExceeded = previousTimestamp !== undefined && currentTimestamp !== undefined && (currentTimestamp - previousTimestamp) / 1000 > previousTtlSeconds;
 		if (totals.turns > 1 && (usage.cacheRead ?? 0) === 0 && (usage.cacheWrite ?? 0) >= 1000 && idleGapExceeded) {
 			totals.ttlEvictions += 1;
-			totals.ttlWasted += (usage.cacheWrite ?? 0) * (ctx.model?.cost.input ?? 3) * 1.15 / 1_000_000;
+			totals.ttlWasted +=
+				(usage.cacheWrite ?? 0) *
+				inputRatePerMillion(message.responseModel ?? message.model) *
+				1.15 /
+				1_000_000;
 		}
 		previousTimestamp = currentTimestamp;
 		previousTtlSeconds = cacheTtlSeconds(usage);
 	}
+	if (!totals.lastModel) totals.lastModel = branch?.at?.(-1)?.message?.responseModel ?? branch?.at?.(-1)?.message?.model ?? "";
 	return totals;
+}
+
+function branchTotals(ctx: any, state: RenderState): Totals {
+	const branch = ctx.sessionManager.getBranch();
+	const fingerprint = branchFingerprint(branch);
+	if (state.totalsCache?.fingerprint === fingerprint) {
+		return state.totalsCache.value;
+	}
+	const totals = totalsFromBranch(branch);
+	state.totalsCache = { fingerprint, value: totals };
+	return totals;
+}
+
+function contextSummary(ctx: any, totals?: Totals): string {
+	const usage = ctx.getContextUsage();
+	const windowSize = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+	const tokens = usage?.tokens ?? totals?.currentContextTokens ?? 0;
+	if (!tokens || !windowSize) return "";
+	const percent = (tokens / windowSize) * 100;
+	const ansi = highBadColor(percent, windowSize >= 1_000_000 ? 50 : 60, 85);
+	return `${color(humanNumber(tokens), ansi)} / ${color(humanNumber(windowSize), MAUVE)} (${color(`${percent.toFixed(1)}%`, ansi)})`;
+}
+
+function resolveSessionTranscriptPath(sessionId: string | undefined, state: RenderState): string | undefined {
+	if (!sessionId) return undefined;
+	if (state.spendSessionId === sessionId && state.spendSessionPath) return state.spendSessionPath;
+	const sessionsRoot = join(homedir(), ".pi", "agent", "sessions");
+	try {
+		for (const project of readdirSync(sessionsRoot)) {
+			const projectPath = join(sessionsRoot, project);
+			if (!statSync(projectPath).isDirectory()) continue;
+			for (const file of readdirSync(projectPath)) {
+				if (!file.endsWith(".jsonl") || !file.includes(sessionId)) continue;
+				const sessionPath = join(projectPath, file);
+				state.spendSessionPath = sessionPath;
+				state.spendSessionId = sessionId;
+				return sessionPath;
+			}
+		}
+	} catch {
+		// fall through to global scan fallback
+	}
+	state.spendSessionPath = undefined;
+	state.spendSessionId = sessionId;
+	return undefined;
+}
+
+function spendFromAllSessions(windowStart: number): number {
+	let spend = 0;
+	try {
+		for (const project of readdirSync(join(homedir(), ".pi", "agent", "sessions"))) {
+			const projectPath = join(homedir(), ".pi", "agent", "sessions", project);
+			if (!statSync(projectPath).isDirectory()) continue;
+			for (const file of readdirSync(projectPath)) {
+				if (!file.endsWith(".jsonl")) continue;
+				const path = join(projectPath, file);
+				if (statSync(path).mtimeMs >= windowStart) {
+					spend += spendFromFile(path, windowStart);
+				}
+			}
+		}
+	} catch {
+		spend = 0;
+	}
+	return spend;
+}
+
+function inputRatePerMillion(modelId: string | undefined): number {
+	const lowered = (modelId ?? "").toLowerCase();
+	if (lowered.includes("fable")) return 10;
+	if (lowered.includes("opus")) return 5;
+	if (lowered.includes("sonnet")) return 3;
+	if (lowered.includes("haiku")) return 1;
+	return 3;
+}
+
+function cacheTtlSeconds(usage: any): number {
+	const oneHour = usage.cacheWrite1h ?? 0;
+	const fiveMinute = Math.max(0, (usage.cacheWrite ?? 0) - oneHour);
+	if (oneHour || fiveMinute) return oneHour >= fiveMinute ? 3600 : 300;
+	return 3600;
 }
 
 function cacheSummary(totals: Totals, verbose: boolean): string {
@@ -214,27 +316,17 @@ function costSummary(totals: Totals): string {
 	return color(money(totals.totalCost), totals.totalCost >= 70 ? RED : totals.totalCost >= 35 ? YELLOW : GREEN);
 }
 
-function spendSince(windowMilliseconds: number, state: RenderState): number {
+function spendSince(windowMilliseconds: number, state: RenderState, sessionId: string | undefined): number {
 	const key = String(windowMilliseconds);
-	const cached = state.spendCache.get(key);
 	const now = Date.now();
-	if (cached && now - cached.computedAt < 15_000) return cached.spend;
-	const windowStart = now - windowMilliseconds;
-	let spend = 0;
-	try {
-		for (const project of readdirSync(join(homedir(), ".pi", "agent", "sessions"))) {
-			const projectPath = join(homedir(), ".pi", "agent", "sessions", project);
-			if (!statSync(projectPath).isDirectory()) continue;
-			for (const file of readdirSync(projectPath)) {
-				if (!file.endsWith(".jsonl")) continue;
-				const path = join(projectPath, file);
-				if (statSync(path).mtimeMs >= windowStart) spend += spendFromFile(path, windowStart);
-			}
-		}
-	} catch {
-		spend = 0;
+	const sourcePath = resolveSessionTranscriptPath(sessionId, state);
+	const cached = state.spendCache.get(key);
+	if (cached && now - cached.computedAt < 15_000 && cached.sourcePath === sourcePath) {
+		return cached.spend;
 	}
-	state.spendCache.set(key, { computedAt: now, spend });
+	const windowStart = now - windowMilliseconds;
+	const spend = sourcePath ? spendFromFile(sourcePath, windowStart) : spendFromAllSessions(windowStart);
+	state.spendCache.set(key, { computedAt: now, spend, sourcePath });
 	return spend;
 }
 
@@ -288,9 +380,39 @@ function rateLimitSummary(state: RenderState): string {
 	return parts.length ? color(`rl ${parts.join(" ")}`, DIM) : "";
 }
 
+function isGitRepository(cwd: string, state: RenderState): boolean {
+	const now = Date.now();
+	const cached = state.gitRepoCache;
+	if (cached && cached.cwd === cwd && now - cached.computedAt < 5000) return cached.value;
+
+	let current = cwd;
+	while (true) {
+		if (existsSync(join(current, ".git"))) {
+			try {
+				const stat = statSync(join(current, ".git"));
+				if (stat.isDirectory() || stat.isFile()) {
+					state.gitRepoCache = { cwd, computedAt: now, value: true };
+					return true;
+				}
+			} catch {
+				// fall through
+			}
+		}
+		const parent = dirname(current);
+		if (parent === current) break;
+		current = parent;
+	}
+	state.gitRepoCache = { cwd, computedAt: now, value: false };
+	return false;
+}
+
 function gitRef(cwd: string, state: RenderState): string {
 	const now = Date.now();
-	if (state.gitCache && state.gitCache.cwd === cwd && now - state.gitCache.computedAt < 5000) return state.gitCache.value;
+	if (!isGitRepository(cwd, state)) {
+		state.gitCache = { cwd, computedAt: now, value: "" };
+		return "";
+	}
+	if (state.gitCache && state.gitCache.cwd === cwd && now - state.gitCache.computedAt < 8000) return state.gitCache.value;
 	let value = "";
 	try {
 		const branch = execFileSync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8", timeout: 1000 }).trim();
@@ -305,7 +427,11 @@ function gitRef(cwd: string, state: RenderState): string {
 
 function diffStat(cwd: string, state: RenderState): string {
 	const now = Date.now();
-	if (state.diffCache && state.diffCache.cwd === cwd && now - state.diffCache.computedAt < 2000) return state.diffCache.value;
+	if (!isGitRepository(cwd, state)) {
+		state.diffCache = { cwd, computedAt: now, value: "" };
+		return "";
+	}
+	if (state.diffCache && state.diffCache.cwd === cwd && now - state.diffCache.computedAt < 5000) return state.diffCache.value;
 	let added = 0;
 	let removed = 0;
 	try {
@@ -343,10 +469,21 @@ function line1(ctx: any, state: RenderState): string {
 }
 
 function line2(ctx: any, state: RenderState, width: number): string {
-	const totals = totalsFromBranch(ctx);
-	const spend5m = spendSince(300_000, state);
-	const spend24h = spendSince(86_400_000, state);
-	return [modelBadge(totals.lastModel || ctx.model?.id), contextSummary(ctx), cacheSummary(totals, width >= 150), ttlSummary(totals), rateLimitSummary(state), dayBudgetSummary(spend24h), burnRateSummary(spend5m / 5, spend24h), costSummary(totals), diffStat(ctx.cwd, state)].filter(Boolean).join(" | ");
+	const totals = branchTotals(ctx, state);
+	const sessionId = ctx.sessionManager.getSessionId();
+	const spend5m = spendSince(300_000, state, sessionId);
+	const spend24h = spendSince(86_400_000, state, sessionId);
+	return [
+		modelBadge(totals.lastModel || ctx.model?.id),
+		contextSummary(ctx, totals),
+		cacheSummary(totals, width >= 150),
+		ttlSummary(totals),
+		rateLimitSummary(state),
+		dayBudgetSummary(spend24h),
+		burnRateSummary(spend5m / 5, spend24h),
+		costSummary(totals),
+		diffStat(ctx.cwd, state),
+	].filter(Boolean).join(" | ");
 }
 
 function line3(ctx: any, state: RenderState): string {
@@ -360,10 +497,13 @@ function line3(ctx: any, state: RenderState): string {
 
 export function installStatuslineFooter(ctx: any, state: RenderState): void {
 	ctx.ui.setFooter((tui: any, _theme: any, footerData: any) => {
-		const unsub = footerData.onBranchChange(() => tui.requestRender());
+		const unsub = footerData.onBranchChange(() => {
+			state.totalsCache = undefined;
+			tui.requestRender();
+		});
 		const interval = setInterval(() => {
 			if (state.turnActive) tui.requestRender();
-		}, 1000);
+		}, 1500);
 		return {
 			dispose() {
 				unsub();

@@ -14,6 +14,7 @@ export default function (pi: any) {
 		diffCache: undefined,
 		gitRepoCache: undefined,
 		totalsCache: undefined,
+		branchSpendCache: undefined,
 		spendSessionPath: undefined,
 		spendSessionId: undefined,
 	};
@@ -26,6 +27,7 @@ export default function (pi: any) {
 		state.gitCache = undefined;
 		state.diffCache = undefined;
 		state.gitRepoCache = undefined;
+		state.branchSpendCache = undefined;
 		if (ctx.hasUI) installStatuslineFooter(ctx, state);
 	});
 	pi.on("turn_start", async (event: any) => {

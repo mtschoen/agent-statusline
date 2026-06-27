@@ -19,6 +19,9 @@ const MODEL_SONNET = "\x1b[36m";
 const MODEL_HAIKU = "\x1b[34m";
 const MODEL_FABLE = "\x1b[32m";
 const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const SPEND_WINDOW_MS_5M = 300_000;
+const SPEND_WINDOW_MS_24H = 86_400_000;
+const SPEND_CACHE_TTL_MS = 15_000;
 
 export interface RenderState {
 	turnActive: boolean;
@@ -31,8 +34,16 @@ export interface RenderState {
 	diffCache: { cwd: string; computedAt: number; value: string } | undefined;
 	gitRepoCache: { cwd: string; computedAt: number; value: boolean } | undefined;
 	totalsCache: CachedTotals | undefined;
+	branchSpendCache: BranchSpendCache | undefined;
 	spendSessionPath: string | undefined;
 	spendSessionId: string | undefined;
+}
+
+interface BranchSpendCache {
+	sessionId: string;
+	fingerprint: string;
+	computedAt: number;
+	spendByWindow: Record<number, number>;
 }
 
 interface Totals {
@@ -224,6 +235,49 @@ function branchTotals(ctx: any, state: RenderState): Totals {
 	return totals;
 }
 
+function spendFromBranchWindows(branch: any[], now: number): Record<number, number> {
+	const spendByWindow: Record<number, number> = {
+		[SPEND_WINDOW_MS_5M]: 0,
+		[SPEND_WINDOW_MS_24H]: 0,
+	};
+	const window5mStart = now - SPEND_WINDOW_MS_5M;
+	const window24hStart = now - SPEND_WINDOW_MS_24H;
+	for (const entry of branch) {
+		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+		const ts = timestampMs(entry.timestamp) ?? timestampMs(entry.message.timestamp);
+		if (ts === undefined) continue;
+		const rawCost = entry.message?.usage?.cost?.total;
+		const totalCost = typeof rawCost === "number" ? rawCost : Number(rawCost);
+		if (!Number.isFinite(totalCost) || totalCost <= 0) continue;
+		if (ts >= window24hStart) {
+			spendByWindow[SPEND_WINDOW_MS_24H] += totalCost;
+			if (ts >= window5mStart) {
+				spendByWindow[SPEND_WINDOW_MS_5M] += totalCost;
+			}
+		}
+	}
+	return spendByWindow;
+}
+
+function spendByWindowFromBranch(ctx: any, state: RenderState, sessionId: string | undefined, now: number): Record<number, number> | undefined {
+	if (!sessionId) return undefined;
+	const branch = ctx.sessionManager.getBranch() || [];
+	if (!branch.length) return undefined;
+	const fingerprint = branchFingerprint(branch);
+	const cached = state.branchSpendCache;
+	if (cached && cached.sessionId === sessionId && cached.fingerprint === fingerprint && now - cached.computedAt < SPEND_CACHE_TTL_MS && cached.spendByWindow[SPEND_WINDOW_MS_5M] !== undefined && cached.spendByWindow[SPEND_WINDOW_MS_24H] !== undefined) {
+		return cached.spendByWindow;
+	}
+	const spendByWindow = spendFromBranchWindows(branch, now);
+	state.branchSpendCache = {
+		sessionId,
+		fingerprint,
+		computedAt: now,
+		spendByWindow,
+	};
+	return spendByWindow;
+}
+
 function contextSummary(ctx: any, totals?: Totals): string {
 	const usage = ctx.getContextUsage();
 	const windowSize = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
@@ -316,12 +370,16 @@ function costSummary(totals: Totals): string {
 	return color(money(totals.totalCost), totals.totalCost >= 70 ? RED : totals.totalCost >= 35 ? YELLOW : GREEN);
 }
 
-function spendSince(windowMilliseconds: number, state: RenderState, sessionId: string | undefined): number {
-	const key = String(windowMilliseconds);
+function spendSince(windowMilliseconds: number, state: RenderState, sessionId: string | undefined, ctx?: any): number {
 	const now = Date.now();
+	const branchSpend = spendByWindowFromBranch(ctx, state, sessionId, now);
+	if (branchSpend && branchSpend[windowMilliseconds] !== undefined) {
+		return branchSpend[windowMilliseconds];
+	}
+	const key = String(windowMilliseconds);
 	const sourcePath = resolveSessionTranscriptPath(sessionId, state);
 	const cached = state.spendCache.get(key);
-	if (cached && now - cached.computedAt < 15_000 && cached.sourcePath === sourcePath) {
+	if (cached && now - cached.computedAt < SPEND_CACHE_TTL_MS && cached.sourcePath === sourcePath) {
 		return cached.spend;
 	}
 	const windowStart = now - windowMilliseconds;
@@ -337,8 +395,10 @@ function spendFromFile(path: string, windowStart: number): number {
 			try {
 				const entry = JSON.parse(line);
 				if (entry.type !== "message" || entry.message?.role !== "assistant") return sum;
-				const timestamp = timestampMs(entry.timestamp) ?? entry.message.timestamp;
-				return timestamp && timestamp >= windowStart ? sum + (entry.message.usage?.cost?.total ?? 0) : sum;
+				const timestamp = timestampMs(entry.timestamp) ?? timestampMs(entry.message?.timestamp);
+				const rawCost = entry.message?.usage?.cost?.total;
+				const cost = typeof rawCost === "number" ? rawCost : Number(rawCost);
+				return timestamp && timestamp >= windowStart && Number.isFinite(cost) ? sum + cost : sum;
 			} catch {
 				return sum;
 			}
@@ -471,8 +531,8 @@ function line1(ctx: any, state: RenderState): string {
 function line2(ctx: any, state: RenderState, width: number): string {
 	const totals = branchTotals(ctx, state);
 	const sessionId = ctx.sessionManager.getSessionId();
-	const spend5m = spendSince(300_000, state, sessionId);
-	const spend24h = spendSince(86_400_000, state, sessionId);
+	const spend5m = spendSince(SPEND_WINDOW_MS_5M, state, sessionId, ctx);
+	const spend24h = spendSince(SPEND_WINDOW_MS_24H, state, sessionId, ctx);
 	return [
 		modelBadge(totals.lastModel || ctx.model?.id),
 		contextSummary(ctx, totals),
@@ -499,6 +559,7 @@ export function installStatuslineFooter(ctx: any, state: RenderState): void {
 	ctx.ui.setFooter((tui: any, _theme: any, footerData: any) => {
 		const unsub = footerData.onBranchChange(() => {
 			state.totalsCache = undefined;
+			state.branchSpendCache = undefined;
 			tui.requestRender();
 		});
 		const interval = setInterval(() => {

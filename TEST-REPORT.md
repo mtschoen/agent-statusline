@@ -1,15 +1,29 @@
 # schoen-claude-status - Test Report
 
-`2026-06-23`
+`2026-07-02`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
-| **Tests** | 32 `scripts/verify_*.py`, all passing locally |
-| **Git** | `26882ff` (working tree adds the Pi extension port) |
+| **Tests** | 33 `scripts/verify_*.py`, all passing locally |
+| **Git** | `9f93eda` (agent-teams summary line + refreshInterval) |
 
-**This run (Pi extension port):** statusline_lib coverage is unchanged at
+**This run (agent-teams summary line):** `subagentStatusLine` never fires for
+Agent Teams teammates (no per-row hook exists for them - confirmed empirically
+by dispatching a live named background agent and diffing
+`.subagent-statusline-input.log`). New `statusline_lib/teams.py` (67
+statements, 100% coverage) works around this on the main statusline instead,
+reading `~/.claude/teams/<name>/config.json` plus each teammate's own
+transcript directly. `statusline_lib` coverage is unchanged at **100%**
+(1476/1476 on this OS run - two pre-existing OS-specific branches in
+`base.py`/`walker.py` are covered on the other CI leg, same as before this
+change). `install.py` also now writes `refreshInterval: 3` on the `statusLine`
+block so the footer keeps repainting while the lead is idle waiting on a
+background teammate. Ruff and aislop both clean (aislop 94/100, same
+pre-existing file-too-large warnings as before, none newly introduced).
+
+**Prior run (Pi extension port):** statusline_lib coverage is unchanged at
 **100%** (1379/1379); the new Pi port lives in `pi-extension/` and is verified
 with a Node/Jiti render smoke against the real global loader at
 `~/.pi/agent/extensions/agent-statusline/index.ts`. The Pi extension reuses Pi's
@@ -63,11 +77,11 @@ overrides.
 Measured by running all 32 `verify_*.py` under coverage.py and reporting
 `statusline_lib/` - the package that holds all logic. CI fails below 100%.
 
-**Total: 1379 / 1379 statements (100%)** - every module:
-`__init__` 14, `badge` 67, `base` 44, `beacon` 206, `burnrate` 145,
-`compact` 37, `cost` 114, `costfmt` 68, `diffstat` 7, `nudge` 52,
-`nudge_install` 35, `pace` 269, `prefs` 29, `project` 61, `qwen` 53,
-`sessions` 114, `walker` 64.
+**Total: 1476 / 1476 statements (100%, combined across both CI OS legs)** -
+every module: `__init__` 15, `badge` 67, `base` 56, `beacon` 209,
+`burnrate` 145, `compact` 37, `cost` 114, `costfmt` 68, `diffstat` 7,
+`nudge` 53, `nudge_install` 37, `pace` 269, `prefs` 31, `project` 61,
+`qwen` 53, `sessions` 115, `teams` 67, `walker` 72.
 
 **Scope:** entry-point glue is outside the measured set, by design -
 `statusline.py`, `subagent_statusline.py`, `qwen_statusline.py`,
@@ -98,4 +112,4 @@ python -m coverage report -m --include="statusline_lib/*" --fail-under=100
 |---|---|
 | **Config** | `pyproject.toml` (`[tool.ruff]`), `.aislop/config.yml` |
 | **CI** | `.gitea/workflows/ci.yml` - ruff + aislop + 100% coverage hard gates; pyright + shellcheck non-blocking |
-| **Package** | `statusline_lib/` (base, sessions, walker, cost, costfmt, diffstat, beacon, pace, badge, compact, qwen, nudge, nudge_install, prefs, project, burnrate, `__init__`) |
+| **Package** | `statusline_lib/` (base, sessions, walker, cost, costfmt, diffstat, beacon, pace, badge, compact, qwen, nudge, nudge_install, prefs, project, burnrate, teams, `__init__`) |

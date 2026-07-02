@@ -1,9 +1,12 @@
 """Verify context-window formatting and model-badge rendering in badge.py.
 
 Covers:
-- ctx_window_for_model: fable/[1m] -> 1M, everything else -> 200K
-- format_context: zero/negative window guard, color thresholds (green/yellow/
-  orange/red), CLAUDE_AUTOCOMPACT_PCT_OVERRIDE env var, show_denom/show_pct flags
+- ctx_window_for_model: fable/mythos/[1m] -> 1M, opus/sonnet >=4.6 -> 1M,
+  older opus/sonnet + claude-3 legacy + haiku -> 200K, versionless alias /
+  date-fragment version / unknown family -> 0 (unknown)
+- format_context: unknown-window `???` rendering (used>0) and empty-string
+  guard (used<=0), color thresholds (green/yellow/orange/red),
+  CLAUDE_AUTOCOMPACT_PCT_OVERRIDE env var, show_denom/show_pct flags
 - _version_for: dotted-version extraction from a model id
 - _qwen_version_for: Qwen model version extraction
 - _qwen_size_for: Qwen parameter-size extraction
@@ -37,28 +40,61 @@ from statusline_lib.nudge import NUDGE_THRESHOLD_TOKENS
 def _check_ctx_window_for_model(failures):
     if ctx_window_for_model("claude-fable-5") != 1_000_000:
         failures.append("ctx_window_for_model: fable model should return 1M")
+    if ctx_window_for_model("claude-mythos-5") != 1_000_000:
+        failures.append("ctx_window_for_model: mythos model should return 1M")
     if ctx_window_for_model("claude-opus-4[1m]") != 1_000_000:
         failures.append("ctx_window_for_model: [1m] suffix should return 1M")
-    if ctx_window_for_model("claude-opus-4") != 200_000:
-        failures.append("ctx_window_for_model: bare opus should return 200K")
-    if ctx_window_for_model("claude-sonnet-4") != 200_000:
-        failures.append("ctx_window_for_model: sonnet should return 200K")
-    if ctx_window_for_model("") != 200_000:
-        failures.append("ctx_window_for_model: empty id should return 200K")
-    if ctx_window_for_model(None) != 200_000:
-        failures.append("ctx_window_for_model: None id should return 200K")
+    if ctx_window_for_model("claude-opus-4-8") != 1_000_000:
+        failures.append("ctx_window_for_model: opus 4.8 is natively 1M")
+    if ctx_window_for_model("claude-sonnet-5") != 1_000_000:
+        failures.append("ctx_window_for_model: sonnet 5 is natively 1M")
+    if ctx_window_for_model("claude-sonnet-4-6") != 1_000_000:
+        failures.append("ctx_window_for_model: sonnet 4.6 is natively 1M")
+    if ctx_window_for_model("claude-sonnet-4-5-20250929") != 200_000:
+        failures.append("ctx_window_for_model: sonnet 4.5 should return 200K")
+    if ctx_window_for_model("claude-opus-4-20250514") != 200_000:
+        failures.append("ctx_window_for_model: opus 4.0 dated id should return 200K")
+    if ctx_window_for_model("claude-3-5-sonnet-20241022") != 200_000:
+        failures.append("ctx_window_for_model: claude-3 legacy ids should return 200K")
+    if ctx_window_for_model("claude-haiku-4-5") != 200_000:
+        failures.append("ctx_window_for_model: haiku should return 200K")
+    if ctx_window_for_model("opus") != 0:
+        failures.append("ctx_window_for_model: versionless alias should be unknown (0)")
+    if ctx_window_for_model("claude-sonnet-20241022") != 0:
+        failures.append(
+            "ctx_window_for_model: date-fragment version should be unknown (0)"
+        )
+    if ctx_window_for_model("") != 0:
+        failures.append("ctx_window_for_model: empty id should be unknown (0)")
+    if ctx_window_for_model(None) != 0:
+        failures.append("ctx_window_for_model: None id should be unknown (0)")
+    if ctx_window_for_model("some-future-model") != 0:
+        failures.append("ctx_window_for_model: unknown family should be unknown (0)")
 
 
-def _check_format_context_zero_window(failures):
+def _check_format_context_unknown_window(failures):
     result = format_context(0, 0)
     if result != "":
         failures.append(
-            f"format_context: window_size=0 should return empty string, got {result!r}"
+            f"format_context: window=0 with no usage should return '', got {result!r}"
         )
     result = format_context(100, -1)
-    if result != "":
+    if "???" not in result or "100" not in result:
         failures.append(
-            f"format_context: negative window should return empty string, got {result!r}"
+            f"format_context: unknown window with usage should render 'used / ???', got {result!r}"
+        )
+    if "%" in result:
+        failures.append(
+            f"format_context: unknown window must not render a percentage, got {result!r}"
+        )
+    if CTX_DENOM not in result:
+        failures.append(
+            f"format_context: unknown window should use the neutral color, got {result!r}"
+        )
+    result_no_denom = format_context(100, 0, show_denom=False)
+    if "???" in result_no_denom or " / " in result_no_denom:
+        failures.append(
+            f"format_context: show_denom=False should drop the '???' denominator, got {result_no_denom!r}"
         )
 
 
@@ -335,7 +371,7 @@ def main():
     failures = []
 
     _check_ctx_window_for_model(failures)
-    _check_format_context_zero_window(failures)
+    _check_format_context_unknown_window(failures)
     _check_format_context_green(failures)
     _check_format_context_yellow(failures)
     _check_format_context_orange(failures)

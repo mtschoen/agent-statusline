@@ -27,15 +27,31 @@ ORANGE_THRESHOLD_1M_TOKENS = 500_000  # mid-band warning for 1M-context sessions
 
 
 def ctx_window_for_model(model_id):
-    """Best-effort window inference for per-agent rendering. Fable is natively
-    1M; Opus/Sonnet expose 1M only via the opt-in runtime tier, marked by the
-    `[1m]` id suffix -- a bare opus/sonnet session is 200K. Everything else
-    -> 200K. The main script doesn't need this -- the payload carries
-    `context_window.context_window_size` directly."""
-    mid = model_id or ""
-    if "fable" in mid or "[1m]" in mid:
+    """Best-effort window inference for per-agent rendering. Returns 0 when the
+    window is unknown -- format_context renders the denominator as `???` rather
+    than asserting a wrong number.
+
+    Fable/Mythos are natively 1M, as is the `[1m]` opt-in runtime tier. Opus and
+    Sonnet went natively 1M at 4.6 (per the Claude model catalog, 2026-06); older
+    versions are 200K. Haiku is 200K. A versionless opus/sonnet alias or an
+    unrecognized family is unknown -> 0. The main script doesn't need this --
+    the payload carries `context_window.context_window_size` directly."""
+    mid = (model_id or "").lower()
+    if "fable" in mid or "mythos" in mid or "[1m]" in mid:
         return 1_000_000
-    return 200_000
+    if _re.search(r"claude-3[.-]", mid):
+        return 200_000
+    for family in ("opus", "sonnet"):
+        if family in mid:
+            version = _version_for(mid, family)
+            # A >=100 "version" is a date fragment from an id shape the regex
+            # doesn't understand -- unknown, not a real version.
+            if not version or float(version) >= 100:
+                return 0
+            return 1_000_000 if float(version) >= 4.6 else 200_000
+    if "haiku" in mid:
+        return 200_000
+    return 0
 
 
 def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct=True):
@@ -51,9 +67,19 @@ def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct
     `show_denom=False` (super-minimal compact) drops the ` / windowK` window
     size; `show_pct=False` drops the trailing `(P.P%)`. The colored used-token
     count always stays.
+
+    An unknown window (`window_size <= 0`, e.g. ctx_window_for_model on a model
+    family we don't recognize) renders `usedK / ???` in the neutral denominator
+    color -- honest about not knowing, instead of asserting a wrong 200K. No
+    percentage or threshold colors, since both need a real denominator.
     """
     if window_size <= 0:
-        return ""
+        if ctx_used <= 0:
+            return ""
+        text = f"{CTX_DENOM}{fmt(ctx_used)}{RESET}"
+        if show_denom:
+            text += f" / {CTX_DENOM}???{RESET}"
+        return text
     override = os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
     compact_tokens = max(0, window_size - COMPACT_BUFFER_TOKENS)
     if override:

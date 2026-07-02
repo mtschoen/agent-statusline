@@ -265,6 +265,10 @@ def format_beacon(session_id):
 
 _BIAS_CACHE_PATH = os.path.join(app_dir(), ".statusline-bias-cache.json")
 _BIAS_CACHE_TTL_SECONDS = 60
+# A walker failure (missing binary, timeout on a slow/mounted root) is cached
+# too, and for longer: beacons-history walks the full fleet, so retrying it on
+# every render turns one slow root into a multi-second stall per render.
+_BIAS_FAILURE_TTL_SECONDS = 300
 _CALIBRATION_MIN_PAIRS = 20
 
 
@@ -273,13 +277,16 @@ def _bias_factor_cached(period_seconds):
 
     Beacons-history walks the full fleet, so per-render calls are wasteful.
     Cache TTL is short enough that fresh end-beacons influence the next
-    render without a manual flush.
+    render without a manual flush. Failures are negative-cached under the
+    longer _BIAS_FAILURE_TTL_SECONDS so a slow walker degrades the calibrated
+    ETA (which is optional) instead of stalling every render.
     """
     try:
         with open(_BIAS_CACHE_PATH, encoding="utf-8") as f:
             c = json.load(f)
         age = datetime.now(UTC).timestamp() - c.get("computed_at_unix", 0)
-        if age < _BIAS_CACHE_TTL_SECONDS and c.get("period_seconds") == period_seconds:
+        ttl = _BIAS_FAILURE_TTL_SECONDS if c.get("failed") else _BIAS_CACHE_TTL_SECONDS
+        if age < ttl and c.get("period_seconds") == period_seconds:
             return c.get("n_pairs", 0), c.get("bias_factor")
     except (OSError, ValueError, KeyError):
         pass
@@ -292,25 +299,21 @@ def _bias_factor_cached(period_seconds):
         "0",
         timeout=5,
     )
+    entry = {
+        "computed_at_unix": datetime.now(UTC).timestamp(),
+        "period_seconds": period_seconds,
+        "n_pairs": (data or {}).get("n_pairs", 0),
+        "bias_factor": (data or {}).get("bias_factor"),
+    }
     if not data:
-        return 0, None
-    n_pairs = data.get("n_pairs", 0)
-    bias_factor = data.get("bias_factor")
+        entry["failed"] = True
     try:
         with open(_BIAS_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "computed_at_unix": datetime.now(UTC).timestamp(),
-                    "period_seconds": period_seconds,
-                    "n_pairs": n_pairs,
-                    "bias_factor": bias_factor,
-                },
-                f,
-            )
+            json.dump(entry, f)
     except OSError:
         # Best-effort cache write; failure just means we recompute next time.
         pass
-    return n_pairs, bias_factor
+    return entry["n_pairs"], entry["bias_factor"]
 
 
 def format_calibrated_eta(raw_eta_seconds, period_seconds=604800):

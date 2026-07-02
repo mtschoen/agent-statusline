@@ -315,7 +315,8 @@ is:
 {
   "statusLine": {
     "type": "command",
-    "command": "bash ~/schoen-claude-status/statusline-command.sh"
+    "command": "bash ~/schoen-claude-status/statusline-command.sh",
+    "refreshInterval": 3
   },
   "subagentStatusLine": {
     "type": "command",
@@ -326,10 +327,19 @@ is:
 
 Two scripts are needed because Claude Code dispatches `statusLine` to the lead
 session and `subagentStatusLine` to each row in the agent panel - wiring only
-one leaves the other half of the UI on the default rendering. The next render
-picks up the change with no restart needed. Omitting `subagentStatusLine`
-keeps Claude Code's default `name · description · token count` rendering in
-the agent panel.
+one leaves the other half of the UI on the default rendering. Omitting
+`subagentStatusLine` keeps Claude Code's default `name · description · token
+count` rendering in the agent panel.
+
+`statusLine.refreshInterval` (`install.py` writes `3`) repaints the lead's
+footer every N seconds in addition to the normal event-driven updates. Without
+it, the footer only redraws on lead-session activity (a new prompt, a tool
+call) - so while you're idle waiting on a background Agent Teams teammate
+(see [Coverage gap: Agent Teams](#per-agent-status-lines) above), the
+`teammates:` line and any other time-based segment freeze at whatever they
+showed on the last redraw and never move. This is a harness-level setting, not
+script content, so unlike editing the `.py`/`.sh` files themselves, **it
+requires a session restart (or a fresh `claude` session) to take effect.**
 
 ### Pi extension
 
@@ -378,6 +388,22 @@ it's account-global, identical for every agent, so it would just clutter
 the panel. Cost is derived from per-Mtok rates (the per-task payload doesn't
 carry `cost.total_cost_usd`); accuracy is within a few percent of `/usage`
 for non-Opus-1M turns.
+
+**Coverage gap: Agent Teams.** `subagentStatusLine` only fires for classic
+Task-tool subagents (`type: local_agent` in the payload's `tasks[]`). It is
+never invoked for [Agent Teams](https://code.claude.com/docs/en/agent-teams)
+teammates (`run_in_background: true` + a `name`, under
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`) - confirmed empirically 2026-07-02: a
+live, addressable teammate never touched
+`.subagent-statusline-input.log` even once, despite Claude Code updating that
+teammate's own transcript in real time. There is no documented hook for that
+panel row, so it can't be intercepted. As a workaround, the **main**
+statusline's line 3 renders a `teammates: <icon> name badge $cost, ...`
+summary instead, reading `~/.claude/teams/<name>/config.json` and each
+teammate's transcript JSONL directly (`statusline_lib/teams.py`). It won't
+replace the default per-row rendering in the panel, but it gives live
+visibility into teammate cost/activity from a mechanism that's actually
+invoked reliably.
 
 ### Requirements
 

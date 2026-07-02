@@ -41,6 +41,7 @@ from statusline_lib import (
     format_model_badge,
     format_quota,
     format_session_timing,
+    format_teammates,
     format_ttl,
     pref_bool,
     resolve_flags,
@@ -415,6 +416,7 @@ def main():
         for part in (
             format_session_timing(cost),
             weekly_exhaustion(rate_limits),
+            format_teammates(session_id, transcript_path, app_dir(), time.time()),
             _beacon_line(session_id),
         )
         if part

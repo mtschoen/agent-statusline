@@ -31,6 +31,7 @@ Package layout (dependency order, no cycles):
   beacon   -- beacon scanning, format_beacon, format_calibrated_eta, session timing
   diffstat -- format_lines (session +/- line counts for line 2)
   pace     -- pace walking, format_quota
+  teams    -- agent-teams teammate summary line (subagentStatusLine can't reach it)
 """
 
 # ruff: noqa: F401
@@ -192,6 +193,15 @@ from .sessions import (
     count_active_sessions,
     debounce_session_count,
 )
+from .teams import (
+    IDLE_THRESHOLD_SECONDS,
+    _is_active,
+    _load_team_config,
+    _team_name_for_session,
+    _teammate_jsonl,
+    _teammate_summary,
+    format_teammates,
+)
 from .walker import (
     _WALKER_BIN_ENV,
     _WALKER_ROOTS_CONFIG_PATH,
@@ -207,6 +217,7 @@ __all__ = [
     "CTX_DENOM",
     "DROP_ORDER",
     "GREEN",
+    "IDLE_THRESHOLD_SECONDS",
     "ORANGE",
     "RAMP",
     "RED",
@@ -237,6 +248,7 @@ __all__ = [
     "format_qwen_thinking",
     "format_qwen_tokens",
     "format_session_timing",
+    "format_teammates",
     "format_ttl",
     "full_flags",
     "load_prefs",

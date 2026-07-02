@@ -134,6 +134,14 @@ def _commands_for_platform(repo, platform="claude"):
     )
 
 
+# statusLine only repaints on lead-session events (new prompt, tool call).
+# While the lead is idle waiting on a background Agent Teams teammate, nothing
+# retriggers it, so the teammates: line (and any other time-based segment)
+# freezes mid-run and readers never see it move. Docs: "set refreshInterval to
+# also re-run the command on a fixed timer" -- exactly this idle-wait case.
+STATUSLINE_REFRESH_SECONDS = 3
+
+
 def _qwen_command_for_platform(repo):
     """Return (target, command) for Qwen Code statusline."""
     # Qwen Code uses the same platform-aware invocation strategy as Claude Code.
@@ -296,7 +304,11 @@ def _install_claude(repo, dry_run):
         print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
         return 1
 
-    desired_statusline = {"type": "command", "command": main_command}
+    desired_statusline = {
+        "type": "command",
+        "command": main_command,
+        "refreshInterval": STATUSLINE_REFRESH_SECONDS,
+    }
     desired_subagent = {"type": "command", "command": subagent_command}
 
     already_current = (
@@ -310,7 +322,9 @@ def _install_claude(repo, dry_run):
             print(f"# {settings_path} already current -- nothing to write")
         else:
             print(f"already current: {settings_path}")
-            print(f"  statusLine:         {main_command}")
+            print(
+                f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
+            )
             print(f"  subagentStatusLine: {subagent_command}")
             print(f"  UserPromptSubmit:   {nudge_command}")
             print("Nothing to do.")
@@ -327,7 +341,9 @@ def _install_claude(repo, dry_run):
 
     _atomic_write(settings_path, settings)
     print(f"updated {settings_path}")
-    print(f"  statusLine:         {main_command}")
+    print(
+        f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
+    )
     print(f"  subagentStatusLine: {subagent_command}")
     print(f"  UserPromptSubmit:   {nudge_command}")
 
@@ -418,7 +434,11 @@ def _install_antigravity(repo, dry_run):
         print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
         return 1
 
-    desired_statusline = {"type": "command", "command": main_command}
+    desired_statusline = {
+        "type": "command",
+        "command": main_command,
+        "refreshInterval": STATUSLINE_REFRESH_SECONDS,
+    }
     desired_subagent = {"type": "command", "command": subagent_command}
 
     already_current = (
@@ -432,7 +452,9 @@ def _install_antigravity(repo, dry_run):
             print(f"# {settings_path} already current -- nothing to write")
         else:
             print(f"already current: {settings_path}")
-            print(f"  statusLine:         {main_command}")
+            print(
+                f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
+            )
             print(f"  subagentStatusLine: {subagent_command}")
             print(f"  UserPromptSubmit:   {nudge_command}")
             print("Nothing to do.")
@@ -449,7 +471,9 @@ def _install_antigravity(repo, dry_run):
 
     _atomic_write(settings_path, settings)
     print(f"updated {settings_path}")
-    print(f"  statusLine:         {main_command}")
+    print(
+        f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
+    )
     print(f"  subagentStatusLine: {subagent_command}")
     print(f"  UserPromptSubmit:   {nudge_command}")
 

@@ -94,3 +94,29 @@ inherited at Claude Code launch. Two consequences when debugging:
   source.
 - To change behavior live (no restart), go through `statusline_ctl.py set` /
   `reset`, not the env block.
+
+## subagentStatusLine does not cover Agent Teams teammates
+
+`subagentStatusLine` is documented for classic Task-tool subagents only
+(`/en/sub-agents`). Agent Teams teammates (`run_in_background: true` + a
+`name`, spawned under `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`) are a separate
+Claude Code feature with no equivalent per-row rendering hook - confirmed
+empirically 2026-07-02 by dispatching a real named background agent and
+diffing `.subagent-statusline-input.log`: the payload updated for a blocking
+foreground subagent but never once for the teammate, even while its own
+transcript JSONL kept growing. Don't spend time trying to make
+`subagent_statusline.py` pick up teammate rows - Claude Code just doesn't
+invoke it for them.
+
+The workaround lives on the **main** statusline instead:
+`statusline_lib/teams.py` polls `~/.claude/teams/<name>/config.json` (which
+Claude Code writes live) plus each teammate's own transcript JSONL, and
+`format_teammates()` renders a `teammates: ...` summary on line 3. Two
+non-obvious bits if you touch that module:
+- Teammate transcript filenames don't match the config's `agentId`
+  (`watchme@session-xxx`) - they're `agent-a<name>-<hash>.jsonl` on disk, so
+  lookup is a case-insensitive substring scan on the bare name, same as the
+  fallback scan `subagent_statusline.py` already uses for task ids.
+- There's no explicit running/idle field in `config.json`; "active" is
+  inferred from the transcript's mtime against a 30s threshold, matching
+  Claude Code's own idle-row-hide window per the agent-teams docs.

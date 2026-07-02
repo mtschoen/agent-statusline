@@ -204,23 +204,13 @@ def _is_lead_task(task, session_id):
     return bool(session_id and task.get("id") == session_id)
 
 
-def _row_for_task(task, parent_transcript_path, session_id):
+def _metrics_for_task(task, parent_transcript_path, session_id, is_lead):
+    """(metric_parts, model_id) for one task row. Everything here reads disk
+    state that can surprise us (new JSONL shapes, new model ids) -- the caller
+    guards it so one task's metrics can't cost the whole panel its rows."""
     task_id = task.get("id") or ""
-    if not task_id:
-        return None
-
-    icon = _status_icon(task.get("status"))
-    description = (
-        task.get("description")
-        or task.get("label")
-        or task.get("name")
-        or ("(lead)" if _is_lead_task(task, session_id) else "")
-    )
-    elapsed = _format_elapsed(task.get("startTime"), task.get("status"))
-
     # Pick the transcript to walk: the parent transcript for the lead row,
     # the per-agent JSONL for everyone else.
-    is_lead = _is_lead_task(task, session_id)
     if is_lead:
         jsonl = (
             parent_transcript_path
@@ -230,33 +220,61 @@ def _row_for_task(task, parent_transcript_path, session_id):
     else:
         jsonl = _agent_jsonl_path(parent_transcript_path, task_id)
 
-    metric_parts = []
-    model_id = ""
-    window = 0
+    if not jsonl:
+        return [], ""
+
     live = _live_payload_for_session(session_id) if is_lead else None
-    if jsonl:
-        walk = walk_transcript(jsonl, include_subagents=False)
-        ctx_used = (
-            walk["last_input"] + walk["last_cache_create"] + walk["last_cache_read"]
+    walk = walk_transcript(jsonl, include_subagents=False)
+    ctx_used = walk["last_input"] + walk["last_cache_create"] + walk["last_cache_read"]
+    # Prefer the authoritative window+model from the live main-statusline
+    # payload (lead path only) -- the JSONL drops the [1m] runtime tier.
+    model_id = (live or {}).get("model_id") or walk["last_model_id"]
+    window = (live or {}).get("window_size") or ctx_window_for_model(
+        walk["last_model_id"]
+    )
+    metric_parts = [
+        format_context(ctx_used, window, model_id),
+        format_cache(walk["read"], walk["write"], walk["input"]),
+        format_cost(walk["cost"]),
+    ]
+    return metric_parts, model_id
+
+
+def _row_for_task(task, parent_transcript_path, session_id):
+    task_id = task.get("id") or ""
+    if not task_id:
+        return None
+
+    icon = _status_icon(task.get("status"))
+    is_lead = _is_lead_task(task, session_id)
+    description = (
+        task.get("description")
+        or task.get("label")
+        or task.get("name")
+        or ("(lead)" if is_lead else "")
+    )
+    elapsed = _format_elapsed(task.get("startTime"), task.get("status"))
+
+    try:
+        metric_parts, model_id = _metrics_for_task(
+            task, parent_transcript_path, session_id, is_lead
         )
-        # Prefer the authoritative window+model from the live main-statusline
-        # payload (lead path only) -- the JSONL drops the [1m] runtime tier.
-        model_id = (live or {}).get("model_id") or walk["last_model_id"]
-        window = (live or {}).get("window_size") or ctx_window_for_model(
-            walk["last_model_id"]
-        )
-        metric_parts = [
-            format_context(ctx_used, window, model_id),
-            format_cache(walk["read"], walk["write"], walk["input"]),
-            format_cost(walk["cost"]),
-        ]
+    except Exception:
+        # Degrade this row to icon + description rather than letting one bad
+        # transcript take the decoration off every row in the panel.
+        _log_error()
+        metric_parts, model_id = [], ""
 
     badge = format_model_badge(model_id)
     head_pieces = [p for p in (icon, badge, description) if p]
     head = " ".join(head_pieces)
     # Beacon: walker globs `agent-<sid>.jsonl`, so the bare task_id is what
     # the lookup expects (no `agent-` prefix on the caller's side).
-    beacon_str, _ = format_beacon(task_id)
+    try:
+        beacon_str, _ = format_beacon(task_id)
+    except Exception:
+        _log_error()
+        beacon_str = ""
     parts = [head] + [p for p in metric_parts if p]
     if beacon_str:
         parts.append(beacon_str)
@@ -290,7 +308,13 @@ def main():
     _local_prefix = f"{ORANGE}LOCAL{RESET} | " if _local_mode else ""
 
     for task in d.get("tasks") or []:
-        row = _row_for_task(task, parent, session_id)
+        try:
+            row = _row_for_task(task, parent, session_id)
+        except Exception:
+            # A row we can't render at all still must not take down the rest
+            # of the panel -- log it and move on.
+            _log_error()
+            continue
         if row is None:
             continue
         row["content"] = _local_prefix + row["content"]

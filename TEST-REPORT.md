@@ -1,15 +1,45 @@
 # schoen-claude-status - Test Report
 
-`2026-07-02`
+`2026-07-06`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
 | **Tests** | 33 `scripts/verify_*.py`, all passing locally |
-| **Git** | `9f93eda` (agent-teams summary line + refreshInterval) |
+| **Git** | `fix/ci-green-restore` (restore lint + 100% coverage on main) |
 
-**This run (agent-teams summary line):** `subagentStatusLine` never fires for
+**This run (CI-green restore):** main had been RED on all three CI checks
+since `b62b612` (2026-06-27), ~10 days before being noticed - unrelated to the
+render-perf work that happened to land the same night. Two independent,
+pre-existing regressions:
+
+1. **Lint (aislop):** `b62b612` repointed the `@schoen/aislop` devDependency
+   from the Gitea-registry-pinned version to a local relative path
+   (`file:../../../aislop`) that only resolves on a dev machine with a sibling
+   `aislop` checkout at that exact depth. `npm ci --ignore-scripts` silently
+   installed a broken/empty package in CI (no sibling dir there), so
+   `node_modules/.bin/aislop` never materialized and `npm run lint:aislop`
+   failed with `aislop: not found`. Fix: revert `package.json`,
+   `package-lock.json`, and `.npmrc` to the pre-`b62b612` registry-pinned
+   `@schoen/aislop@0.12.3`.
+2. **Coverage (both OS legs):** the `ANTIGRAVITY_AGENT`/
+   `ANTIGRAVITY_CONVERSATION_ID` auto-detect fallback branches added to
+   `app_dir()` (`base.py`) and `_walker_root_list()` (`walker.py`) back in
+   `dccc87e` were never exercised by any verify script - `statusline_lib`
+   measured 99% (1492/1499) on *both* Linux and Windows, not the previously
+   assumed "100% combined across both CI OS legs" (that framing was already
+   stale; these lines were platform-agnostic env-var branches, not an
+   OS-specific split). Fix: `scripts/verify_prefs.py` and
+   `scripts/verify_walker.py` each gained a fallback-branch test exercising
+   both the "only `.claude` exists" and "`.gemini/antigravity-cli` exists"
+   arms. `statusline_lib` is back to **100%** (1499/1499) on both legs.
+
+Ruff, aislop (Healthy, 94/100 via the now-working registry-pinned binary,
+score unchanged), and coverage are all independently verified green locally
+(Windows) prior to this fix's PR.
+
+**Prior run (agent-teams summary line):** `subagentStatusLine` never fires for
 Agent Teams teammates (no per-row hook exists for them - confirmed empirically
 by dispatching a live named background agent and diffing
 `.subagent-statusline-input.log`). New `statusline_lib/teams.py` (67
@@ -64,7 +94,7 @@ reported, deliberately not fixed mid-push.
 | Tool | Result | Gate |
 |------|--------|------|
 | ruff | 0 findings | `ruff check .` + `ruff format --check .` |
-| aislop | Healthy (99), 0 errors; 1 pre-existing style warning | `npm run lint:aislop` (`aislop ci .`, failBelow 90) |
+| aislop | Healthy (94), 0 errors | `npm run lint:aislop` (`aislop ci .`, failBelow 90) |
 | pyright | non-blocking | CI runs with `\|\| true`; not run to clean |
 | shellcheck | non-blocking | CI runs with `\|\| true`; not run to clean |
 
@@ -74,13 +104,15 @@ overrides.
 
 ## Coverage (hard gate, 100%)
 
-Measured by running all 32 `verify_*.py` under coverage.py and reporting
-`statusline_lib/` - the package that holds all logic. CI fails below 100%.
+Measured by running all 33 `verify_*.py` under coverage.py and reporting
+`statusline_lib/` - the package that holds all logic. CI fails below 100%,
+independently on each OS job (Linux and Windows each run the gate on their own
+run, not combined - a branch only covered on one leg fails the other).
 
-**Total: 1476 / 1476 statements (100%, combined across both CI OS legs)** -
-every module: `__init__` 15, `badge` 67, `base` 56, `beacon` 209,
-`burnrate` 145, `compact` 37, `cost` 114, `costfmt` 68, `diffstat` 7,
-`nudge` 53, `nudge_install` 37, `pace` 269, `prefs` 31, `project` 61,
+**Total: 1499 / 1499 statements (100%, independently on both CI OS legs)** -
+every module: `__init__` 15, `badge` 82, `base` 56, `beacon` 210,
+`burnrate` 146, `compact` 37, `cost` 114, `costfmt` 68, `diffstat` 7,
+`nudge` 53, `nudge_install` 37, `pace` 275, `prefs` 31, `project` 61,
 `qwen` 53, `sessions` 115, `teams` 67, `walker` 72.
 
 **Scope:** entry-point glue is outside the measured set, by design -

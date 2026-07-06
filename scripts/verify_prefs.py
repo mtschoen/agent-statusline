@@ -178,6 +178,54 @@ def _check_app_dir(failures):
         os.environ.update(original_environ)
 
 
+def _check_app_dir_antigravity_agent_fallback(failures):
+    # ANTIGRAVITY_AGENT / ANTIGRAVITY_CONVERSATION_ID auto-detect: used when
+    # STATUSLINE_PLATFORM is unset (the CLI didn't set it explicitly), so
+    # app_dir() falls back to probing which config dir actually exists on disk.
+    import statusline_lib.base as base_module
+
+    original_environ = os.environ.copy()
+    original_expanduser = base_module.os.path.expanduser
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+
+            def fake_expanduser(path, _tmp=tmp, _orig=original_expanduser):
+                return _tmp if path == "~" else _orig(path)
+
+            base_module.os.path.expanduser = fake_expanduser
+
+            # 1. ANTIGRAVITY_AGENT=1, only ~/.claude exists on disk -> falls
+            # back to .claude (test-isolation guard: .gemini/antigravity-cli
+            # is absent).
+            claude_dir = os.path.join(tmp, ".claude")
+            os.makedirs(claude_dir, exist_ok=True)
+            os.environ.clear()
+            os.environ["ANTIGRAVITY_AGENT"] = "1"
+            res = base_module.app_dir()
+            if res != claude_dir:
+                failures.append(
+                    f"ANTIGRAVITY_AGENT with only .claude present should fall "
+                    f"back to .claude; got {res!r}"
+                )
+
+            # 2. ANTIGRAVITY_CONVERSATION_ID set, .gemini/antigravity-cli
+            # exists -> use the antigravity dir directly.
+            anti_dir = os.path.join(tmp, ".gemini", "antigravity-cli")
+            os.makedirs(anti_dir, exist_ok=True)
+            os.environ.clear()
+            os.environ["ANTIGRAVITY_CONVERSATION_ID"] = "abc123"
+            res = base_module.app_dir()
+            if res != anti_dir:
+                failures.append(
+                    f"ANTIGRAVITY_CONVERSATION_ID with .gemini present should "
+                    f"use the antigravity dir; got {res!r}"
+                )
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        base_module.os.path.expanduser = original_expanduser
+
+
 def check(failures):
     _check_precedence(failures)
     _check_null_is_absent(failures)
@@ -185,6 +233,7 @@ def check(failures):
     _check_pref_bool(failures)
     _check_broken_file_is_empty(failures)
     _check_app_dir(failures)
+    _check_app_dir_antigravity_agent_fallback(failures)
 
 
 def main():

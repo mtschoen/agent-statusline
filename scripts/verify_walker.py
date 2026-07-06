@@ -356,6 +356,52 @@ def _check_root_list_platform_branches(failures):
         walker_module.os.path.expanduser = original_expanduser
 
 
+def _check_root_list_antigravity_agent_fallback(failures):
+    # ANTIGRAVITY_AGENT / ANTIGRAVITY_CONVERSATION_ID auto-detect: used when
+    # STATUSLINE_PLATFORM is unset, so _walker_root_list() falls back to
+    # probing which config dir actually exists on disk.
+    state = save_walker_state()
+    original_expanduser = walker_module.os.path.expanduser
+    original_environ = os.environ.copy()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            walker_module.os.path.expanduser = _fake_expanduser_for(
+                tmp, original_expanduser
+            )
+
+            # 1. ANTIGRAVITY_AGENT=1, only ~/.claude exists on disk -> falls
+            # back to .claude/projects (test-isolation guard:
+            # .gemini/antigravity-cli is absent).
+            claude_projects = os.path.join(tmp, ".claude", "projects")
+            os.makedirs(claude_projects, exist_ok=True)
+            os.environ.clear()
+            os.environ["ANTIGRAVITY_AGENT"] = "1"
+            res = _walker_root_list()
+            if os.path.realpath(claude_projects) not in res:
+                failures.append(
+                    f"ANTIGRAVITY_AGENT with only .claude present missing "
+                    f"claude_projects, got {res!r}"
+                )
+
+            # 2. ANTIGRAVITY_CONVERSATION_ID set, .gemini/antigravity-cli/brain
+            # exists -> use the antigravity brain dir directly.
+            anti_brain = os.path.join(tmp, ".gemini", "antigravity-cli", "brain")
+            os.makedirs(anti_brain, exist_ok=True)
+            os.environ.clear()
+            os.environ["ANTIGRAVITY_CONVERSATION_ID"] = "abc123"
+            res = _walker_root_list()
+            if os.path.realpath(anti_brain) not in res:
+                failures.append(
+                    f"ANTIGRAVITY_CONVERSATION_ID with .gemini present "
+                    f"missing anti_brain, got {res!r}"
+                )
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        restore_walker_state(state)
+        walker_module.os.path.expanduser = original_expanduser
+
+
 def main():
     failures = []
 
@@ -366,6 +412,7 @@ def main():
     _check_root_list_non_list_extra_roots(failures)
     _check_root_list_realpath_oserror(failures)
     _check_root_list_platform_branches(failures)
+    _check_root_list_antigravity_agent_fallback(failures)
 
     _check_subcommand_no_binary(failures)
     _check_subcommand_success(failures)

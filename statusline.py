@@ -23,34 +23,53 @@ from typing import NamedTuple
 # whole statusline.
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from statusline_lib import (
-    ORANGE,
-    RED,
-    RESET,
-    app_dir,
-    count_active_sessions,
-    debounce_session_count,
-    format_beacon,
-    format_burn_rate,
-    format_cache,
-    format_calibrated_eta,
-    format_context,
-    format_cost_with_subagents,
-    format_day_budget,
-    format_lines,
-    format_model_badge,
-    format_quota,
-    format_session_timing,
-    format_teammates,
-    format_ttl,
-    pref_bool,
-    resolve_flags,
-    terminal_columns,
-    visible_width,
-    walk_transcript,
-    weekly_exhaustion,
-)
-from statusline_lib.nudge import write_ctx_state
+try:
+    from statusline_lib import (
+        ORANGE,
+        RED,
+        RESET,
+        app_dir,
+        count_active_sessions,
+        debounce_session_count,
+        format_beacon,
+        format_burn_rate,
+        format_cache,
+        format_calibrated_eta,
+        format_context,
+        format_cost_with_subagents,
+        format_day_budget,
+        format_lines,
+        format_model_badge,
+        format_quota,
+        format_session_timing,
+        format_teammates,
+        format_ttl,
+        pref_bool,
+        resolve_flags,
+        terminal_columns,
+        visible_width,
+        walk_transcript,
+        weekly_exhaustion,
+    )
+    from statusline_lib.nudge import write_ctx_state
+except Exception:
+    # A broken statusline_lib (mid-edit syntax error, missing module) dies
+    # before the __main__ try/except exists, so it would leave no trace in
+    # the error log and the statusline would just go blank. app_dir() is
+    # unavailable here; ~/.claude is its default, good enough for a fallback.
+    import traceback
+
+    _fallback_log = os.path.join(
+        os.path.expanduser("~"), ".claude", ".statusline-error.log"
+    )
+    with (
+        contextlib.suppress(OSError),
+        open(_fallback_log, "a", encoding="utf-8") as f,
+    ):
+        f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} (import) ---\n")
+        traceback.print_exc(file=f)
+    sys.stdout.write("STATUSLINE ERROR (import) — see ~/.claude/.statusline-error.log")
+    sys.exit(0)
 
 _INPUT_LOG = os.path.join(app_dir(), ".statusline-input.log")
 _ERROR_LOG = os.path.join(app_dir(), ".statusline-error.log")
@@ -438,7 +457,28 @@ def _log_error():
         pass
 
 
+# A render slower than this gets a line in the error log. Claude Code re-invokes
+# the statusline every `refreshInterval` seconds (3s here), so renders slower
+# than that stack up processes and the visible statusline goes stale -- without
+# this entry a hang-shaped failure leaves the error log empty.
+_SLOW_RENDER_SECONDS = 5.0
+
+
+def _log_slow_render(elapsed):
+    try:
+        with open(_ERROR_LOG, "a", encoding="utf-8") as f:
+            f.write(
+                f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n"
+                f"slow render: {elapsed:.1f}s "
+                f"(threshold {_SLOW_RENDER_SECONDS:.0f}s)\n"
+            )
+    except OSError:
+        # Same contract as _log_error: the logger itself must never raise.
+        pass
+
+
 if __name__ == "__main__":
+    _started = time.monotonic()
     try:
         main()
     except Exception:
@@ -449,3 +489,6 @@ if __name__ == "__main__":
                 "\\", "/"
             )
             sys.stdout.write(f"{RED}STATUSLINE ERROR{RESET} — see {readable_log_path}")
+    _elapsed = time.monotonic() - _started
+    if _elapsed >= _SLOW_RENDER_SECONDS:
+        _log_slow_render(_elapsed)

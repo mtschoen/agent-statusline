@@ -146,6 +146,12 @@ def _check_bias_cache_read(failures, tmpdir):
         "n_pairs": 25,
         "bias_factor": 1.4,
     }
+    # The miss above is negative-cached (failed=True, longer TTL): a healthy
+    # walker must NOT be consulted while the failure entry is fresh.
+    n, bias = _beacon_mod._bias_factor_cached(604800)
+    if (n, bias) != (0, None):
+        failures.append(f"walker failure must be negative-cached, got ({n!r},{bias!r})")
+    os.remove(cache_path)
     n, bias = _beacon_mod._bias_factor_cached(604800)
     if n != 25 or abs(bias - 1.4) > 0.001:
         failures.append(

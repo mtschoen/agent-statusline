@@ -252,39 +252,85 @@ def _check_weekly_needle_exception_path(failures):
         failures.append(f"weekly_needle exception should return '', got {result!r}")
 
 
+class _StatRaisingEntry:
+    """DirEntry stand-in whose stat() raises, for the unreadable-mtime branch."""
+
+    name = "sess1.jsonl"
+    path = os.path.join("nowhere", "sess1.jsonl")
+
+    def is_dir(self, follow_symlinks=True):
+        return False
+
+    def stat(self, follow_symlinks=True):
+        raise OSError("injected")
+
+
 def _check_discover_pace_groups_oserror(failures):
-    """Cover the OSError continues in _discover_pace_groups (parent + subagent
-    globs): an unreadable mtime skips the file instead of crashing the walk."""
+    """Cover the OSError arms of the scandir walk: a missing/unreadable
+    directory yields no entries, and an unreadable mtime skips the file
+    instead of crashing the walk."""
     win_start = 1_700_000_000.0
 
     with tempfile.TemporaryDirectory() as tmp:
+        missing = os.path.join(tmp, "does-not-exist")
+        if pace._scandir_entries(missing) != []:
+            failures.append("_scandir_entries on a missing dir should return []")
+        # A root that raises on scandir must fall out of discovery entirely.
+        if pace._discover_pace_groups([missing], win_start):
+            failures.append("missing root should produce no groups")
+
+    if pace._entry_in_window(_StatRaisingEntry(), win_start):
+        failures.append("_entry_in_window with a raising stat() should be False")
+
+    # The stat-raises entry flows through the parent-file arm as a skip.
+    with patch(
+        "statusline_lib.pace._scandir_entries",
+        side_effect=[[_FakeDirEntry("slug1")], [_StatRaisingEntry()]],
+    ):
+        groups = pace._discover_pace_groups(["fake-root"], win_start)
+    if groups:
+        failures.append(
+            f"OSError in stat should skip files; got groups={list(groups.keys())}"
+        )
+
+
+class _FakeDirEntry:
+    """Directory-shaped DirEntry stand-in for driving the walk without disk."""
+
+    def __init__(self, name):
+        self.name = name
+        self.path = os.path.join("fake-root", name)
+
+    def is_dir(self, follow_symlinks=True):
+        return True
+
+
+def _check_discover_pace_groups_skips_non_matches(failures):
+    """Stray files at the root level (not slug dirs), non-jsonl files inside a
+    slug dir, and non-agent files inside subagents/ are all skipped."""
+    win_start = 1_700_000_000.0
+    fresh = (win_start + 100, win_start + 100)
+
+    with tempfile.TemporaryDirectory() as tmp:
         root = os.path.join(tmp, "projects")
-        # Parent JSONL: slug/sess.jsonl -- getmtime will raise OSError
         slug_dir = os.path.join(root, "slug1")
-        os.makedirs(slug_dir)
-        parent_path = os.path.join(slug_dir, "sess1.jsonl")
-        with open(parent_path, "w", encoding="utf-8") as f:
-            f.write("")  # empty file exists so glob finds it
-
-        # Subagent JSONL: slug2/sess2/subagents/agent-x.jsonl
-        sub_dir = os.path.join(root, "slug2", "sess2", "subagents")
+        sub_dir = os.path.join(slug_dir, "sess1", "subagents")
         os.makedirs(sub_dir)
-        agent_path = os.path.join(sub_dir, "agent-x.jsonl")
-        with open(agent_path, "w", encoding="utf-8") as f:
-            f.write("")
 
-        # Patch getmtime to raise OSError for both paths so the OSError branches fire
-        def raise_oserror(path):
-            raise OSError("injected")
+        stray_root_file = os.path.join(root, "README.txt")
+        stray_slug_file = os.path.join(slug_dir, "notes.txt")
+        stray_sub_file = os.path.join(sub_dir, "not-an-agent.jsonl")
+        keeper = os.path.join(sub_dir, "agent-x.jsonl")
+        for path in (stray_root_file, stray_slug_file, stray_sub_file, keeper):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("")
+            os.utime(path, fresh)
 
-        with patch("statusline_lib.pace.os.path.getmtime", side_effect=raise_oserror):
-            groups = pace._discover_pace_groups([root], win_start)
+        groups = pace._discover_pace_groups([root], win_start)
 
-        # Both files should have been skipped (OSError -> continue), so groups empty
-        if groups:
-            failures.append(
-                f"OSError in getmtime should skip files; got groups={list(groups.keys())}"
-            )
+    paths = [p for group in groups.values() for p in group]
+    if [os.path.basename(p) for p in paths] != ["agent-x.jsonl"]:
+        failures.append(f"non-matching entries should be skipped, got {paths!r}")
 
 
 def _check_discover_pace_groups_subagent(failures):
@@ -345,6 +391,7 @@ def check(failures):
     _check_weekly_needle_verbose(failures)
     _check_weekly_needle_exception_path(failures)
     _check_discover_pace_groups_oserror(failures)
+    _check_discover_pace_groups_skips_non_matches(failures)
     _check_discover_pace_groups_subagent(failures)
 
 

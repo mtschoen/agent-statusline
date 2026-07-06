@@ -99,8 +99,15 @@ def _window_spend_cached(win_start):
 
     A render asks for up to three windows (5-min, 24h, midnight); one cache file
     holds all of them so they don't evict each other.
+
+    win_start is quantized to the TTL grid first: trailing windows are anchored
+    to the moving clock (e.g. now - 300), so the raw value is different on every
+    render and would never hit the cache -- each render would re-pay the full
+    fleet rescan. Quantizing shifts the window edge by at most one TTL, which is
+    noise for a 5-minute rate, and makes renders inside one TTL share a key.
     """
-    win_key = str(int(win_start))
+    win_start = int(win_start) - int(win_start) % _SPEND_CACHE_TTL_SECONDS
+    win_key = str(win_start)
     now = _now_unix()
     sums = {}
     try:

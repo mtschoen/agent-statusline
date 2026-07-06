@@ -6,7 +6,6 @@ Imports:
   walker -- for _walker_root_list
 """
 
-import glob
 import json
 import os
 from datetime import UTC, datetime
@@ -68,34 +67,62 @@ def _parse_pace_line(line, seen_ids, earliest):
     return ts, (msg.get("usage") or {}), (msg.get("model") or "")
 
 
+def _scandir_entries(dir_path):
+    """os.scandir as a list; [] when the directory is missing or unreadable
+    (a session dir without a subagents/ child is the everyday case)."""
+    try:
+        with os.scandir(dir_path) as it:
+            return list(it)
+    except OSError:
+        return []
+
+
+def _entry_in_window(entry, earliest):
+    """True when the DirEntry's mtime is at/after `earliest`; unreadable -> False."""
+    try:
+        return entry.stat().st_mtime >= earliest
+    except OSError:
+        return False
+
+
 def _discover_pace_groups(roots, earliest):
     """Group transcript files (parent jsonl + its subagents) by
     (slug, session_id), keeping only files whose mtime could hold in-range
-    entries. The mtime prefilter prunes ~80% of files."""
+    entries. The mtime prefilter prunes ~80% of files.
+
+    Built on os.scandir rather than glob + os.path.getmtime: DirEntry.stat()
+    reuses the directory listing's attributes (no per-file stat syscall on
+    Windows, one round-trip per directory on network shares), where per-file
+    getmtime cost seconds per render once roots grew to thousands of files.
+    """
     groups = {}
     for proj_root in roots:
-        for path in glob.glob(os.path.join(proj_root, "*", "*.jsonl")):
-            try:
-                if os.path.getmtime(path) < earliest:
-                    continue
-            except OSError:
-                continue
-            slug = os.path.basename(os.path.dirname(path))
-            session_id = os.path.splitext(os.path.basename(path))[0]
-            groups.setdefault((slug, session_id), []).append(path)
-        sub_pattern = os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl")
-        for path in glob.glob(sub_pattern):
-            try:
-                if os.path.getmtime(path) < earliest:
-                    continue
-            except OSError:
-                continue
-            sub_dir = os.path.dirname(path)
-            session_dir = os.path.dirname(sub_dir)
-            session_id = os.path.basename(session_dir)
-            slug = os.path.basename(os.path.dirname(session_dir))
-            groups.setdefault((slug, session_id), []).append(path)
+        for slug_entry in _scandir_entries(proj_root):
+            if slug_entry.is_dir(follow_symlinks=False):
+                _collect_session_files(slug_entry, earliest, groups)
     return groups
+
+
+def _collect_session_files(slug_entry, earliest, groups):
+    """One slug dir's contribution to the pace groups: parent JSONLs directly
+    under the slug dir, plus each session dir's subagent JSONLs."""
+    slug = slug_entry.name
+    for entry in _scandir_entries(slug_entry.path):
+        if entry.name.endswith(".jsonl"):
+            if _entry_in_window(entry, earliest):
+                session_id = entry.name[: -len(".jsonl")]
+                groups.setdefault((slug, session_id), []).append(entry.path)
+        elif entry.is_dir(follow_symlinks=False):
+            _collect_subagent_files(entry, slug, earliest, groups)
+
+
+def _collect_subagent_files(session_entry, slug, earliest, groups):
+    """agent-*.jsonl under `<session dir>/subagents`, grouped with the parent
+    session's (slug, session_id) key."""
+    for sub in _scandir_entries(os.path.join(session_entry.path, "subagents")):
+        is_agent_jsonl = sub.name.startswith("agent-") and sub.name.endswith(".jsonl")
+        if is_agent_jsonl and _entry_in_window(sub, earliest):
+            groups.setdefault((slug, session_entry.name), []).append(sub.path)
 
 
 def _pace_hourly_for_file(path, seen_ids, win_start_unix, n_buckets):

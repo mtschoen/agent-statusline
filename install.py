@@ -1,5 +1,4 @@
-"""Wire statusLine + subagentStatusLine + wrap nudge hook settings for
-Claude Code, Qwen Code, Antigravity CLI, and Pi extension loader.
+"""Wire status-line settings for Claude, Codex, Qwen, Antigravity, and Pi.
 
 Idempotent: re-running just refreshes each target's install strings; every
 other key in settings files is preserved verbatim, and pre-existing extension
@@ -18,9 +17,10 @@ Platform support:
   --platform both         Installs to both Claude and Qwen platforms
   --platform antigravity  Installs to ~/.gemini/antigravity-cli/settings.json
   --platform pi           Installs Pi extension loader at ~/.pi/agent/extensions/agent-statusline/index.ts
+  --platform codex        Installs a native preset to ~/.codex/config.toml
 
 Usage (typically via the install.sh / install.bat wrappers):
-    python install.py --repo /abs/path/to/repo [--platform claude|qwen|both|antigravity|pi] [--dry-run]
+    python install.py --repo /abs/path/to/repo [--platform claude|codex|qwen|both|antigravity|pi] [--dry-run]
 """
 
 import argparse
@@ -28,6 +28,7 @@ import json
 import os
 import sys
 
+from statusline_lib.codex_install import codex_config_current, merge_codex_config
 from statusline_lib.nudge_install import (
     _merge_nudge_hook,
     _nudge_command,
@@ -85,7 +86,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--platform",
-        choices=["claude", "qwen", "both", "antigravity", "pi"],
+        choices=["claude", "codex", "qwen", "both", "antigravity", "pi"],
         default="claude",
         help="Which CLI to install for (default: claude)",
     )
@@ -208,6 +209,7 @@ def main():
     install_qwen = platform in ("qwen", "both")
     install_antigravity = platform == "antigravity"
     install_pi = platform == "pi"
+    install_codex = platform == "codex"
 
     if install_claude:
         result = _install_claude(repo, args.dry_run)
@@ -229,6 +231,50 @@ def main():
         if result != 0:
             return result
 
+    if install_codex:
+        result = _install_codex(args.dry_run)
+        if result != 0:
+            return result
+
+    return 0
+
+
+def _install_codex(dry_run):
+    """Install the closest native preset Codex's built-in footer supports."""
+    config_path = os.path.expanduser("~/.codex/config.toml")
+    try:
+        current = _load_text(config_path)
+    except OSError as exc:
+        print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
+        return 1
+
+    text = current or ""
+    try:
+        if current is not None and codex_config_current(text):
+            if dry_run:
+                print(f"# {config_path} already current -- nothing to write")
+            else:
+                print(f"already current: {config_path}")
+                print("Nothing to do.")
+            return 0
+        merged = merge_codex_config(text)
+    except ValueError as exc:
+        print(f"error: could not merge {config_path}: {exc}", file=sys.stderr)
+        print(
+            "  refusing to overwrite the existing config -- fix it first",
+            file=sys.stderr,
+        )
+        return 1
+
+    if dry_run:
+        print(f"# would write to {config_path}")
+        print(merged, end="")
+        return 0
+
+    _atomic_write_text(config_path, merged)
+    print(f"updated {config_path}")
+    print("  tui.status_line:    native Codex preset")
+    print("Open a new Codex CLI session to pick it up.")
     return 0
 
 

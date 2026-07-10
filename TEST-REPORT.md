@@ -1,13 +1,29 @@
 # schoen-claude-status - Test Report
 
-`2026-07-06`
+`2026-07-10`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
-| **Tests** | 33 `scripts/verify_*.py`, all passing locally |
-| **Git** | `fix/ci-green-restore` (restore lint + 100% coverage on main) |
+| **Tests** | 34 `scripts/verify_*.py`, all passing locally |
+| **Git** | `947c78d` (`main`) |
+
+**This run (Codex CLI native statusline preset):** added a safe, idempotent
+`~/.codex/config.toml` merge and `install.py --platform codex`. Codex owns its
+TUI footer and does not expose Claude Code's command-backed JSON/stdin hook, so
+the installer selects the closest built-in fields without pretending the
+Claude-only cache/cost/beacon rows can render. The new
+`statusline_lib/codex_install.py` has **100% coverage** across section, dotted,
+nested-child-table, CRLF, invalid-TOML, inline-table, scanner-guard, and
+integrity-guard cases. The nested-child regression matches a live Codex config
+that defines `[tui.model_availability_nux]` before the installer adds `[tui]`.
+Runtime smoke: installed into an isolated temporary Codex home, verified the
+generated native preset, and confirmed a second install reports `already
+current`. A live install against an existing nested-child-table Codex config
+then succeeded with the same idempotence check. Ruff is clean; aislop is
+Healthy (94/100) with the same four pre-existing file-size warnings and no
+errors.
 
 **This run (CI-green restore):** main had been RED on all three CI checks
 since `b62b612` (2026-06-27), ~10 days before being noticed - unrelated to the
@@ -104,16 +120,16 @@ overrides.
 
 ## Coverage (hard gate, 100%)
 
-Measured by running all 33 `verify_*.py` under coverage.py and reporting
+Measured by running all 34 `verify_*.py` under coverage.py and reporting
 `statusline_lib/` - the package that holds all logic. CI fails below 100%,
 independently on each OS job (Linux and Windows each run the gate on their own
 run, not combined - a branch only covered on one leg fails the other).
 
-**Total: 1499 / 1499 statements (100%, independently on both CI OS legs)** -
+**Total: 1599 / 1599 statements (100%, independently on both CI OS legs)** -
 every module: `__init__` 15, `badge` 82, `base` 56, `beacon` 210,
-`burnrate` 146, `compact` 37, `cost` 114, `costfmt` 68, `diffstat` 7,
-`nudge` 53, `nudge_install` 37, `pace` 275, `prefs` 31, `project` 61,
-`qwen` 53, `sessions` 115, `teams` 67, `walker` 72.
+`burnrate` 146, `codex_install` 100, `compact` 37, `cost` 114, `costfmt` 68,
+`diffstat` 7, `nudge` 53, `nudge_install` 37, `pace` 275, `prefs` 31,
+`project` 61, `qwen` 53, `sessions` 115, `teams` 67, `walker` 72.
 
 **Scope:** entry-point glue is outside the measured set, by design -
 `statusline.py`, `subagent_statusline.py`, `qwen_statusline.py`,
@@ -123,7 +139,7 @@ smoke test. Logic belongs in `statusline_lib`, where the gate sees it.
 ## Gates and commands
 
 The bar: `ruff check .` + `ruff format --check .` -> 0, `aislop ci .` -> >= 90
-(currently 100), and statusline_lib coverage -> 100%.
+(currently 94), and statusline_lib coverage -> 100%.
 
 ```bash
 # First time:

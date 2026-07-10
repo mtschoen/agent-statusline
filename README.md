@@ -283,7 +283,8 @@ constants in the script if your scale differs.
 git clone https://github.com/mtschoen/schoen-claude-status.git ~/schoen-claude-status
 ```
 
-Then wire the statuslines and nudge hooks into the configuration file. The repo ships an installer that does the JSON merge for you, preserving every other key:
+Then configure the statusline for the target CLI. The installer merges the
+platform's JSON or TOML configuration while preserving unrelated settings:
 
 ```sh
 # macOS / Linux / Git Bash (Claude Code by default)
@@ -297,9 +298,14 @@ Then wire the statuslines and nudge hooks into the configuration file. The repo 
 
 # For Pi:
 ~/schoen-claude-status/install.sh --platform pi
+
+# For Codex CLI (native footer preset):
+~/schoen-claude-status/install.sh --platform codex
 ```
 
-It's idempotent - re-run any time and it'll just refresh the configuration strings to point at the current checkout. Pass `--dry-run` to preview the merged JSON without writing.
+It's idempotent - re-run any time and it refreshes only the settings it owns
+(including checkout paths on command-backed platforms). Pass `--dry-run` to
+preview the merged configuration without writing.
 
 Options:
 - `--platform claude`       (default) Installs to `~/.claude/settings.json`
@@ -307,6 +313,7 @@ Options:
 - `--platform qwen`         Installs to `~/.qwen/settings.json`
 - `--platform both`         Installs to both Claude and Qwen
 - `--platform pi`           Installs Pi extension loader to `~/.pi/agent/extensions/agent-statusline/index.ts`
+- `--platform codex`        Installs a native footer preset to `~/.codex/config.toml`
 
 If you'd rather edit settings by hand, the equivalent block
 is:
@@ -340,6 +347,39 @@ call) - so while you're idle waiting on a background Agent Teams teammate
 showed on the last redraw and never move. This is a harness-level setting, not
 script content, so unlike editing the `.py`/`.sh` files themselves, **it
 requires a session restart (or a fresh `claude` session) to take effect.**
+
+### Codex CLI
+
+Codex CLI owns its TUI footer rather than invoking a command-style statusline.
+Run the installer with `--platform codex` to merge the closest native preset
+into `~/.codex/config.toml` while preserving unrelated TOML settings and
+comments:
+
+```toml
+[tui]
+status_line = [
+  "run-state",
+  "current-dir",
+  "git-branch",
+  "model-with-reasoning",
+  "context-used",
+  "five-hour-limit",
+  "weekly-limit",
+  "used-tokens",
+  "branch-changes",
+  "thread-id",
+  "thread-title",
+  "task-progress",
+]
+status_line_use_colors = true
+```
+
+This maps the information Codex exposes natively: activity, cwd/branch/diff,
+model and reasoning, context, quota, tokens, thread identity, and plan progress.
+Codex currently has no external-command or multiline extension point, so the
+Claude-specific cache/TTL/cost/burn-rate, transcript walker, teammate summary,
+and calibrated progress-beacon rows cannot be carried over. Re-run
+`/statusline` inside Codex to interactively adjust the installed field order.
 
 ### Pi extension
 

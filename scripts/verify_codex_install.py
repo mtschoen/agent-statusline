@@ -23,7 +23,24 @@ def _expect_value_error(failures, label, text, message):
         failures.append(f"{label}: expected ValueError")
 
 
+def _check_preset_fields(failures):
+    richer_fields = {
+        "pull-request-number",
+        "total-input-tokens",
+        "total-output-tokens",
+        "permissions",
+        "approval-mode",
+        "fast-mode",
+    }
+    if not richer_fields.issubset(CODEX_STATUS_LINE_ITEMS):
+        failures.append("preset: richer native telemetry fields are missing")
+    if "thread-id" in CODEX_STATUS_LINE_ITEMS:
+        failures.append("preset: verbose thread-id should not consume footer width")
+
+
 def check(failures):
+    _check_preset_fields(failures)
+
     try:
         codex_install._array_value_end("[", 0, 1)
     except ValueError as exc:

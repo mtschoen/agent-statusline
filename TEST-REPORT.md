@@ -7,7 +7,21 @@
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
 | **Tests** | 34 `scripts/verify_*.py`, all passing locally |
-| **Git** | `947c78d` (`main`) |
+| **Git** | `50a22c4` (`main` + working tree) |
+
+**This run (richer Codex preset + shared cache formatting):** the native Codex
+preset now trades the verbose thread UUID for PR number, input/output token
+totals, permissions, approval mode, and fast-mode state. Upstream Codex 0.144.0
+still exposes neither cached-token telemetry nor caller-defined labels/colors,
+so cache hit/miss cannot yet render in its native footer. The reusable part is
+now centralized in `statusline_lib/cachefmt.py`: Claude and Qwen share cache
+count coloring, hit-rate math, and the high-is-good threshold ramp rather than
+maintaining harness-specific copies. The isolated Codex install smoke wrote the
+richer preset, a second install was idempotent, and the shared Claude/Qwen cache
+render smoke preserved their existing colored output. Ruff is clean; aislop is
+Healthy (94/100) with the same four pre-existing file-size warnings and no
+errors. All 34 verify scripts pass and `statusline_lib` remains at **100%**
+(1611/1611 statements), including all 11 statements in the new shared module.
 
 **This run (Codex CLI native statusline preset):** added a safe, idempotent
 `~/.codex/config.toml` merge and `install.py --platform codex`. Codex owns its
@@ -125,11 +139,12 @@ Measured by running all 34 `verify_*.py` under coverage.py and reporting
 independently on each OS job (Linux and Windows each run the gate on their own
 run, not combined - a branch only covered on one leg fails the other).
 
-**Total: 1599 / 1599 statements (100%, independently on both CI OS legs)** -
-every module: `__init__` 15, `badge` 82, `base` 56, `beacon` 210,
-`burnrate` 146, `codex_install` 100, `compact` 37, `cost` 114, `costfmt` 68,
-`diffstat` 7, `nudge` 53, `nudge_install` 37, `pace` 275, `prefs` 31,
-`project` 61, `qwen` 53, `sessions` 115, `teams` 67, `walker` 72.
+**Total: 1611 / 1611 statements (100%, independently on both CI OS legs)** -
+every module: `__init__` 16, `badge` 82, `base` 56, `beacon` 210,
+`burnrate` 146, `cachefmt` 11, `codex_install` 100, `compact` 37, `cost` 114,
+`costfmt` 68, `diffstat` 7, `nudge` 53, `nudge_install` 37, `pace` 275,
+`prefs` 31, `project` 61, `qwen` 53, `sessions` 115, `teams` 67,
+`walker` 72.
 
 **Scope:** entry-point glue is outside the measured set, by design -
 `statusline.py`, `subagent_statusline.py`, `qwen_statusline.py`,

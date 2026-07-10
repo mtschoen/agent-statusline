@@ -245,8 +245,7 @@ def _install_codex(dry_run):
     try:
         current = _load_text(config_path)
     except OSError as exc:
-        print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
-        return 1
+        return _codex_read_error(config_path, exc)
 
     text = current or ""
     try:
@@ -259,12 +258,7 @@ def _install_codex(dry_run):
             return 0
         merged = merge_codex_config(text)
     except ValueError as exc:
-        print(f"error: could not merge {config_path}: {exc}", file=sys.stderr)
-        print(
-            "  refusing to overwrite the existing config -- fix it first",
-            file=sys.stderr,
-        )
-        return 1
+        return _codex_merge_error(config_path, exc)
 
     if dry_run:
         print(f"# would write to {config_path}")
@@ -276,6 +270,20 @@ def _install_codex(dry_run):
     print("  tui.status_line:    native Codex preset")
     print("Open a new Codex CLI session to pick it up.")
     return 0
+
+
+def _codex_read_error(config_path, exc):
+    print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
+    return 1
+
+
+def _codex_merge_error(config_path, exc):
+    print(f"error: could not merge {config_path}: {exc}", file=sys.stderr)
+    print(
+        "  refusing to overwrite the existing config -- fix it first",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _install_pi(repo, dry_run):

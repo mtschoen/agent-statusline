@@ -19,9 +19,9 @@ from .base import (
     RED,
     RESET,
     YELLOW,
-    color_high_good,
     fmt,
 )
+from .cachefmt import format_cache_hit, format_cache_read, format_cache_write
 
 # U+FE0E text-presentation selector keeps the warning glyph monochrome so the
 # ANSI red wins cross-platform (Windows Terminal would otherwise color-font it),
@@ -62,8 +62,8 @@ def format_cache(
     if total_in <= 0:
         return ""
     with_costs = show_costs and read_cost is not None and write_cost is not None
-    read_part = f"{CACHE_READ}{fmt(read)}{RESET}"
-    write_part = f"{CACHE_WRITE}{fmt(write)}{RESET}"
+    read_part = format_cache_read(read)
+    write_part = format_cache_write(write)
     if with_costs:
         read_part += f" {CACHE_READ}(${read_cost:.2f}){RESET}"
         write_part += f" {CACHE_WRITE}(${write_cost:.2f}){RESET}"
@@ -76,8 +76,7 @@ def format_cache(
         parts.append(f"{OUTPUT_TOK}{fmt(output_t)} (${output_cost:.2f}){RESET}")
     segment = " / ".join(parts)
     if show_hit:
-        hit_pct = read * 100.0 / total_in
-        segment += f" / {color_high_good(hit_pct, 90, 75)} hit"
+        segment += f" / {format_cache_hit(read, total_in, ' hit')}"
     return segment
 
 

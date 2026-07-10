@@ -15,16 +15,14 @@ Thinking tokens are appended to the context column as (thk NNNK).
 """
 
 from .base import (
-    CACHE_READ,
-    CACHE_WRITE,
     CTX_DENOM,
     GREEN,
     RED,
     RESET,
     YELLOW,
-    color_high_good,
     fmt,
 )
+from .cachefmt import format_cache_counts, format_cache_hit
 
 
 def format_qwen_cache(cached, prompt):
@@ -38,13 +36,7 @@ def format_qwen_cache(cached, prompt):
         return ""
     # For Qwen, cached = cache reads, non-cached = prompt - cached
     non_cached = max(0, prompt - cached)
-    hit_pct = cached * 100.0 / prompt if prompt > 0 else 0
-
-    return (
-        f"{CACHE_READ}{fmt(cached)}{RESET} / "
-        f"{CACHE_WRITE}{fmt(non_cached)}{RESET} / "
-        f"{color_high_good(hit_pct, 90, 75)}"
-    )
+    return f"{format_cache_counts(cached, non_cached)} / {format_cache_hit(cached, prompt)}"
 
 
 def format_qwen_tokens(tokens):

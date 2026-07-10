@@ -24,6 +24,7 @@ deviating project reconciles exactly once 1-hour writes bill at 2.0x). The Opus
 
 Package layout (dependency order, no cycles):
   base     -- _json_loads (orjson fallback), color constants, fmt, color helpers
+  cachefmt -- shared cache count/hit formatting across harness adapters
   prefs    -- live ~/.claude/.statusline-prefs.json resolver (pref/pref_bool)
   sessions -- session counting (psutil lazy), debounce state
   walker   -- binary discovery, root resolution, native pace bridge
@@ -106,6 +107,13 @@ from .burnrate import (
     _window_spend_cached,
     format_burn_rate,
     format_day_budget,
+)
+from .cachefmt import (
+    cache_hit_percent,
+    format_cache_counts,
+    format_cache_hit,
+    format_cache_read,
+    format_cache_write,
 )
 from .compact import (
     DROP_ORDER,
@@ -225,6 +233,7 @@ __all__ = [
     "RESET",
     "YELLOW",
     "app_dir",
+    "cache_hit_percent",
     "color_high_bad",
     "color_high_good",
     "count_active_sessions",
@@ -234,6 +243,10 @@ __all__ = [
     "format_beacon",
     "format_burn_rate",
     "format_cache",
+    "format_cache_counts",
+    "format_cache_hit",
+    "format_cache_read",
+    "format_cache_write",
     "format_calibrated_eta",
     "format_context",
     "format_cost",

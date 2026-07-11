@@ -54,5 +54,8 @@ def _beacons_latest_cached(session_id, state_dir=None):
     data = _walker_subcommand(
         "beacons-latest", "--session-id", session_id, "--no-config"
     )
+    # A falsy/None walker result is cached too: a session that starts
+    # emitting a beacon mid-window stays hidden for up to the TTL (2.5s),
+    # which is invisible at statusline cadence and keeps misses cheap.
     write_ttl_cache(path, {"data": data})
     return data

@@ -28,6 +28,10 @@ Package layout (dependency order, no cycles):
               is_local_mode, spinner_frame, safe_write, log_traceback)
   ttlcache -- generic single-value TTL disk-cache mechanics (read/write),
               shared by the git-ref and beacons-latest caches
+  beacon_cache -- TTL cache around the beacons-latest walker call
+  rendertimer  -- previous-render duration + session-peak state (ui Xms suffix)
+  settings_io / claude_family_install -- install.py's settings-JSON merge
+              helpers (pure dict-in/dict-out; not re-exported here)
   cachefmt -- shared cache count/hit formatting across harness adapters
   prefs    -- live ~/.claude/.statusline-prefs.json resolver (pref/pref_bool)
   sessions -- session counting (psutil lazy), debounce state

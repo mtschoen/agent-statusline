@@ -19,6 +19,11 @@
 - [ ] Codex: optionally wire tui.terminal_title (same item vocabulary as
       status_line, second ordered array; doubles the TOML-surgery surface —
       deliberately skipped in the 2026-07-11 preset refresh).
+- [ ] Parked from the 2026-07-11 final whole-branch review (cosmetic, no
+      urgency): split base.py's entry-script glue (hostname/spinner_frame/
+      safe_write/log_traceback/is_local_mode) into entryglue.py IF more glue
+      accumulates; further shrink install.py below aislop's 400-line
+      file-size threshold (473 after the wave-2 extraction).
 
 - [ ] Render-perf ratchet step 3 (conformance test:
       scripts/verify_render_budget.py, warm-core budget now 100ms — see

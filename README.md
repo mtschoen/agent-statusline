@@ -67,7 +67,7 @@ screen. The session-id badge, by contrast, is tiny and always shown.
 identity); fields are omitted when their data isn't available:
 
 - **Model** - the active model family as a colored badge, e.g. `opus4.8[1m]`
-  (magenta Opus, cyan Sonnet, blue Haiku, green Fable). An unrecognized family
+  (magenta Opus, cyan Sonnet, blue Haiku, green Fable, yellow Gemini Flash, magenta Gemini Pro, bright green Gemini fallback, bright cyan Qwen Coder, bright blue Qwen fallback). An unrecognized family
   falls back to the payload's human-readable name (e.g. `Fable 5`), or the raw
   id sans `claude-` prefix when none is given - a mauve `?` only when there's
   nothing else to show. The version is included when the id carries one, and

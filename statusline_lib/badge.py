@@ -87,10 +87,23 @@ def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct
             compact_tokens = int(window_size * float(override) / 100)
     red_tokens = max(0, compact_tokens - RED_MARGIN_TOKENS)
     is_1m = window_size >= 1_000_000 or "[1m]" in (model_id or "")
-    yellow_tokens = NUDGE_THRESHOLD_TOKENS if is_1m else window_size // 2
+    # The fixed 1M-tier anchors (250K yellow, 500K orange) only make sense
+    # when this window's own red threshold is past them. A `[1m]`-tagged
+    # model_id on a smaller PHYSICAL window (window_size disagrees with the
+    # tag) would otherwise put both anchors beyond red_tokens, making them
+    # unreachable -- every value from GREEN straight to RED with no warning
+    # band. Fall back to the proportional (window_size // 2) formula, same as
+    # the non-1M path, whenever the fixed anchor doesn't fit under this
+    # window's red threshold.
+    orange_applies = is_1m and red_tokens > ORANGE_THRESHOLD_1M_TOKENS
+    yellow_tokens = (
+        NUDGE_THRESHOLD_TOKENS
+        if is_1m and red_tokens > NUDGE_THRESHOLD_TOKENS
+        else window_size // 2
+    )
     if ctx_used >= red_tokens:
         ctx_color = RED
-    elif is_1m and ctx_used >= ORANGE_THRESHOLD_1M_TOKENS:
+    elif orange_applies and ctx_used >= ORANGE_THRESHOLD_1M_TOKENS:
         ctx_color = ORANGE
     elif ctx_used >= yellow_tokens:
         ctx_color = YELLOW

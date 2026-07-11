@@ -221,6 +221,35 @@ def _check_format_context_1m_via_model_id(failures):
             )
 
 
+def _check_format_context_1m_tag_small_window(failures):
+    # A [1m]-tagged model_id on a small PHYSICAL window (e.g. a per-agent
+    # window that doesn't match the runtime-tier tag) must not let the fixed
+    # 1M-tier anchors (250K yellow, 500K orange) outrun this window's own red
+    # threshold. red_tokens for a 200K window is 147K; the fixed yellow
+    # anchor (250K) sits past it, which made every value >=147K jump straight
+    # from GREEN to RED with no YELLOW band ever reachable.
+    window = 200_000
+    red_tokens = max(0, max(0, window - COMPACT_BUFFER_TOKENS) - RED_MARGIN_TOKENS)
+    if red_tokens >= NUDGE_THRESHOLD_TOKENS:
+        failures.append(
+            "test setup error: expected the fixed 1M yellow anchor to exceed "
+            "this window's red threshold"
+        )
+        return
+    used = red_tokens - 1
+    result = format_context(used, window, model_id="claude-opus-4[1m]")
+    if YELLOW not in result:
+        failures.append(
+            f"format_context: [1m]-tagged model on a small physical window "
+            f"must still reach YELLOW just below red ({used}), got {result!r}"
+        )
+    if RED in result:
+        failures.append(
+            f"format_context: value just below red threshold must not be RED, "
+            f"got {result!r}"
+        )
+
+
 def _check_version_for(failures):
     if _version_for("claude-opus-4-8", "opus") != "4.8":
         failures.append("_version_for: claude-opus-4-8 should yield '4.8'")
@@ -380,6 +409,7 @@ def main():
     _check_format_context_override_invalid(failures)
     _check_format_context_show_flags(failures)
     _check_format_context_1m_via_model_id(failures)
+    _check_format_context_1m_tag_small_window(failures)
     _check_version_for(failures)
     _check_qwen_version_for(failures)
     _check_qwen_size_for(failures)

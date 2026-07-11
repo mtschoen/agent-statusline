@@ -1,5 +1,5 @@
-"""Verify beacon.py walker-dependent paths: format_beacon,
-_bias_factor_cached, and format_calibrated_eta.
+"""Verify beacon.py walker-dependent paths (format_beacon, _bias_factor_cached,
+format_calibrated_eta) and beacon_cache.py's TTL disk-cache for beacons-latest.
 
 Patches _walker_subcommand and _find_beacon_anchors in-process so no real
 walker binary is required.
@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import statusline_lib.beacon as _beacon_mod
+import statusline_lib.beacon_cache as _beacon_cache_mod
 from statusline_lib.beacon import format_beacon, format_calibrated_eta
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -34,14 +35,14 @@ def _check_format_beacon_hidden(failures):
             f"format_beacon(None) must be (None,None), got ({rendered!r},{beacon!r})"
         )
 
-    _beacon_mod._walker_subcommand = lambda *args, **kw: None
+    _beacon_mod._beacons_latest_cached = lambda session_id: None
     rendered, beacon = format_beacon("some-session")
     if rendered is not None or beacon is not None:
         failures.append(
             f"format_beacon with no walker data must be (None,None), got ({rendered!r},{beacon!r})"
         )
 
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
+    _beacon_mod._beacons_latest_cached = lambda session_id: {
         "beacon": None,
         "age_seconds": 10,
     }
@@ -51,7 +52,7 @@ def _check_format_beacon_hidden(failures):
             f"format_beacon with None beacon must be (None,None), got ({rendered!r},{beacon!r})"
         )
 
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
+    _beacon_mod._beacons_latest_cached = lambda session_id: {
         "beacon": {"kind": "end"},
         "age_seconds": 10,
     }
@@ -61,7 +62,7 @@ def _check_format_beacon_hidden(failures):
             f"format_beacon with kind=end must be (None,None), got ({rendered!r},{beacon!r})"
         )
 
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
+    _beacon_mod._beacons_latest_cached = lambda session_id: {
         "beacon": {"kind": "report", "eta_seconds": 60, "summary": "working"},
         "age_seconds": 600,
     }
@@ -75,7 +76,7 @@ def _check_format_beacon_hidden(failures):
 
 
 def _check_format_beacon(failures):
-    original_walker = _beacon_mod._walker_subcommand
+    original_cached = _beacon_mod._beacons_latest_cached
     original_anchors = _beacon_mod._find_beacon_anchors
 
     try:
@@ -87,7 +88,7 @@ def _check_format_beacon(failures):
         recent_step = (datetime.now(UTC) - timedelta(minutes=1)).strftime(
             "%Y-%m-%dT%H:%M:%S.000Z"
         )
-        _beacon_mod._walker_subcommand = lambda *args, **kw: {
+        _beacon_mod._beacons_latest_cached = lambda session_id: {
             "beacon": {"kind": "report", "eta_seconds": 120, "summary": "in progress"},
             "age_seconds": 30,
         }
@@ -126,7 +127,7 @@ def _check_format_beacon(failures):
             )
 
     finally:
-        _beacon_mod._walker_subcommand = original_walker
+        _beacon_mod._beacons_latest_cached = original_cached
         _beacon_mod._find_beacon_anchors = original_anchors
 
 
@@ -312,10 +313,10 @@ def _check_format_beacon_bad_eta_seconds(failures):
     """A string eta_seconds (malformed transcript data) must degrade
     gracefully, not raise. _apply_beacon already float()-coerces the same
     field defensively; format_beacon must match."""
-    original_walker = _beacon_mod._walker_subcommand
+    original_cached = _beacon_mod._beacons_latest_cached
     original_anchors = _beacon_mod._find_beacon_anchors
     try:
-        _beacon_mod._walker_subcommand = lambda *args, **kw: {
+        _beacon_mod._beacons_latest_cached = lambda session_id: {
             "beacon": {
                 "kind": "report",
                 "eta_seconds": "not-a-number",
@@ -337,7 +338,7 @@ def _check_format_beacon_bad_eta_seconds(failures):
                 f"got {rendered!r}"
             )
     finally:
-        _beacon_mod._walker_subcommand = original_walker
+        _beacon_mod._beacons_latest_cached = original_cached
         _beacon_mod._find_beacon_anchors = original_anchors
 
 
@@ -459,27 +460,22 @@ def _check_bias_history_walk_is_local_only(failures):
     mount vs 0.5s local, against a 5s subprocess timeout -- every cache miss
     stalled a render for the full timeout and then failed. Bias calibration
     is local-machine semantics, so local-only is also more correct."""
-    import os
-    import tempfile
-
-    import statusline_lib.beacon as _bm
-
     captured = []
 
     def fake_walker(*args, **kw):
         captured.append(args)
         return {"n_pairs": 3, "bias_factor": 1.5}
 
-    original_walker = _bm._walker_subcommand
-    original_path = _bm._BIAS_CACHE_PATH
-    _bm._walker_subcommand = fake_walker
+    original_walker = _beacon_mod._walker_subcommand
+    original_path = _beacon_mod._BIAS_CACHE_PATH
+    _beacon_mod._walker_subcommand = fake_walker
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            _bm._BIAS_CACHE_PATH = os.path.join(tmp, "bias.json")
-            _bm._bias_factor_cached(604800)
+            _beacon_mod._BIAS_CACHE_PATH = os.path.join(tmp, "bias.json")
+            _beacon_mod._bias_factor_cached(604800)
     finally:
-        _bm._walker_subcommand = original_walker
-        _bm._BIAS_CACHE_PATH = original_path
+        _beacon_mod._walker_subcommand = original_walker
+        _beacon_mod._BIAS_CACHE_PATH = original_path
 
     if not captured:
         failures.append("bias walk should invoke the walker on a cold cache")
@@ -494,21 +490,24 @@ def _check_beacons_latest_walk_is_local_only(failures):
     does: the session transcript it looks up always lives on THIS machine, and
     the SMB extra roots measured 170-190ms per render vs ~55ms local-only --
     paid on EVERY render, uncached (found via profile: 0.5s of a 0.63s warm
-    render was this one call)."""
-    import statusline_lib.beacon as _bm
-
+    render was this one call). Exercises the REAL beacon_cache path (a cache
+    miss) end to end through format_beacon, not a stubbed cache lookup."""
     captured = []
 
     def fake_walker(*args, **kw):
         captured.append(args)
         return
 
-    original_walker = _bm._walker_subcommand
-    _bm._walker_subcommand = fake_walker
+    original_walker = _beacon_cache_mod._walker_subcommand
+    original_dir = _beacon_cache_mod._BEACON_LATEST_CACHE_DIR
+    _beacon_cache_mod._walker_subcommand = fake_walker
     try:
-        _bm.format_beacon("some-session-id")
+        with tempfile.TemporaryDirectory() as tmp:
+            _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmp
+            _beacon_mod.format_beacon("some-session-id")
     finally:
-        _bm._walker_subcommand = original_walker
+        _beacon_cache_mod._walker_subcommand = original_walker
+        _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = original_dir
 
     if not captured:
         failures.append("format_beacon should invoke the walker")
@@ -518,12 +517,147 @@ def _check_beacons_latest_walk_is_local_only(failures):
         )
 
 
+def _check_beacons_latest_cache_hit_skips_walker(failures, tmpdir):
+    """Render-perf ratchet step 2 (PLAN.md): beacons-latest costs ~60ms/render
+    local, uncached. A cache hit within the TTL must not touch the walker at
+    all, and must return the previously-cached payload verbatim (including a
+    now-stale age_seconds -- acceptable, since the staleness threshold that
+    matters is beacon._BEACON_STALE_SECONDS, two orders of magnitude looser)."""
+    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
+    _beacon_cache_mod._walker_subcommand = lambda *args, **kw: {
+        "beacon": {"kind": "report", "eta_seconds": 90, "summary": "first"},
+        "age_seconds": 1,
+    }
+    data1 = _beacon_cache_mod._beacons_latest_cached("cache-hit-session")
+
+    calls = []
+    _beacon_cache_mod._walker_subcommand = lambda *args, **kw: (
+        calls.append(1) or {"beacon": {"kind": "report"}, "age_seconds": 999}
+    )
+    data2 = _beacon_cache_mod._beacons_latest_cached("cache-hit-session")
+    if calls:
+        failures.append(
+            f"a fresh cache entry must not call the walker again; got {len(calls)} calls"
+        )
+    if data2 != data1:
+        failures.append(
+            f"a cache hit must return the previously-cached payload verbatim; "
+            f"got {data2!r} vs {data1!r}"
+        )
+
+
+def _check_beacons_latest_cache_expiry_recomputes(failures, tmpdir):
+    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
+    cache_path = _beacon_cache_mod._beacon_latest_cache_path("expiring-session")
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    stale_ts = (
+        datetime.now(UTC).timestamp()
+        - _beacon_cache_mod._BEACON_LATEST_CACHE_TTL_SECONDS
+        - 1
+    )
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {"cached_at_unix": stale_ts, "data": {"beacon": {"kind": "report"}}}, f
+        )
+
+    calls = []
+    _beacon_cache_mod._walker_subcommand = lambda *args, **kw: (
+        calls.append(1) or {"beacon": {"kind": "report", "summary": "fresh"}}
+    )
+    data = _beacon_cache_mod._beacons_latest_cached("expiring-session")
+    if len(calls) != 1:
+        failures.append(
+            f"an expired cache entry must recompute (1 walker call); got {len(calls)} calls"
+        )
+    beacon = data.get("beacon") or {}
+    if beacon.get("summary") != "fresh":
+        failures.append(
+            f"expired-cache recompute must return the fresh data; got {data!r}"
+        )
+
+
+def _check_beacons_latest_cache_corrupt_file_recomputes(failures, tmpdir):
+    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
+    cache_path = _beacon_cache_mod._beacon_latest_cache_path("corrupt-session")
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        f.write("not-json")
+
+    _beacon_cache_mod._walker_subcommand = lambda *args, **kw: {
+        "beacon": {"kind": "report", "summary": "recovered"}
+    }
+    data = _beacon_cache_mod._beacons_latest_cached("corrupt-session")
+    beacon = data.get("beacon") or {}
+    if beacon.get("summary") != "recovered":
+        failures.append(
+            f"a corrupt cache file must degrade to a fresh walker read; got {data!r}"
+        )
+
+
+def _check_beacons_latest_cache_unwritable_dir_still_returns_value(
+    failures, cache_base
+):
+    """A cache-write failure must not break rendering -- the freshly-computed
+    payload is still returned, just not persisted."""
+    blocker_file = os.path.join(cache_base, "not-a-dir")
+    with open(blocker_file, "w", encoding="utf-8") as f:
+        f.write("x")
+    # A path component that is a file makes os.makedirs fail with an OSError
+    # subclass on every platform -- simulates an unwritable cache dir without
+    # relying on chmod semantics that differ on Windows.
+    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = os.path.join(blocker_file, "state")
+    _beacon_cache_mod._walker_subcommand = lambda *args, **kw: {
+        "beacon": {"kind": "report", "summary": "still works"}
+    }
+    data = _beacon_cache_mod._beacons_latest_cached("unwritable-session")
+    beacon = data.get("beacon") or {}
+    if beacon.get("summary") != "still works":
+        failures.append(
+            f"unwritable cache dir must still return the computed payload; got {data!r}"
+        )
+
+
+def _check_beacons_latest_cache_distinct_sessions(failures, tmpdir):
+    """Two session ids rendering concurrently must not clobber each other's
+    cache entry (each gets its own per-session file)."""
+    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
+    path_a = _beacon_cache_mod._beacon_latest_cache_path("session-a")
+    path_b = _beacon_cache_mod._beacon_latest_cache_path("session-b")
+    if path_a == path_b:
+        failures.append(
+            "distinct session ids must map to distinct cache files (concurrent-safe keying)"
+        )
+
+
+def _check_beacons_latest_cache_mechanics(failures):
+    original_walker = _beacon_cache_mod._walker_subcommand
+    original_dir = _beacon_cache_mod._BEACON_LATEST_CACHE_DIR
+    try:
+        with tempfile.TemporaryDirectory() as base:
+            with tempfile.TemporaryDirectory(dir=base) as tmpdir:
+                _check_beacons_latest_cache_hit_skips_walker(failures, tmpdir)
+            with tempfile.TemporaryDirectory(dir=base) as tmpdir:
+                _check_beacons_latest_cache_expiry_recomputes(failures, tmpdir)
+            with tempfile.TemporaryDirectory(dir=base) as tmpdir:
+                _check_beacons_latest_cache_corrupt_file_recomputes(failures, tmpdir)
+            with tempfile.TemporaryDirectory(dir=base) as tmpdir:
+                _check_beacons_latest_cache_unwritable_dir_still_returns_value(
+                    failures, tmpdir
+                )
+            with tempfile.TemporaryDirectory(dir=base) as tmpdir:
+                _check_beacons_latest_cache_distinct_sessions(failures, tmpdir)
+    finally:
+        _beacon_cache_mod._walker_subcommand = original_walker
+        _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = original_dir
+
+
 def main():
     failures = []
     _check_beacons_latest_walk_is_local_only(failures)
     _check_bias_history_walk_is_local_only(failures)
     _check_format_beacon(failures)
     _check_format_beacon_bad_eta_seconds(failures)
+    _check_beacons_latest_cache_mechanics(failures)
     _check_bias_factor_cached(failures)
     _check_format_calibrated_eta(failures)
     if failures:

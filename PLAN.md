@@ -13,22 +13,31 @@
       status_line, second ordered array; doubles the TOML-surgery surface —
       deliberately skipped in the 2026-07-11 preset refresh).
 
-- [ ] Render-perf ratchet (conformance test: scripts/verify_render_budget.py,
-      warm-core budget currently 350ms; measured 2026-07-11 real-machine
-      median 317ms / p90 650ms after the --no-config fixes). Steps, each
-      lowering the enforced budget:
-      1. TTL-cache _git_ref (~55ms/render of git subprocesses; 2-3s TTL is
-         invisible at statusline cadence).
-      2. TTL/mtime-cache the beacons-latest lookup (~60ms/render local).
-         Target after 1+2: core < 50ms, budget 100ms.
-      3. Wave-3 async-refresher split: renders NEVER pay a TTL-miss walk
-         inline — the render uses the stale cache and kicks a detached
-         refresher for the next render (kills the p90/max tail). Target:
-         cached-path core < 10ms, which is also the Pi bridge's per-keypress
-         budget. Blocking on first/second render (cwd/git basics) stays
-         acceptable per the cold budget (8s, realistically ~1s).
+- [ ] Render-perf ratchet step 3 (conformance test:
+      scripts/verify_render_budget.py, warm-core budget now 100ms — see
+      Done for steps 1+2). Wave-3 async-refresher split: renders NEVER pay a
+      TTL-miss walk inline — the render uses the stale cache and kicks a
+      detached refresher for the next render (kills the p90/max tail).
+      Target: cached-path core < 10ms, which is also the Pi bridge's
+      per-keypress budget. Blocking on first/second render (cwd/git basics)
+      stays acceptable per the cold budget (8s, realistically ~1s).
 
 ## Done
+
+- Render-perf ratchet steps 1+2 CLOSED (2026-07-11, sdd/ratchet-12): TTL disk
+  caches (2.5s TTL, atomic tmp+os.replace writes, keyed per-cwd/per-session
+  so concurrent renders never clobber each other) for (1) `_git_ref`'s two
+  git subprocess calls (statusline.py `_git_ref_raw_cached`) and (2) the
+  beacons-latest walker lookup (new `statusline_lib/beacon_cache.py`,
+  `_beacons_latest_cached` — split into its own module to keep beacon.py
+  under the complexity gate's line-count threshold). Measured on this
+  machine's fixture environment (scripts/verify_render_budget.py's
+  warm-core check, median of 9 in-process renders): pre-cache 48-51ms,
+  post-cache 2-3ms (8 of 9 renders hit the warm cache after the first
+  miss) — well under the <50ms target. `_CORE_BUDGET_MS` lowered
+  350 -> 100 with real headroom. aislop/ruff/100%-coverage all clean
+  (verified against the pre-change baseline score to confirm no
+  regression). Step 3 (async-refresher split) remains in the inbox.
 
 - 2026-06-10 triage batch CLOSED (2026-07-11, wave-1 subagent fan-out; all
   TDD'd, 100% coverage held): (1) thk spacing 447ef0d; (2) badge threshold

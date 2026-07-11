@@ -1,8 +1,10 @@
 """Beacon scanning, format_beacon, format_calibrated_eta.
 
 Imports:
-  base   -- for color constants, _json_loads
-  walker -- for _walker_subcommand (beacons-latest, beacons-history)
+  base         -- for color constants, _json_loads
+  walker       -- for _walker_subcommand (beacons-history)
+  beacon_cache -- for _beacons_latest_cached (the beacons-latest TTL cache;
+                  split out to stay under the file-size complexity gate)
 """
 
 import glob
@@ -12,6 +14,7 @@ import re as _re
 from datetime import UTC, datetime
 
 from .base import GREEN, RED, RESET, YELLOW, _json_loads, app_dir
+from .beacon_cache import _beacons_latest_cached
 from .walker import _walker_subcommand
 
 _BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
@@ -234,12 +237,7 @@ def format_beacon(session_id):
     if not session_id:
         return (None, None)
     session_id = str(session_id)
-    # --no-config: this session's transcript is on THIS machine by
-    # definition; the SMB extra roots cost 170-190ms per render (uncached,
-    # every render) vs ~55ms local-only. Render-budget invariant applies.
-    data = _walker_subcommand(
-        "beacons-latest", "--session-id", session_id, "--no-config"
-    )
+    data = _beacons_latest_cached(session_id)
     if not data:
         return (None, None)
     beacon = data.get("beacon")

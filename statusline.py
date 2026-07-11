@@ -8,6 +8,7 @@ See README.md for layout, color thresholds, and install instructions.
 """
 
 import contextlib
+import hashlib
 import json
 import os
 import socket
@@ -116,6 +117,60 @@ def _git_command(cwd, *arguments):
 _GIT_HASH_COLOR = "\x1b[38;5;137m"  # muted tan - distinct from the blue session badge
 _HOST_COLOR = "\x1b[38;5;96m"  # muted mauve - distinct from the tan hash and blue badge
 
+# Render-perf ratchet step 1 (PLAN.md): two git subprocess calls cost ~55ms
+# per render, uncached. A stale ref for up to a few seconds is invisible at
+# statusline cadence (~300ms refresh), so TTL-cache the raw branch/hash
+# strings on disk, keyed by cwd so concurrent sessions in different repos
+# never clobber each other's entry. The coloured rendering itself is NOT
+# cached -- colours are stable constants, so caching the plain strings keeps
+# the cache file reusable and keeps this module's ANSI styling in one place.
+_GIT_REF_CACHE_TTL_SECONDS = 2.5
+_GIT_REF_CACHE_DIR = os.path.join(app_dir(), "state")
+
+
+def _git_ref_cache_path(cwd):
+    normalized = os.path.normcase(os.path.normpath(cwd))
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(_GIT_REF_CACHE_DIR, f"gitref-{digest}.json")
+
+
+def _git_ref_raw_cached(cwd):
+    """Return (branch, short_hash) for cwd, TTL-cached on disk. A cache miss
+    still pays the git cost inline; a hit skips both subprocess calls."""
+    path = _git_ref_cache_path(cwd)
+    try:
+        with open(path, encoding="utf-8") as f:
+            cached = json.load(f)
+        if (
+            isinstance(cached, dict)
+            and time.time() - cached.get("computed_at_unix", 0)
+            < _GIT_REF_CACHE_TTL_SECONDS
+        ):
+            return cached.get("branch", ""), cached.get("short_hash", "")
+    except (OSError, ValueError):
+        # No cache yet, or a corrupt/partial file -- fall through to a fresh
+        # computation rather than guess at a ref.
+        pass
+
+    branch = _git_command(cwd, "symbolic-ref", "--short", "HEAD")
+    short_hash = _git_command(cwd, "rev-parse", "--short", "HEAD")
+    payload = {
+        "computed_at_unix": time.time(),
+        "branch": branch,
+        "short_hash": short_hash,
+    }
+    try:
+        os.makedirs(_GIT_REF_CACHE_DIR, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp, path)
+    except OSError:
+        # Best-effort cache write; a failed write must not break rendering,
+        # just cost the next render a recompute.
+        pass
+    return branch, short_hash
+
 
 def _git_ref(cwd):
     """Render the git ref as `branch:hash` (e.g. `main:abc123`) so the commit
@@ -124,8 +179,7 @@ def _git_ref(cwd):
     HEAD there is no branch, so just the short hash is shown."""
     if not cwd:
         return ""
-    branch = _git_command(cwd, "symbolic-ref", "--short", "HEAD")
-    short_hash = _git_command(cwd, "rev-parse", "--short", "HEAD")
+    branch, short_hash = _git_ref_raw_cached(cwd)
     tinted_hash = f"{_GIT_HASH_COLOR}{short_hash}{RESET}" if short_hash else ""
     if branch and tinted_hash:
         return f"{branch}:{tinted_hash}"

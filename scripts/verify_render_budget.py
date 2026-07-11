@@ -48,12 +48,15 @@ _RENDER_PATH_FILES += [
 _MAX_SUBPROCESS_TIMEOUT = 2.0
 _RENDER_BUDGET_SECONDS = float(os.environ.get("STATUSLINE_TEST_RENDER_BUDGET", "8"))
 # Warm-core conformance: median in-process render (payload -> string, caches
-# warm, fixture corpus) must beat this. Evidence 2026-07-11: ~100-150ms in the
-# fixture environment (real-machine median 317ms includes walker+git against
-# live data). Ratchet plan lives in PLAN.md: cache git-ref and beacons-latest
-# (-> <50ms), then the wave-3 async-refresher split (-> <10ms cached path,
-# which is also the Pi bridge's keypress budget).
-_CORE_BUDGET_MS = float(os.environ.get("STATUSLINE_TEST_CORE_BUDGET_MS", "350"))
+# warm, fixture corpus) must beat this. Ratchet plan lives in PLAN.md.
+# Evidence 2026-07-11: pre-cache fixture-environment median was ~48-51ms;
+# TTL-caching _git_ref and beacons-latest (this machine's measured baseline
+# for the ratchet's steps 1+2) dropped that to ~2-3ms median (8 of the 9
+# in-process renders hit the warm TTL cache after the first miss), well
+# under the <50ms target -- budget lowered to 100ms for headroom. Remaining
+# step: the wave-3 async-refresher split (-> <10ms cached path, which is
+# also the Pi bridge's keypress budget).
+_CORE_BUDGET_MS = float(os.environ.get("STATUSLINE_TEST_CORE_BUDGET_MS", "100"))
 
 
 def _numeric_value(node):

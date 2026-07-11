@@ -52,38 +52,50 @@ def visible_width(text):
     return len(_ANSI_RE.sub("", text))
 
 
-def _columns():
-    raw = os.environ.get("COLUMNS")
-    if not raw:
-        return None
+def _int_cols(raw):
+    """Parse a width value to a positive int column count, or None."""
     try:
         cols = int(raw)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
     return cols if cols > 0 else None
 
 
-def terminal_columns():
-    """Public accessor for the parsed `$COLUMNS` width (None if unset/invalid).
+def _columns(payload_width=None):
+    """`$COLUMNS` wins when set (Claude Code >= 2.1.153 sets it before every
+    invocation); `payload_width` is the fallback for harnesses that carry
+    terminal width in their stdin payload instead of the environment (e.g.
+    Antigravity CLI's `terminal_width` field) rather than an env var at all."""
+    raw = os.environ.get("COLUMNS")
+    if raw:
+        return _int_cols(raw)
+    if payload_width is None:
+        return None
+    return _int_cols(payload_width)
+
+
+def terminal_columns(payload_width=None):
+    """Public accessor for the resolved terminal width (None if unavailable).
 
     Lets line-1 fit checks (e.g. the optional session-name suffix) reuse the
     same width source as line 2 without duplicating the parse.
     """
-    return _columns()
+    return _columns(payload_width)
 
 
 def _mode():
     return (pref("STATUSLINE_COMPACT") or "auto").strip().lower()
 
 
-def resolve_flags(render):
+def resolve_flags(render, payload_width=None):
     """Return the embellishment-flag dict for line 2.
 
     `render(flags) -> str` formats line 2 at the given verbosity; it is called
     repeatedly in `auto` mode to measure width as items drop. Modes: `0`/`never`/
     `full`/`off` -> all on; `1`/`always`/`compact`/`on` -> all off; anything else
-    (default `auto`) -> drop in DROP_ORDER until visible width <= $COLUMNS, or
-    stay full when $COLUMNS is unset.
+    (default `auto`) -> drop in DROP_ORDER until visible width <= the resolved
+    width (`$COLUMNS`, or `payload_width` when `$COLUMNS` is unset), or stay
+    full when neither is available.
     """
     mode = _mode()
     if mode in ("0", "never", "full", "off"):
@@ -91,7 +103,7 @@ def resolve_flags(render):
     if mode in ("1", "always", "compact", "on"):
         return dict.fromkeys(DROP_ORDER, False)
     flags = full_flags()
-    cols = _columns()
+    cols = _columns(payload_width)
     if cols is None:
         return flags
     dropped = 0

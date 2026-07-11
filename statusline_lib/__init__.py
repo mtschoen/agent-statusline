@@ -33,6 +33,8 @@ Package layout (dependency order, no cycles):
   diffstat -- format_lines (session +/- line counts for line 2)
   pace     -- pace walking, format_quota
   teams    -- agent-teams teammate summary line (subagentStatusLine can't reach it)
+  agy      -- Antigravity CLI payload adapters: quota -> 5h/wk render, agent_state
+              tag, per-turn cache fallback (payload-only, no transcript walk)
 """
 
 # ruff: noqa: F401
@@ -42,11 +44,26 @@ Package layout (dependency order, no cycles):
 # `statusline_lib._name`, so they MUST appear as package attributes even
 # though nothing inside this file calls them.
 
+from .agy import (
+    _AGENT_STATE_GLYPHS,
+    _AGY_QUOTA_PAIRS,
+    _agy_pair_worst_utilization,
+    _agy_primary_pair,
+    _agy_window_metrics,
+    format_agent_state,
+    format_agy_cache,
+    format_agy_quota,
+)
 from .badge import (
+    _GEMINI_VARIANT_COLORS,
     _MODEL_BADGES,
     COMPACT_BUFFER_TOKENS,
     ORANGE_THRESHOLD_1M_TOKENS,
     RED_MARGIN_TOKENS,
+    _format_gemini_badge,
+    _gemini_tier_for,
+    _gemini_variant_for,
+    _gemini_version_for,
     _qwen_size_for,
     _qwen_version_for,
     _version_for,
@@ -239,6 +256,9 @@ __all__ = [
     "ctx_window_for_model",
     "debounce_session_count",
     "fmt",
+    "format_agent_state",
+    "format_agy_cache",
+    "format_agy_quota",
     "format_beacon",
     "format_burn_rate",
     "format_cache",

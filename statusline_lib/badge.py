@@ -129,7 +129,21 @@ _MODEL_BADGES = [
     # Qwen model families (for Qwen Code port)
     (("qwen-coder", "qwen2.5-coder"), "qwen-coder", "\x1b[96m"),  # bright cyan
     (("qwen",), "qwen", "\x1b[94m"),  # bright blue
+    # Gemini (Antigravity CLI): flash/pro get their own colors below in
+    # _GEMINI_VARIANT_COLORS; this entry is the bright-green fallback for a
+    # variant neither of those cover (e.g. a bare "Gemini" or "Ultra" id).
+    (("gemini",), "gemini", "\x1b[92m"),  # bright green
 ]
+
+# Gemini ids are space-separated ("Gemini 3.5 Flash (High)"), unlike Claude's
+# hyphenated ids the other families' `key-version` regex assumes, so version
+# extraction gets its own pattern rather than reusing _version_for.
+_GEMINI_VERSION_RE = _re.compile(r"gemini[\s-]?(\d+(?:\.\d+)?)")
+_GEMINI_TIER_RE = _re.compile(r"\(([^)]+)\)")
+_GEMINI_VARIANT_COLORS = {
+    "flash": "\x1b[93m",  # bright yellow -- fast tier
+    "pro": "\x1b[95m",  # bright magenta -- flagship tier
+}
 
 
 def _version_for(mid, key):
@@ -158,6 +172,52 @@ def _qwen_size_for(mid):
     return match.group(1).lower() if match else ""
 
 
+def _gemini_version_for(mid):
+    """Extract a dotted version from a lowercased Gemini id, e.g.
+    'gemini 3.5 flash (high)' -> '3.5'. Returns "" when no version is present."""
+    match = _GEMINI_VERSION_RE.search(mid)
+    return match.group(1) if match else ""
+
+
+def _gemini_variant_for(mid):
+    """Extract the flash/pro tier from a lowercased Gemini id. Returns "" for
+    an unrecognized or absent variant (falls back to the plain 'gemini' badge)."""
+    if "flash" in mid:
+        return "flash"
+    if "pro" in mid:
+        return "pro"
+    return ""
+
+
+def _gemini_tier_for(raw_model_id):
+    """Extract Antigravity's parenthesized reasoning tier ('Gemini 3.5 Flash
+    (High)' -> 'High') from the RAW (non-lowercased) id, so the tag preserves
+    its original casing. Returns "" when no parenthesized tier is present."""
+    match = _GEMINI_TIER_RE.search(raw_model_id or "")
+    return match.group(1).strip() if match else ""
+
+
+def _format_gemini_badge(mid, raw_model_id, fallback_color, fallback_label):
+    """Gemini family badge: flash and pro get distinct colors (fast vs.
+    flagship tier), matching the per-family color philosophy the other badges
+    use, rather than one color for the whole family the way Qwen's
+    version+size badge does. An unrecognized variant falls back to the plain
+    green 'gemini' entry. The `(High)`-style reasoning tier Antigravity
+    appends to the model name is rendered as a separate, compact suffix tag
+    (mauve, like the unknown-family fallback color) rather than folded into
+    the badge name, so it reads as a modifier on the model, not part of its
+    identity."""
+    version = _gemini_version_for(mid)
+    variant = _gemini_variant_for(mid)
+    color = _GEMINI_VARIANT_COLORS.get(variant, fallback_color)
+    label = f"gemini-{variant}" if variant else fallback_label
+    badge = f"{color}{label}{version}{RESET}"
+    tier = _gemini_tier_for(raw_model_id)
+    if tier:
+        badge += f" {CTX_DENOM}({tier}){RESET}"
+    return badge
+
+
 def format_model_badge(model_id, display_name=""):
     """Colored short model-family badge, e.g. magenta `opus4.8[1m]`.
 
@@ -183,6 +243,8 @@ def format_model_badge(model_id, display_name=""):
                     size = _qwen_size_for(mid)
                     size_part = f"·{size}" if size else ""
                     return f"{color}{label}{version}{size_part}{RESET}"
+                if key == "gemini":
+                    return _format_gemini_badge(mid, model_id, color, label)
                 version = _version_for(mid, key)
                 return f"{color}{label}{version}{suffix}{RESET}"
     fallback = str(display_name or "").strip() or _re.sub(r"^claude-", "", model_id)

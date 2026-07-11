@@ -31,6 +31,9 @@ try:
         app_dir,
         count_active_sessions,
         debounce_session_count,
+        format_agent_state,
+        format_agy_cache,
+        format_agy_quota,
         format_beacon,
         format_burn_rate,
         format_cache,
@@ -164,7 +167,7 @@ def _format_cwd(home, current):
     return f"{home} {_CWD_REL_COLOR}[{hop}]{RESET}"
 
 
-def _line1(d, cwd, cwd_display, spinner):
+def _line1(d, cwd, cwd_display, spinner, terminal_width_hint=None):
     local_mode = (
         os.environ.get("CLAUDE_LOCAL_MODE") == "1"
         or os.environ.get("ANTIGRAVITY_LOCAL_MODE") == "1"
@@ -184,10 +187,16 @@ def _line1(d, cwd, cwd_display, spinner):
     ref = _git_ref(cwd)
     if ref:
         line1 = f"{line1} ({ref})"
+    # Antigravity CLI only: a muted [glyph state] tag from its `agent_state`
+    # field. "" (thus a no-op) on every other harness, which carries no such
+    # field.
+    state_tag = format_agent_state(d.get("agent_state"))
+    if state_tag:
+        line1 = f"{line1} {state_tag}"
     session_id = d.get("session_id") or d.get("conversation_id")
     session_name = d.get("session_name") or d.get("session_title") or d.get("title")
     line1 = _append_session_id(line1, session_id)
-    return _append_session_name(line1, session_name)
+    return _append_session_name(line1, session_name, terminal_width_hint)
 
 
 # Muted grey so the session title reads as a secondary label, not a headline.
@@ -209,20 +218,22 @@ def _append_session_id(line1, session_id):
     return f"{line1} {_SESSION_ID_COLOR}[{sid[:_SESSION_ID_LEN]}]{RESET}"
 
 
-def _append_session_name(line1, session_name):
+def _append_session_name(line1, session_name, terminal_width_hint=None):
     """Append the auto-generated session title after the path/branch, but only
-    when it fits. Width comes from `$COLUMNS` (the same source line 2 uses); if
-    that is unset (older Claude Code) we append best-effort. The title is the
-    first thing to yield - it is a nicety, never worth pushing the path off
-    screen - so on a known-too-narrow terminal it is dropped entirely. Long
-    titles are clipped to keep line 1 bounded even when width is unknown."""
+    when it fits. Width comes from `$COLUMNS` (the same source line 2 uses),
+    falling back to `terminal_width_hint` (Antigravity CLI's payload-carried
+    width) when unset; if neither is available we append best-effort. The
+    title is the first thing to yield - it is a nicety, never worth pushing
+    the path off screen - so on a known-too-narrow terminal it is dropped
+    entirely. Long titles are clipped to keep line 1 bounded even when width
+    is unknown."""
     name = str(session_name or "").strip()
     if not name:
         return line1
     if len(name) > _SESSION_NAME_MAX:
         name = name[: _SESSION_NAME_MAX - 1] + "…"
     segment = f" {_SESSION_NAME_COLOR}{name}{RESET}"
-    cols = terminal_columns()
+    cols = terminal_columns(terminal_width_hint)
     if cols is not None and visible_width(line1) + visible_width(segment) > cols:
         return line1
     return f"{line1}{segment}"
@@ -279,6 +290,16 @@ class _Line2(NamedTuple):
     # Pre-rendered `+A/-B` session diffstat. Not money, so it is NOT gated by
     # hide_cost - only by its own `lines` compact-drop flag.
     lines_summary: str
+    # Antigravity CLI's `quota` payload block -- the fallback quota source
+    # when there is no `rate_limits` (agy has no such field at all). None on
+    # every other harness. Defaulted (trailing fields) so existing
+    # keyword-arg callers that predate agy support don't need updating.
+    agy_quota: dict | None = None
+    # Antigravity CLI's `context_window.current_usage` -- the per-turn cache
+    # fallback used when the transcript walk found no cache activity (agy's
+    # brain transcripts carry no usage data at all, so this is always the
+    # case there).
+    current_usage: dict | None = None
 
 
 def _render_line2(flags, inputs):
@@ -312,12 +333,25 @@ def _render_line2(flags, inputs):
         show_input=flags["cache_input"] and money,
         show_output=flags["cache_output"] and money,
     )
+    if not cache_summary:
+        # Nothing from the transcript walk -- always true for Antigravity CLI
+        # (its brain transcripts carry no usage data), occasionally true for a
+        # brand-new session elsewhere. Fall back to the payload's own
+        # per-turn current_usage; format_agy_cache degrades to "" itself when
+        # that has no cache activity either.
+        cache_summary = format_agy_cache(
+            inputs.current_usage, show_hit=flags["cache_hit"]
+        )
     ttl_summary = format_ttl(
         walk["ttl_evictions"],
         walk["ttl_wasted"],
         show_wasted=flags["ttl_wasted"] and money,
     )
-    quota_summary = format_quota(inputs.rate_limits, show_pace=flags["quota_pace"])
+    quota_summary = (
+        format_quota(inputs.rate_limits, show_pace=flags["quota_pace"])
+        if inputs.rate_limits
+        else format_agy_quota(inputs.agy_quota, show_pace=flags["quota_pace"])
+    )
     burnrate_summary = (
         format_burn_rate(inputs.rate_limits, show_target=flags["burn_target"])
         if flags["burn_rate"] and money
@@ -402,8 +436,14 @@ def main():
     rate_limits = d.get("rate_limits")
     day_budget_summary = format_day_budget(rate_limits)
 
+    # Antigravity CLI carries terminal width in the payload (no $COLUMNS env
+    # var); Claude Code sets $COLUMNS directly, which always wins when present
+    # (see compact.py). Threaded through both line 1's title fit-check and
+    # line 2's compact-mode resolution.
+    terminal_width_hint = d.get("terminal_width")
+
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
-    line1 = _line1(d, cwd, cwd_display, spinner)
+    line1 = _line1(d, cwd, cwd_display, spinner, terminal_width_hint)
 
     # Resolve compact verbosity (STATUSLINE_COMPACT + $COLUMNS): re-render the
     # already-walked data at each flag set until it fits, then render once more.
@@ -418,8 +458,10 @@ def main():
         cost_summary,
         _hide_cost(),
         lines_summary,
+        agy_quota=d.get("quota"),
+        current_usage=cu,
     )
-    flags = resolve_flags(lambda f: _render_line2(f, line2_inputs))
+    flags = resolve_flags(lambda f: _render_line2(f, line2_inputs), terminal_width_hint)
     line2 = _render_line2(flags, line2_inputs)
 
     sys.stdout.write(line1)

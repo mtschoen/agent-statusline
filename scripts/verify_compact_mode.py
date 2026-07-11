@@ -150,6 +150,83 @@ def _check_terminal_columns(failures):
         )
 
 
+def _check_payload_width_fallback_when_columns_unset(failures):
+    # No $COLUMNS at all (e.g. Antigravity CLI's harness, which carries width
+    # in the stdin payload instead): payload_width should be used as if it
+    # were $COLUMNS.
+    from statusline_lib.compact import terminal_columns
+
+    result = _with_env({"COLUMNS": None}, lambda: terminal_columns(payload_width=100))
+    if result != 100:
+        failures.append(
+            f"terminal_columns: should fall back to payload_width, got {result!r}"
+        )
+
+
+def _check_columns_env_wins_over_payload_width(failures):
+    from statusline_lib.compact import terminal_columns
+
+    result = _with_env({"COLUMNS": "200"}, lambda: terminal_columns(payload_width=100))
+    if result != 200:
+        failures.append(
+            f"terminal_columns: $COLUMNS must win over payload_width when both set, got {result!r}"
+        )
+
+
+def _check_payload_width_invalid_or_absent(failures):
+    from statusline_lib.compact import terminal_columns
+
+    if (
+        _with_env({"COLUMNS": None}, lambda: terminal_columns(payload_width=None))
+        is not None
+    ):
+        failures.append(
+            "terminal_columns: no $COLUMNS and no payload_width should return None"
+        )
+    if (
+        _with_env(
+            {"COLUMNS": None}, lambda: terminal_columns(payload_width="not-a-number")
+        )
+        is not None
+    ):
+        failures.append(
+            "terminal_columns: non-numeric payload_width should return None"
+        )
+    if (
+        _with_env({"COLUMNS": None}, lambda: terminal_columns(payload_width=0))
+        is not None
+    ):
+        failures.append(
+            "terminal_columns: non-positive payload_width should return None"
+        )
+
+
+def _check_resolve_flags_uses_payload_width(failures):
+    # Same drop-order fixture as _check_auto_drops_in_order, but sourced from
+    # payload_width instead of $COLUMNS.
+    flags = _with_env(
+        {"STATUSLINE_COMPACT": "auto", "COLUMNS": None},
+        lambda: resolve_flags(_stub_render, payload_width=75),
+    )
+    expected = {
+        "cache_output": False,
+        "cache_input": False,
+        "lines": False,
+        "cache_costs": False,
+        "burn_target": False,
+        "cache_hit": False,
+        "quota_pace": False,
+        "ttl_wasted": False,
+        "burn_rate": False,
+        "context_pct": True,
+        "context_denom": True,
+    }
+    if flags != expected:
+        failures.append(
+            f"resolve_flags: payload_width drop order wrong; got {flags}, want {expected}"
+        )
+
+
 def check(failures):
     _check_visible_width(failures)
     _check_force_modes(failures)
@@ -160,6 +237,10 @@ def check(failures):
     _check_columns_invalid_string(failures)
     _check_columns_zero_or_negative(failures)
     _check_terminal_columns(failures)
+    _check_payload_width_fallback_when_columns_unset(failures)
+    _check_columns_env_wins_over_payload_width(failures)
+    _check_payload_width_invalid_or_absent(failures)
+    _check_resolve_flags_uses_payload_width(failures)
 
 
 def main():

@@ -1,6 +1,6 @@
-"""Verify the TTL eviction counter's gating logic: idle-gap-vs-written-TTL
-derivation and the rewrite-dominance read:write ratio that replaces a strict
-cache_read==0 check.
+"""Verify the TTL eviction counter's gating logic: a substantial rewrite
+(w >= TTL_MIN_WRITE_TOKENS) after an idle gap that exceeds the prior turn's
+written TTL counts as an eviction - with NO read-based condition at all.
 
 Split out of verify_cache_cost_split.py (which also covers this ground for
 the base accumulation/format_cache checks) once the partial-hit test additions
@@ -122,7 +122,8 @@ def _check_partial_hit_evicted(failures):
     # the FIRST resume gets read==0; the other three read the shared system-prompt
     # prefix the first resume just re-warmed (r=24299, identical across three
     # projects) while still rewriting the whole conversation (w=202628). A strict
-    # r==0 gate misses these real evictions entirely.
+    # r==0 gate misses these real evictions entirely - the gate now ignores the
+    # read count altogether, so this counts on the write + idle-gap facts alone.
     lines = [
         _turn("p1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
         _turn("p2", read=24299, write=202628, ts="2026-06-02T16:30:00.000Z"),
@@ -143,34 +144,39 @@ def _check_partial_hit_evicted(failures):
         failures.append(f"ttl_wasted {walk['ttl_wasted']!r} != {exp_wasted!r}")
 
 
-def _check_warm_resume_not_evicted(failures):
-    # A genuinely warm resume reads far more than it writes (mostly cache hit,
-    # small delta write) - must stay excluded even past the idle-gap threshold.
+def _check_small_session_partial_hit_evicted(failures):
+    # The case a read:write RATIO gate would have missed: the same fixed
+    # ~24k shared-prefix read as the real-world shape above, but a modest
+    # rewrite (w=10000) that a read-dominance ratio would read as "mostly a
+    # cache hit" and wrongly exclude. The gate has no read condition at all,
+    # so a small session's real eviction still counts on write + idle-gap
+    # alone.
     lines = [
-        _turn("w1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
-        _turn("w2", read=180000, write=5000, ts="2026-06-02T16:30:00.000Z"),
+        _turn("s1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
+        _turn("s2", read=24299, write=10000, ts="2026-06-02T16:30:00.000Z"),
     ]
-    tmp = tempfile.mkdtemp(prefix="ttl-gate-warm-")
+    tmp = tempfile.mkdtemp(prefix="ttl-gate-small-")
     parent = os.path.join(tmp, "sess.jsonl")
     _write_jsonl(parent, lines)
 
     walk = walk_transcript(parent, include_subagents=True)
 
-    if walk["ttl_evictions"] != 0:
+    if walk["ttl_evictions"] != 1:
         failures.append(
-            f"warm resume (read >> write) must not count; got {walk['ttl_evictions']}"
+            f"small-session rewrite dwarfed by the shared-prefix read must "
+            f"still count as an eviction; got {walk['ttl_evictions']}"
         )
 
 
-def _check_partial_hit_ratio_boundary_not_evicted(failures):
-    # Just above the TTL_PARTIAL_READ_RATIO cutoff (r = w*0.25 + 1) must not fire.
-    w = 100000
-    r = int(w * 0.25) + 1
+def _check_warm_double_resume_below_floor_not_evicted(failures):
+    # A warm double-resume: mostly cache hit (large read), small incidental
+    # write, well past the idle-gap threshold. With no read condition, only
+    # the write floor keeps this quiet - w=800 sits below TTL_MIN_WRITE_TOKENS.
     lines = [
-        _turn("b1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
-        _turn("b2", read=r, write=w, ts="2026-06-02T16:30:00.000Z"),
+        _turn("d1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
+        _turn("d2", read=180000, write=800, ts="2026-06-02T16:30:00.000Z"),
     ]
-    tmp = tempfile.mkdtemp(prefix="ttl-gate-boundary-")
+    tmp = tempfile.mkdtemp(prefix="ttl-gate-warmdouble-")
     parent = os.path.join(tmp, "sess.jsonl")
     _write_jsonl(parent, lines)
 
@@ -178,8 +184,8 @@ def _check_partial_hit_ratio_boundary_not_evicted(failures):
 
     if walk["ttl_evictions"] != 0:
         failures.append(
-            f"read just above the partial-read ratio must not count; "
-            f"got {walk['ttl_evictions']}"
+            f"warm double-resume write below TTL_MIN_WRITE_TOKENS must not "
+            f"count; got {walk['ttl_evictions']}"
         )
 
 
@@ -203,14 +209,14 @@ def _check_partial_hit_gap_not_exceeded_not_evicted(failures):
         )
 
 
-def _check_partial_hit_below_floor_not_evicted(failures):
-    # Same partial-hit read:write ratio, but the write sits below
-    # TTL_MIN_WRITE_TOKENS - the floor gate must still suppress it.
+def _check_first_turn_not_evicted(failures):
+    # The very first parent turn is always a full write by construction (there
+    # is nothing to have evicted yet) - must never count even with a huge
+    # write and a timestamp present.
     lines = [
-        _turn("f1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
-        _turn("f2", read=200, write=800, ts="2026-06-02T16:30:00.000Z"),
+        _turn("first", read=0, write=500000, ts="2026-06-02T15:00:00.000Z"),
     ]
-    tmp = tempfile.mkdtemp(prefix="ttl-gate-partial-floor-")
+    tmp = tempfile.mkdtemp(prefix="ttl-gate-first-")
     parent = os.path.join(tmp, "sess.jsonl")
     _write_jsonl(parent, lines)
 
@@ -218,7 +224,7 @@ def _check_partial_hit_below_floor_not_evicted(failures):
 
     if walk["ttl_evictions"] != 0:
         failures.append(
-            f"partial-hit write below TTL_MIN_WRITE_TOKENS must not count; "
+            f"the first parent turn must never count as an eviction; "
             f"got {walk['ttl_evictions']}"
         )
 
@@ -228,10 +234,10 @@ def check(failures):
     _check_ttl_threshold_derived_from_write(failures)
     _check_missing_timestamps_not_evicted(failures)
     _check_partial_hit_evicted(failures)
-    _check_warm_resume_not_evicted(failures)
-    _check_partial_hit_ratio_boundary_not_evicted(failures)
+    _check_small_session_partial_hit_evicted(failures)
+    _check_warm_double_resume_below_floor_not_evicted(failures)
     _check_partial_hit_gap_not_exceeded_not_evicted(failures)
-    _check_partial_hit_below_floor_not_evicted(failures)
+    _check_first_turn_not_evicted(failures)
 
 
 def main():
@@ -241,7 +247,9 @@ def main():
         for failure in failures:
             print(f"FAIL: {failure}")
         sys.exit(1)
-    print("OK: TTL eviction gating (idle-gap-vs-TTL, partial-hit ratio) is correct")
+    print(
+        "OK: TTL eviction gating (write floor + idle-gap-vs-TTL, no read condition) is correct"
+    )
 
 
 if __name__ == "__main__":

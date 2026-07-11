@@ -70,6 +70,8 @@ def _model_summaries(models):
     all_tokens = {}
     all_api = {}
     for model_data in models.values():
+        if not isinstance(model_data, dict):
+            continue
         tokens = model_data.get("tokens") or {}
         api = model_data.get("api") or {}
         for key in ("prompt", "completion", "cached", "thoughts"):
@@ -96,6 +98,10 @@ def main():
     try:
         d = json.loads(raw)
     except Exception:
+        d = {}
+    if not isinstance(d, dict):
+        # Valid JSON that isn't an object (e.g. a bare `null` or `[]`) parses
+        # without raising, so the except above never fires for it.
         d = {}
 
     cwd = (d.get("workspace") or {}).get("current_dir") or ""

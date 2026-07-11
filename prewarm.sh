@@ -17,13 +17,8 @@
 set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if command -v py >/dev/null 2>&1; then
-  PY="py -3"
-elif command -v python3 >/dev/null 2>&1; then
-  PY=python3
-else
-  PY=python
-fi
+# shellcheck source=interpreter-probe.sh disable=SC1091
+source "$DIR/interpreter-probe.sh"
 
 printf '{"cwd":"%s"}' "$DIR" | $PY "$DIR/statusline.py" >/dev/null 2>&1 || true
 exit 0

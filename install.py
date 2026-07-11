@@ -28,38 +28,15 @@ import json
 import os
 import sys
 
-from statusline_lib.codex_install import codex_config_current, merge_codex_config
-from statusline_lib.nudge_install import (
-    _merge_nudge_hook,
-    _nudge_command,
-    _nudge_hook_current,
-    _nudge_markers,
+from statusline_lib.claude_family_install import (
+    desired_statusline_entries,
+    merge_statusline_family_settings,
+    missing_required_scripts,
+    statusline_family_already_current,
 )
-
-
-def _load(path):
-    """Return parsed dict from `path`, {} if missing/empty, or raise."""
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding="utf-8") as f:
-        text = f.read().strip()
-    if not text:
-        return {}
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        raise ValueError(
-            f"{path} is not a JSON object (top-level type: {type(data).__name__})"
-        )
-    return data
-
-
-def _atomic_write(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+from statusline_lib.codex_install import codex_config_current, merge_codex_config
+from statusline_lib.nudge_install import _nudge_command, _nudge_markers
+from statusline_lib.settings_io import atomic_write_settings, load_settings
 
 
 def _atomic_write_text(path, text):
@@ -341,24 +318,27 @@ def _install_pi(repo, dry_run):
     return 0
 
 
-def _install_claude(repo, dry_run):
-    """Install statusLine + subagentStatusLine + nudge hook for Claude Code."""
-    settings_path = os.path.expanduser("~/.claude/settings.json")
-
+def _install_claude_family(
+    repo, dry_run, platform, settings_path, session_label, on_installed=None
+):
+    """Install statusLine + subagentStatusLine + nudge hook for a
+    Claude-settings.json-shaped platform (Claude Code or Antigravity CLI --
+    see statusline_lib.claude_family_install for why the merge logic itself
+    lives there instead of here)."""
     main_target, subagent_target, main_command, subagent_command = (
-        _commands_for_platform(repo, platform="claude")
+        _commands_for_platform(repo, platform=platform)
     )
-    nudge_target, nudge_command = _nudge_command(repo, platform="claude")
+    nudge_target, nudge_command = _nudge_command(repo, platform=platform)
     nudge_markers = _nudge_markers(nudge_target)
 
-    for script in (main_target, subagent_target, nudge_target):
-        if not os.path.exists(script):
-            print(f"error: expected file not found: {script}", file=sys.stderr)
-            print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
-            return 1
+    missing = missing_required_scripts(main_target, subagent_target, nudge_target)
+    if missing:
+        print(f"error: expected file not found: {missing[0]}", file=sys.stderr)
+        print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
+        return 1
 
     try:
-        settings = _load(settings_path)
+        settings = load_settings(settings_path)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"error: could not parse {settings_path}: {e}", file=sys.stderr)
         print(
@@ -371,17 +351,11 @@ def _install_claude(repo, dry_run):
         print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
         return 1
 
-    desired_statusline = {
-        "type": "command",
-        "command": main_command,
-        "refreshInterval": STATUSLINE_REFRESH_SECONDS,
-    }
-    desired_subagent = {"type": "command", "command": subagent_command}
-
-    already_current = (
-        settings.get("statusLine") == desired_statusline
-        and settings.get("subagentStatusLine") == desired_subagent
-        and _nudge_hook_current(settings, nudge_markers, nudge_command)
+    desired_statusline, desired_subagent = desired_statusline_entries(
+        main_command, subagent_command, STATUSLINE_REFRESH_SECONDS
+    )
+    already_current = statusline_family_already_current(
+        settings, desired_statusline, desired_subagent, nudge_markers, nudge_command
     )
 
     if already_current:
@@ -397,16 +371,16 @@ def _install_claude(repo, dry_run):
             print("Nothing to do.")
         return 0
 
-    settings["statusLine"] = desired_statusline
-    settings["subagentStatusLine"] = desired_subagent
-    _merge_nudge_hook(settings, nudge_markers, nudge_command)
+    merge_statusline_family_settings(
+        settings, desired_statusline, desired_subagent, nudge_markers, nudge_command
+    )
 
     if dry_run:
         print(f"# would write to {settings_path}")
         print(json.dumps(settings, indent=2))
         return 0
 
-    _atomic_write(settings_path, settings)
+    atomic_write_settings(settings_path, settings)
     print(f"updated {settings_path}")
     print(
         f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
@@ -414,10 +388,23 @@ def _install_claude(repo, dry_run):
     print(f"  subagentStatusLine: {subagent_command}")
     print(f"  UserPromptSubmit:   {nudge_command}")
 
-    _report_walker()
+    if on_installed is not None:
+        on_installed()
 
-    print("Open a new Claude Code session (or trigger a render) to pick it up.")
+    print(f"Open a new {session_label} session (or trigger a render) to pick it up.")
     return 0
+
+
+def _install_claude(repo, dry_run):
+    """Install statusLine + subagentStatusLine + nudge hook for Claude Code."""
+    return _install_claude_family(
+        repo,
+        dry_run,
+        platform="claude",
+        settings_path=os.path.expanduser("~/.claude/settings.json"),
+        session_label="Claude Code",
+        on_installed=_report_walker,
+    )
 
 
 def _install_qwen(repo, dry_run):
@@ -432,7 +419,7 @@ def _install_qwen(repo, dry_run):
         return 1
 
     try:
-        settings = _load(settings_path)
+        settings = load_settings(settings_path)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"error: could not parse {settings_path}: {e}", file=sys.stderr)
         print(
@@ -463,7 +450,7 @@ def _install_qwen(repo, dry_run):
         print(json.dumps(settings, indent=2))
         return 0
 
-    _atomic_write(settings_path, settings)
+    atomic_write_settings(settings_path, settings)
     print(f"updated {settings_path}")
     print(f"  ui.statusLine:      {qwen_command}")
 
@@ -473,79 +460,13 @@ def _install_qwen(repo, dry_run):
 
 def _install_antigravity(repo, dry_run):
     """Install statusLine + subagentStatusLine + nudge hook for Antigravity CLI."""
-    settings_path = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
-
-    main_target, subagent_target, main_command, subagent_command = (
-        _commands_for_platform(repo, platform="antigravity")
+    return _install_claude_family(
+        repo,
+        dry_run,
+        platform="antigravity",
+        settings_path=os.path.expanduser("~/.gemini/antigravity-cli/settings.json"),
+        session_label="Antigravity CLI",
     )
-    nudge_target, nudge_command = _nudge_command(repo, platform="antigravity")
-    nudge_markers = _nudge_markers(nudge_target)
-
-    for script in (main_target, subagent_target, nudge_target):
-        if not os.path.exists(script):
-            print(f"error: expected file not found: {script}", file=sys.stderr)
-            print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
-            return 1
-
-    try:
-        settings = _load(settings_path)
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"error: could not parse {settings_path}: {e}", file=sys.stderr)
-        print(
-            "  refusing to overwrite a malformed settings file -- fix or move it first",
-            file=sys.stderr,
-        )
-        return 1
-    except OSError as e:
-        # Unreadable settings file: report the cause and abort rather than clobber it.
-        print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
-        return 1
-
-    desired_statusline = {
-        "type": "command",
-        "command": main_command,
-        "refreshInterval": STATUSLINE_REFRESH_SECONDS,
-    }
-    desired_subagent = {"type": "command", "command": subagent_command}
-
-    already_current = (
-        settings.get("statusLine") == desired_statusline
-        and settings.get("subagentStatusLine") == desired_subagent
-        and _nudge_hook_current(settings, nudge_markers, nudge_command)
-    )
-
-    if already_current:
-        if dry_run:
-            print(f"# {settings_path} already current -- nothing to write")
-        else:
-            print(f"already current: {settings_path}")
-            print(
-                f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
-            )
-            print(f"  subagentStatusLine: {subagent_command}")
-            print(f"  UserPromptSubmit:   {nudge_command}")
-            print("Nothing to do.")
-        return 0
-
-    settings["statusLine"] = desired_statusline
-    settings["subagentStatusLine"] = desired_subagent
-    _merge_nudge_hook(settings, nudge_markers, nudge_command)
-
-    if dry_run:
-        print(f"# would write to {settings_path}")
-        print(json.dumps(settings, indent=2))
-        return 0
-
-    _atomic_write(settings_path, settings)
-    print(f"updated {settings_path}")
-    print(
-        f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
-    )
-    print(f"  subagentStatusLine: {subagent_command}")
-    print(f"  UserPromptSubmit:   {nudge_command}")
-
-    print("Open a new Antigravity CLI session (or trigger a render) to pick it up.")
-    return 0
 
 
 if __name__ == "__main__":

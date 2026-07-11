@@ -2,39 +2,34 @@
 
 ## Inbox
 
-- [ ] Triage the suspected bugs surfaced by the 2026-06-10 coverage push
-      (reported by test-writer agents, deliberately not fixed during it):
-      1. qwen.py format_qwen_thinking renders `(thk10.1K)` with no space;
-         docstring promises `(thk NNNK)`.
-      2. badge.py: a `[1m]`-tagged model on a 200K physical window makes the
-         yellow branch unreachable (yellow_tokens 250K > red_tokens 147K);
-         every value >=147K goes straight to red.
-      3. beacon.py format_beacon: string `eta_seconds` in a transcript raises
-         TypeError at `// 60`; sibling _apply_beacon float()-coerces the same
-         field defensively.
-      4. beacon.py _bias_factor_cached: a fresh cache for a DIFFERENT period
-         recomputes and overwrites; two alternating periods would thrash
-         (single call site today, latent).
-      5. pace.py _parse_pace_line: message id enters seen_ids BEFORE timestamp
-         validation, so a truncated line poisons the id and the later complete
-         snapshot copy is dropped as a duplicate - silent spend undercount.
-      6. pace.py weekly_sustainable_rate has no try/except unlike its
-         siblings; a malformed resets_at (string) raises TypeError into the
-         render path.
-      7. base.py ramp_color_for with warn == danger returns the HOT end for a
-         high-good metric, inverting intent (no current caller does this).
-
-- [ ] Qwen cache-column semantics: research Qwen API pricing (is `cached`
-      discounted vs non-cached prompt tokens? TTL? tiered rates?). The cache
-      column (`read / write / hit%`, statusline_lib/qwen.py) maps
-      read=cached, write=prompt-cached, hit%=cached/prompt, which is
-      semantically unlike Claude's (Qwen exposes no priced write side). If
-      caching isn't priced differently, the column misleads as a cost
-      signal: repurpose (hit% only) or drop it. Distilled from
-      QWEN-STATUSLINE-HANDOFF.md (deleted 2026-06-10; full port notes in git
-      history).
+- [ ] Qwen entry-point type-confusion hardening: wrong-TYPED payload fields
+      (e.g. context_window_size:"x", model.display_name as int) still crash
+      paths shared with the Claude adapter (badge.format_model_badge etc.).
+      Deferred from the 2026-07-11 qwen polish (null/missing-key class was
+      fixed); belongs to the wave-3 canonical-model adapters, which validate
+      types at the boundary. Also: metrics.models as a non-dict (JSON array)
+      needs one isinstance guard in _model_summaries.
+- [ ] Codex: optionally wire tui.terminal_title (same item vocabulary as
+      status_line, second ordered array; doubles the TOML-surgery surface —
+      deliberately skipped in the 2026-07-11 preset refresh).
 
 ## Done
+
+- 2026-06-10 triage batch CLOSED (2026-07-11, wave-1 subagent fan-out; all
+  TDD'd, 100% coverage held): (1) thk spacing 447ef0d; (2) badge threshold
+  ordering 3e57d76; (3)+(4) beacon eta coercion + per-period bias cache
+  e777735 (+TTL-expiry test 199eb0e); (5) pace seen_ids poisoning 66dc911;
+  (6) weekly_sustainable_rate guard 1a38f5b; (7) ramp_color_for degenerate
+  warn==danger -> neutral midpoint c38b6bc. Bonus: the live format_cache
+  cost-string crash from the production error log was confirmed already
+  fixed by 5a41d8d (never existed in committed history) and is now
+  regression-locked by fe37636.
+
+- Qwen cache-column semantics RESOLVED (2026-07-11, 56625c7): Alibaba Model
+  Studio docs confirm implicit-cache hits bill at ~20% of standard input
+  price and there is no priced write side. Column now renders truthful
+  `cached / hit%`; the fake write figure (Claude CACHE_WRITE styling) is
+  gone; dead helper cachefmt.format_cache_counts removed.
 
 - Quality gate back to green (2026-06-10): moved the nudge-hook merge
   helpers from install.py into statusline_lib/nudge_install.py so the

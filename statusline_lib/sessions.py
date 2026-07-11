@@ -3,9 +3,15 @@
 Detects other Claude Code sessions running in the same cwd so the
 statusline can warn that a second interactive instance is active here.
 
-Enumerates `claude` processes whose own cwd matches and which are not in
-`-p` headless mode (Task subagents, scripted runs). Ground truth -- catches
-idle sessions, ignores ones that cleanly /exit'd a moment ago. Requires
+Enumerates `claude` processes whose own cwd matches, which are not in
+`-p` headless mode (scripted runs), and which pass the process-tree test
+in `_is_excluded_by_tree`: a real session is launched by a live shell, so
+a claude descendant of a claude (update check, helper, spawned agent
+runtime) or a claude whose launching parent is dead (disowned helper,
+dead-terminal zombie) is never an independent session no matter how long
+it lives -- structural truth where a time-based dwell can't work. Ground
+truth -- catches idle sessions, ignores ones that cleanly /exit'd a
+moment ago. Requires
 `psutil`; without it the badge stays off entirely (any mtime-based
 substitute false-positives for ~5 minutes after a clean /exit, which the
 20s restart-handoff debounce can't suppress).
@@ -98,18 +104,84 @@ def count_active_sessions(
     return count
 
 
+def _is_agent_runtime(name, cmdline):
+    """Pure classifier: does (name, cmdline) look like a claude/qwen runtime
+    process at all -- a bare binary, or node wrapping the CLI? Cwd and headless
+    flags are deliberately out of scope: this is also applied to *ancestors*,
+    where those don't matter."""
+    n = (name or "").lower()
+    if n in ("claude", "claude.exe", "qwen", "qwen.exe"):
+        return True
+    if n in ("node", "node.exe"):
+        return any(
+            "claude" in (arg or "").lower() or "qwen" in (arg or "").lower()
+            for arg in (cmdline or ())
+        )
+    return False
+
+
+# Parent chains on a healthy box are a handful of shells deep; the cap only
+# guards against pathological/cyclic ppid data.
+_ANCESTOR_WALK_LIMIT = 15
+
+_AGENT_PROCESS_NAMES = ("claude", "claude.exe", "qwen", "qwen.exe")
+_NODE_PROCESS_NAMES = ("node", "node.exe")
+
+
+def _is_excluded_by_tree(pid, snap, cmdline_of):
+    """Pure classifier: is candidate `pid` structurally NOT an interactive
+    session, judged against `snap` ({pid: (ppid, name, create_time)}, one
+    process-table snapshot)?
+
+    Two structural rules, no clocks:
+      - Agent-descendant: anything whose ancestor chain contains a claude/qwen
+        runtime was spawned BY a session (update check, helper, agent runtime)
+        and is never an independent session.
+      - Orphan: a real session's launching shell stays alive (it's the user's
+        terminal). A candidate whose immediate parent is dead, recycled
+        (create_time newer than the child's), or init/pid-1 (Unix reparenting)
+        is a disowned helper or a dead-terminal zombie -- either way not a
+        session anyone is interacting with.
+
+    A chain that breaks ABOVE a live first ancestor ends the walk without
+    excluding (observed live: a real session whose terminal host had exited
+    while its shell survived). `cmdline_of(pid) -> list | None` is only
+    consulted to classify node-named ancestors; None means unreadable and is
+    treated as non-agent, at worst reproducing the old overcount, never hiding
+    a real session.
+    """
+    row = snap.get(pid)
+    if row is None:
+        return True  # exited mid-scan; nothing to count
+    ppid, _name, ctime = row
+    parent = snap.get(ppid)
+    if parent is None or ppid in (0, 1) or (parent[2] or 0) > (ctime or 0):
+        return True  # orphan
+    seen = set()
+    child_ctime = ctime
+    cur = ppid
+    while cur in snap and cur not in seen and len(seen) < _ANCESTOR_WALK_LIMIT:
+        seen.add(cur)
+        next_ppid, name, pctime = snap[cur]
+        if (pctime or 0) > (child_ctime or 0):
+            break  # recycled pid above the first ancestor: chain ends here
+        n = (name or "").lower()
+        if n in _AGENT_PROCESS_NAMES:
+            return True
+        if n in _NODE_PROCESS_NAMES and _is_agent_runtime(n, cmdline_of(cur)):
+            return True
+        child_ctime = pctime
+        cur = next_ppid
+    return False
+
+
 def _process_matches(name, cmdline, cwd, target_cwd):
     """Pure classifier: does this (name, cmdline, cwd) tuple represent an
     interactive Claude/Qwen session rooted at `target_cwd`? Extracted so unit
     tests don't need a live or mocked psutil."""
-    n = (name or "").lower()
-    if n not in ("claude", "claude.exe", "qwen", "qwen.exe", "node", "node.exe"):
+    if not _is_agent_runtime(name, cmdline):
         return False
     cl = cmdline or ()
-    if n in ("node", "node.exe") and not any(
-        "claude" in (arg or "").lower() or "qwen" in (arg or "").lower() for arg in cl
-    ):
-        return False
     if "-p" in cl or "--print" in cl:
         return False
     if not cwd:
@@ -118,19 +190,41 @@ def _process_matches(name, cmdline, cwd, target_cwd):
 
 
 def _count_via_psutil(target_cwd, psutil):
-    count = 0
-    for p in psutil.process_iter(["name"]):
-        name = (p.info.get("name") or "").lower()
+    # One pass over the process table builds both the pid->(ppid, name,
+    # create_time) snapshot the tree walk needs and the candidate list. The
+    # walk reads names from the snapshot rather than calling per-ancestor
+    # psutil APIs -- those AccessDenied mid-chain and silently truncate.
+    snap = {}
+    candidates = []
+    for p in psutil.process_iter(["pid", "ppid", "name", "create_time"]):
+        info = p.info
+        snap[info.get("pid")] = (
+            info.get("ppid"),
+            info.get("name"),
+            info.get("create_time"),
+        )
+        name = (info.get("name") or "").lower()
         # Cheap name pre-filter -- avoids calling cmdline()/cwd() on every
         # process (hundreds on a typical box).
-        if name not in ("claude", "claude.exe", "qwen", "qwen.exe", "node", "node.exe"):
-            continue
+        if name in _AGENT_PROCESS_NAMES or name in _NODE_PROCESS_NAMES:
+            candidates.append((info.get("pid"), name, p))
+
+    def cmdline_of(pid):
+        try:
+            return psutil.Process(pid).cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            return None
+
+    count = 0
+    for pid, name, p in candidates:
         try:
             cmdline = p.cmdline()
             pcwd = p.cwd()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-        if _process_matches(name, cmdline, pcwd, target_cwd):
+        if _process_matches(
+            name, cmdline, pcwd, target_cwd
+        ) and not _is_excluded_by_tree(pid, snap, cmdline_of):
             count += 1
     return count
 

@@ -52,9 +52,12 @@ The spinner advances on every render, so a frozen glyph means the statusline
 subprocess has stopped being invoked. An orange `LOCAL` tag appears before the
 hostname when `CLAUDE_LOCAL_MODE=1` is set or `~/.claude/.local-mode` exists.
 Multi-session detection enumerates `claude` processes whose cwd matches,
-excluding `-p` headless subagents, so the warning clears the moment the other
-session exits. Requires `psutil`; without it the badge stays off
-entirely (see [Requirements](#requirements)). When Claude Code supplies a
+excluding `-p` headless subagents plus anything that fails a process-tree
+test: descendants of another claude/qwen process (helpers, update checks,
+spawned agent runtimes) and orphans whose launching shell is dead are never
+counted, so only shell-launched interactive sessions trigger the warning,
+and it clears the moment the other session exits. Requires `psutil`; without
+it the badge stays off entirely (see [Requirements](#requirements)). When Claude Code supplies a
 `session_name` (its auto-generated title for the session) and there's room
 for it within `$COLUMNS`, it's appended in muted grey after the badges -
 dropped first if the terminal is too narrow, so it never pushes the path off

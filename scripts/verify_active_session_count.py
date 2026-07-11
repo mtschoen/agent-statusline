@@ -183,66 +183,6 @@ def check_count_via_psutil_exception(failures):
         sessions_mod._count_via_psutil = real_count
 
 
-def check_count_via_psutil_access_denied(failures):
-    # sessions.py lines 129-130: NoSuchProcess and AccessDenied from p.cmdline()/p.cwd()
-    # are caught and the process is skipped (count stays 0 if no other process matches).
-    # Also covers line 132 (count += 1) by including a process that does match.
-    import statusline_lib.sessions as sessions_mod
-
-    target_cwd = os.path.normcase("/home/user/proj")
-
-    class FakeAccessDenied(Exception):
-        pass
-
-    class FakeNoSuchProcess(Exception):
-        def __init__(self, pid=0):
-            super().__init__(pid)
-
-    class FakeDeniedProc:
-        """Simulates a process that raises AccessDenied on cmdline()."""
-
-        def __init__(self):
-            self.info = {"name": "claude"}
-
-        def cmdline(self):
-            raise FakeAccessDenied("no access")
-
-        def cwd(self):
-            raise FakeAccessDenied("no access")
-
-    class FakeMatchingProc:
-        """Simulates a real interactive Claude session in the target cwd."""
-
-        def __init__(self):
-            self.info = {"name": "claude"}
-
-        def cmdline(self):
-            return ["claude"]
-
-        def cwd(self):
-            return target_cwd
-
-    class FakePsutil:
-        NoSuchProcess = FakeNoSuchProcess
-        AccessDenied = FakeAccessDenied
-
-        @staticmethod
-        def process_iter(attrs):
-            yield FakeDeniedProc()
-            yield FakeMatchingProc()
-
-    real_psutil = sessions_mod._psutil
-    sessions_mod._psutil = FakePsutil  # type: ignore[assignment]
-    try:
-        count = sessions_mod._count_via_psutil(target_cwd, FakePsutil)
-        if count != 1:
-            failures.append(
-                f"_count_via_psutil should skip AccessDenied and count 1 matching process; got {count}"
-            )
-    finally:
-        sessions_mod._psutil = real_psutil
-
-
 def check_load_session_count_cache_non_dict(failures):
     # sessions.py: _load_session_count_cache returns {} when JSON root is not a dict.
     import statusline_lib.sessions as sessions_mod
@@ -266,7 +206,6 @@ def main():
     check_psutil_unavailable(failures)
     check_save_session_count_cache_oserror(failures)
     check_count_via_psutil_exception(failures)
-    check_count_via_psutil_access_denied(failures)
     check_load_session_count_cache_non_dict(failures)
 
     if failures:

@@ -2,7 +2,7 @@
 and prints up to three lines:
   line 1: [host] home [rel-cwd] (branch) <session title, if it fits>
   line 2: ctx | cache | ttl | quota | cost | +/-lines  (fields omitted when their data is absent)
-  line 3: session wall/api timing  ·  weekly-quota exhaustion clock (>90%)  ·  live turn beacon + calibrated ETA
+  line 3: session wall/api timing  ·  weekly-quota exhaustion clock (>90%)  ·  live turn beacon + calibrated ETA  ·  previous-render duration + session peak
 
 See README.md for layout, color thresholds, and install instructions.
 """
@@ -55,6 +55,7 @@ try:
         weekly_exhaustion,
     )
     from statusline_lib.nudge import write_ctx_state
+    from statusline_lib.rendertimer import format_render_suffix, record_render
 except Exception:
     # A broken statusline_lib (mid-edit syntax error, missing module) dies
     # before the __main__ try/except exists, so it would leave no trace in
@@ -499,11 +500,14 @@ def main():
             weekly_exhaustion(rate_limits),
             format_teammates(session_id, transcript_path, app_dir(), time.time()),
             _beacon_line(session_id),
+            format_render_suffix(session_id),
         )
         if part
     )
     if line3:
         sys.stdout.write("\n" + line3)
+
+    return session_id
 
 
 def _log_error():
@@ -541,8 +545,9 @@ def _log_slow_render(elapsed):
 
 if __name__ == "__main__":
     _started = time.monotonic()
+    _session_id = None
     try:
-        main()
+        _session_id = main()
     except Exception:
         _log_error()
         with contextlib.suppress(Exception):
@@ -554,3 +559,7 @@ if __name__ == "__main__":
     _elapsed = time.monotonic() - _started
     if _elapsed >= _SLOW_RENDER_SECONDS:
         _log_slow_render(_elapsed)
+    # Reuses the same _elapsed measured above for slow-render logging -- one
+    # clock, two consumers. Excludes interpreter+import startup (the "warm
+    # core" scope verify_render_budget.py's check_warm_core_median enforces).
+    record_render(_elapsed * 1000, _session_id)

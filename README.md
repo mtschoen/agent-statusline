@@ -519,6 +519,16 @@ The Pi footer appends the previous render duration and session peak
 (`ui 1.25ms peak 4.80ms`) to line 3. Set `STATUSLINE_RENDER_TIMING=0` before
 starting Pi to disable this instrumentation.
 
+The same instrumentation exists on the Python harnesses (Claude Code/Antigravity's
+`statusline.py`, Qwen's `qwen_statusline.py`): each render appends the PREVIOUS
+render's duration and session peak (`ui 142.35ms peak 210.11ms`) to its last
+output line, reading and writing a small per-session state file since each
+render is a fresh process. `STATUSLINE_RENDER_TIMING=0` disables it there too.
+Because the Python harnesses spawn per render, the figure covers payload-in to
+string-out only -- it excludes interpreter startup and imports (the "warm
+core" scope `scripts/verify_render_budget.py`'s `check_warm_core_median`
+enforces), so it reads lower than the process's true wall-clock cost.
+
 ### Per-agent status lines
 
 When `subagentStatusLine` is configured, each row in the agent panel below

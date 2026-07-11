@@ -1,13 +1,36 @@
 # schoen-claude-status - Test Report
 
-`2026-07-10`
+`2026-07-11`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
-| **Tests** | 34 `scripts/verify_*.py`, all passing locally |
-| **Git** | `50a22c4` (`main` + working tree) |
+| **Tests** | 47 `scripts/verify_*.py`, all passing locally |
+| **Git** | `731efb7` + working tree (`sdd/render-timer`) |
+
+**This run (Python render-timer port):** ported the Pi footer's render-timing
+instrumentation (`ui <dur> peak <peak>`, commit `0323dbc`) to the
+spawn-per-render Python harnesses. New `statusline_lib/rendertimer.py` (51
+statements, 100% coverage) mirrors Pi's PREVIOUS-render semantics via a small
+per-session state file under `~/.claude/state`: `format_render_suffix` reads
+the prior render's duration + session peak (appended to the last output
+line), `record_render` persists the just-finished render's elapsed time +
+updated peak at process exit. Both `statusline.py` and `qwen_statusline.py`
+reuse their existing `time.monotonic()` measurement (no second clock); Qwen's
+payload carries no session id, so it collapses onto a shared state key. Peak
+tracking falls out of per-session file keying -- a new session id has no
+prior file, so no explicit reset step was needed. `STATUSLINE_RENDER_TIMING=0`
+disables it, same env var and default-on semantics as Pi. New
+`scripts/verify_render_timer.py` covers the env gate, read/record round-trip,
+peak tracking, session isolation, the no-session-id fallback, corrupt/absent
+state, OSError-swallowing on write, and end-to-end subprocess renders of both
+`statusline.py` and `qwen_statusline.py` (first render shows no suffix,
+second shows the first's timing; the disabled-gate path shows no suffix and
+writes no state at all). `scripts/verify_render_budget.py` stays green (no
+subprocess/sleep in the render path; warm-core median unaffected). Ruff and
+aislop (100/100, 0 errors) both clean; `statusline_lib` remains at **100%**
+(1838/1838 statements).
 
 **This run (richer Codex preset + shared cache formatting):** the native Codex
 preset now trades the verbose thread UUID for PR number, input/output token
@@ -134,16 +157,16 @@ overrides.
 
 ## Coverage (hard gate, 100%)
 
-Measured by running all 34 `verify_*.py` under coverage.py and reporting
+Measured by running all 47 `verify_*.py` under coverage.py and reporting
 `statusline_lib/` - the package that holds all logic. CI fails below 100%,
 independently on each OS job (Linux and Windows each run the gate on their own
 run, not combined - a branch only covered on one leg fails the other).
 
-**Total: 1611 / 1611 statements (100%, independently on both CI OS legs)** -
-every module: `__init__` 16, `badge` 82, `base` 56, `beacon` 210,
-`burnrate` 146, `cachefmt` 11, `codex_install` 100, `compact` 37, `cost` 114,
-`costfmt` 68, `diffstat` 7, `nudge` 53, `nudge_install` 37, `pace` 275,
-`prefs` 31, `project` 61, `qwen` 53, `sessions` 115, `teams` 67,
+**Total: 1838 / 1838 statements (100%, verified this run on Windows)** -
+every module: `__init__` 17, `agy` 60, `badge` 110, `base` 66, `beacon` 222,
+`burnrate` 146, `cachefmt` 9, `codex_install` 100, `compact` 41, `cost` 114,
+`costfmt` 68, `diffstat` 7, `nudge` 53, `nudge_install` 37, `pace` 278,
+`prefs` 31, `project` 61, `qwen` 52, `rendertimer` 51, `sessions` 183, `teams` 67,
 `walker` 72.
 
 **Scope:** entry-point glue is outside the measured set, by design -
@@ -154,7 +177,7 @@ smoke test. Logic belongs in `statusline_lib`, where the gate sees it.
 ## Gates and commands
 
 The bar: `ruff check .` + `ruff format --check .` -> 0, `aislop ci .` -> >= 90
-(currently 94), and statusline_lib coverage -> 100%.
+(currently 100), and statusline_lib coverage -> 100%.
 
 ```bash
 # First time:

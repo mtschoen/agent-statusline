@@ -1,7 +1,7 @@
 """Qwen Code statusline entry point. Reads Qwen Code's JSON payload from stdin
 and prints two lines:
   line 1: [host] cwd (branch)
-  line 2: model | ctx | cache | tokens | api | files
+  line 2: model | ctx | cache | tokens | api | files | previous-render duration + peak
 
 Adapted from statusline.py for Qwen Code's payload structure.
 """
@@ -28,6 +28,7 @@ from statusline_lib import (
     format_qwen_thinking,
     format_qwen_tokens,
 )
+from statusline_lib.rendertimer import format_render_suffix, record_render
 
 _INPUT_LOG = os.path.expanduser("~/.qwen/.qwen-statusline-input.log")
 _RAW_LOG = os.path.expanduser("~/.qwen/.qwen-statusline-input-raw.json")
@@ -133,6 +134,10 @@ def main():
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
     line1 = _line1(d, cwd, spinner)
 
+    # Qwen's payload carries no session id, so the render timer collapses
+    # onto the shared key (see statusline_lib/rendertimer.py).
+    render_suffix = format_render_suffix(None)
+
     parts = [
         s
         for s in (
@@ -144,6 +149,7 @@ def main():
             thinking_summary,
             files_summary,
             vim_summary,
+            render_suffix,
         )
         if s
     ]
@@ -167,6 +173,7 @@ def _log_error():
 
 
 if __name__ == "__main__":
+    _started = time.monotonic()
     try:
         main()
     except Exception:
@@ -175,3 +182,7 @@ if __name__ == "__main__":
             sys.stdout.write(
                 f"{RED}STATUSLINE ERROR{RESET} — see ~/.qwen/.qwen-statusline-error.log"
             )
+    _elapsed_ms = (time.monotonic() - _started) * 1000
+    # Excludes interpreter+import startup, same "warm core" scope as
+    # statusline.py's slow-render clock -- see statusline_lib/rendertimer.py.
+    record_render(_elapsed_ms, None)

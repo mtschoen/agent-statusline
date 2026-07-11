@@ -70,7 +70,7 @@ def format_qwen_thinking(tokens):
     thoughts = int(tokens.get("thoughts") or 0)
     if thoughts <= 0:
         return ""
-    return f"{CTX_DENOM}(thk{fmt(thoughts)}){RESET}"
+    return f"{CTX_DENOM}(thk {fmt(thoughts)}){RESET}"
 
 
 def format_qwen_api_stats(api):

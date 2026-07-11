@@ -166,6 +166,15 @@ def _check_thinking_renders_when_positive(failures):
         failures.append(f"thinking result must contain RESET, got {result!r}")
 
 
+def _check_thinking_has_space_after_thk(failures):
+    """Docstring promises '(thk NNNK)' -- a space between 'thk' and the number."""
+    result = format_qwen_thinking({"prompt": 1000, "thoughts": 10_100})
+    if "thk 10.1K" not in result:
+        failures.append(
+            f"thinking result must contain a space after 'thk' ('thk 10.1K'), got {result!r}"
+        )
+
+
 def _check_api_empty_when_none(failures):
     result = format_qwen_api_stats(None)
     if result != "":
@@ -311,6 +320,7 @@ def main():
     _check_thinking_empty_when_none(failures)
     _check_thinking_empty_when_zero_thoughts(failures)
     _check_thinking_renders_when_positive(failures)
+    _check_thinking_has_space_after_thk(failures)
 
     _check_api_empty_when_none(failures)
     _check_api_empty_when_empty_dict(failures)

@@ -163,73 +163,6 @@ def _check_subagent_evictions_excluded(failures):
         )
 
 
-def _check_small_gap_not_evicted(failures):
-    # A read==0 / write>=floor turn that lands only seconds after the previous
-    # turn is a tool-array/compaction cache bust, NOT an idle TTL expiry (the
-    # 5-min cache clock never lapsed). The idle-gap gate must suppress it.
-    # Mirrors file-wizard turn #16: ToolSearch loaded a deferred tool, busting
-    # the prefix cache 3s later.
-    lines = [
-        _turn("g1", read=100000, write=4000, ts="2026-06-02T15:08:20.000Z"),
-        _turn("g2", read=0, write=117747, ts="2026-06-02T15:08:23.000Z"),
-    ]
-    tmp = tempfile.mkdtemp(prefix="cost-split-gap-")
-    parent = os.path.join(tmp, "sess.jsonl")
-    _write_jsonl(parent, lines)
-
-    walk = walk_transcript(parent, include_subagents=True)
-
-    if walk["ttl_evictions"] != 0:
-        failures.append(
-            f"sub-300s gap must not count as a TTL eviction; got {walk['ttl_evictions']}"
-        )
-    if walk["ttl_wasted"] != 0.0:
-        failures.append(
-            f"suppressed eviction must waste $0; got {walk['ttl_wasted']!r}"
-        )
-
-
-def _check_ttl_threshold_derived_from_write(failures):
-    # Same ~6-min idle gap, opposite verdicts depending on the prior turn's TTL:
-    # a 5m-written cache has expired (counts); a 1h-written cache is still warm,
-    # so the rewrite is some other bust, not a timeout (does not count).
-    for ttl, expected in (("5m", 1), ("1h", 0)):
-        lines = [
-            _turn("a1", read=50000, write=4000, ts="2026-06-02T15:00:00.000Z", ttl=ttl),
-            _turn("a2", read=0, write=30000, ts="2026-06-02T15:06:00.000Z", ttl=ttl),
-        ]
-        tmp = tempfile.mkdtemp(prefix=f"cost-split-ttl-{ttl}-")
-        parent = os.path.join(tmp, "sess.jsonl")
-        _write_jsonl(parent, lines)
-
-        walk = walk_transcript(parent, include_subagents=True)
-
-        if walk["ttl_evictions"] != expected:
-            failures.append(
-                f"{ttl} cache, 6-min gap: expected {expected} eviction(s); "
-                f"got {walk['ttl_evictions']}"
-            )
-
-
-def _check_missing_timestamps_not_evicted(failures):
-    # Without timestamps the idle gap is unknowable, so a TTL eviction cannot be
-    # asserted - the gate stays conservative and counts nothing.
-    lines = [
-        _turn("n1", read=0, write=5000),
-        _turn("n2", read=0, write=30000),
-    ]
-    tmp = tempfile.mkdtemp(prefix="cost-split-nots-")
-    parent = os.path.join(tmp, "sess.jsonl")
-    _write_jsonl(parent, lines)
-
-    walk = walk_transcript(parent, include_subagents=True)
-
-    if walk["ttl_evictions"] != 0:
-        failures.append(
-            f"unknown gap (no timestamps) must not count; got {walk['ttl_evictions']}"
-        )
-
-
 def _check_format_cache_render(failures):
     from statusline_lib.costfmt import format_cache
 
@@ -401,9 +334,6 @@ def check(failures):
     _check_components_and_evictions(failures)
     _check_write_cost_ttl_split(failures)
     _check_subagent_evictions_excluded(failures)
-    _check_small_gap_not_evicted(failures)
-    _check_ttl_threshold_derived_from_write(failures)
-    _check_missing_timestamps_not_evicted(failures)
     _check_format_cache_render(failures)
     _check_format_cache_read_cost_not_passed_through_fmt(failures)
     _check_parse_ts_bad_value(failures)

@@ -53,6 +53,19 @@ TTL_MIN_WRITE_TOKENS = 1000
 TTL_5M_SECONDS = 300
 TTL_1H_SECONDS = 3600
 
+# A resumed session doesn't always land with cache_read==0: when several
+# sessions sharing a system-prompt prefix are resumed after one idle gap, only
+# the FIRST resume re-warms that prefix from scratch (r==0); the rest read the
+# now-warm shared prefix (a partial hit) while still rewriting everything else
+# (a real eviction). Observed 2026-07-11 across four sessions resumed after
+# ~8.6h idle: the first fired at r=0/w=313k; the other three carried an
+# *identical* r=24299 (the shared prefix) against w=202k-362k full-conversation
+# rewrites - real evictions the strict r==0 gate missed entirely. A rewrite-
+# dominance ratio catches both shapes: a genuine eviction's read is small next
+# to its write (observed ratios 0.07-0.12), while a warm resume's read swamps
+# its write. 0.25 keeps 2-4x margin over the observed ratios.
+TTL_PARTIAL_READ_RATIO = 0.25
+
 
 def _parse_ts(value):
     """Parse a transcript ISO-8601 timestamp to epoch seconds, or None."""
@@ -163,10 +176,13 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
     # fresh (uncached) input at the plain input rate, output at the output rate.
     acc["input_cost"] += i * inp_rate / 1_000_000.0
     acc["output_cost"] += o * out_rate / 1_000_000.0
-    # TTL eviction: parent-only non-first turn with full rewrite (no read) above
-    # floor AND an idle gap since the prior turn exceeding the TTL the prior turn's
-    # cache was written with (so a seconds-later tool-array/compaction bust, and a
-    # warm gap under the cache lifetime, are both excluded); wasted = 1.15x penalty.
+    # TTL eviction: parent-only non-first turn whose rewrite dominates its read
+    # (r <= w * TTL_PARTIAL_READ_RATIO) above the write floor, AND an idle gap
+    # since the prior turn exceeding the TTL the prior turn's cache was written
+    # with (so a seconds-later tool-array/compaction bust, and a warm gap under
+    # the cache lifetime, are both excluded); wasted = 1.15x penalty. The ratio
+    # (not a strict r==0) catches resumes that partial-hit a shared system-prompt
+    # prefix re-warmed by another session's resume - see TTL_PARTIAL_READ_RATIO.
     cur_ts = _parse_ts(entry.get("timestamp"))
     prev_ts = acc.get("last_turn_ts")
     prev_ttl = acc.get("last_turn_ttl_seconds") or TTL_1H_SECONDS
@@ -176,8 +192,8 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
     if (
         acc.get("track_evictions")
         and acc["assistant_turns"] > 1
-        and r == 0
         and w >= TTL_MIN_WRITE_TOKENS
+        and r <= w * TTL_PARTIAL_READ_RATIO
         and idle_gap_exceeded
     ):
         acc["ttl_evictions"] += 1

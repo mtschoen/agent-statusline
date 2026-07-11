@@ -36,8 +36,10 @@ _WEB_SEARCH_COST_USD = 0.01
 WRITE_MULT_5M = 1.25
 WRITE_MULT_1H = 2.0
 
-# A turn with cache_read==0 and cache_write>0 after the first parent turn is a
-# cache rewrite. The floor suppresses degenerate tiny-write turns from counting.
+# A non-first parent turn writing at least this much cache after an idle gap
+# that outlived the prior turn's written TTL counts as a rewrite (see the
+# eviction gate in _accumulate_assistant_turn; deliberately no read-based
+# condition). The floor suppresses degenerate tiny-write turns from counting.
 # Tunable.
 TTL_MIN_WRITE_TOKENS = 1000
 

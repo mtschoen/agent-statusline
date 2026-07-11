@@ -350,27 +350,34 @@ def weekly_sustainable_rate(rate_limits):
     Returns None (caller falls back to the flat default) when there is no weekly
     quota, utilization is below the noise floor or at/over 100%, the reset is
     already past, or the window holds no spend to calibrate against.
+
+    Best-effort like its siblings weekly_needle/weekly_exhaustion: malformed
+    rate_limits (e.g. a non-numeric resets_at) degrades to None rather than
+    raising into the render path.
     """
-    rl = rate_limits or {}
-    w = rl.get("seven_day") or {}
-    util = w.get("used_percentage")
-    resets_at = w.get("resets_at")
-    if util is None or util < _WEEKLY_TARGET_MIN_UTIL_PCT or not resets_at:
+    try:
+        rl = rate_limits or {}
+        w = rl.get("seven_day") or {}
+        util = w.get("used_percentage")
+        resets_at = w.get("resets_at")
+        if util is None or util < _WEEKLY_TARGET_MIN_UTIL_PCT or not resets_at:
+            return None
+        remaining = resets_at - _now_unix()
+        if remaining <= 0:
+            return None
+        win_start = resets_at - 7 * 86400
+        hourly = _pace_hourly_cached(win_start)
+        window_spend = sum(hourly) if hourly else 0.0
+        if window_spend <= 0:
+            return None
+        quota_dollars = window_spend / (util / 100.0)
+        remaining_dollars = quota_dollars - window_spend
+        if remaining_dollars <= 0:
+            # util at/over 100%: the whole weekly quota is already spent.
+            return None
+        return remaining_dollars / (remaining / 60.0)
+    except Exception:
         return None
-    remaining = resets_at - _now_unix()
-    if remaining <= 0:
-        return None
-    win_start = resets_at - 7 * 86400
-    hourly = _pace_hourly_cached(win_start)
-    window_spend = sum(hourly) if hourly else 0.0
-    if window_spend <= 0:
-        return None
-    quota_dollars = window_spend / (util / 100.0)
-    remaining_dollars = quota_dollars - window_spend
-    if remaining_dollars <= 0:
-        # util at/over 100%: the whole weekly quota is already spent.
-        return None
-    return remaining_dollars / (remaining / 60.0)
 
 
 # Past this weekly utilization the window is close enough to running out that an

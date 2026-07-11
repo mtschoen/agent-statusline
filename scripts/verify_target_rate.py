@@ -107,6 +107,24 @@ def _check_weekly_sustainable_rate_unit(failures):
         failures.append(f"weekly target should be $0.50/min; got {got!r}")
 
 
+def _check_weekly_sustainable_rate_malformed_resets_at(failures):
+    # A malformed resets_at (string, e.g. from a corrupt/foreign payload) must
+    # degrade to None like the util/quota guards above -- not raise into the
+    # render path. Mirrors weekly_needle/weekly_exhaustion's own try/except.
+    rl = {"seven_day": {"used_percentage": 50, "resets_at": "not-a-timestamp"}}
+    try:
+        got = _with_spend({}, lambda: pace.weekly_sustainable_rate(rl), [100.0])
+    except TypeError as exc:
+        failures.append(
+            f"weekly_sustainable_rate must not raise on malformed resets_at: {exc}"
+        )
+        return
+    if got is not None:
+        failures.append(
+            f"weekly_sustainable_rate with malformed resets_at should be None; got {got!r}"
+        )
+
+
 def _check_weekly_target_drives_arrow(failures):
     # Subscription, STATUSLINE_TARGET_RATE unset: the →$ arrow and the rate
     # coloring use the derived $0.50/min target. $5 in 5 min -> $1.00/min, so
@@ -177,6 +195,7 @@ def check(failures):
     _check_target_rate_parse(failures)
     _check_target_rate_arrow(failures)
     _check_weekly_sustainable_rate_unit(failures)
+    _check_weekly_sustainable_rate_malformed_resets_at(failures)
     _check_weekly_target_drives_arrow(failures)
     _check_explicit_target_overrides_derivation(failures)
     _check_weekly_target_fallback_when_thin(failures)

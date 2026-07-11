@@ -9,6 +9,11 @@ TTL makes that cost invisible at statusline cadence; the coloured rendering
 itself is intentionally NOT cached (colours are stable constants, so caching
 raw strings keeps the cache file plain and reusable by any caller).
 
+The cache dir is not a module-level constant -- it is resolved fresh on every
+call via statusline_lib.base.state_dir(), so isolation here uses the same
+explicit `state_dir=` seam scripts/verify_render_timer.py uses for
+rendertimer.py, rather than monkeypatching a baked-in path.
+
 statusline.py is entry-point glue (outside the 100%-coverage gate), but this
 still runs it directly since importing is side-effect-free until main().
 
@@ -34,7 +39,6 @@ def _strip(text):
 
 
 def _check_cache_miss_computes_and_writes(failures, tmpdir):
-    statusline._GIT_REF_CACHE_DIR = tmpdir
     calls = []
 
     def fake_git(cwd, *args):
@@ -44,7 +48,9 @@ def _check_cache_miss_computes_and_writes(failures, tmpdir):
     original = statusline._git_command
     statusline._git_command = fake_git
     try:
-        branch, short_hash = statusline._git_ref_raw_cached("/some/repo")
+        branch, short_hash = statusline._git_ref_raw_cached(
+            "/some/repo", state_dir=tmpdir
+        )
     finally:
         statusline._git_command = original
 
@@ -56,19 +62,18 @@ def _check_cache_miss_computes_and_writes(failures, tmpdir):
         failures.append(
             f"cache miss must call git twice (branch+hash); got {len(calls)} calls"
         )
-    cache_path = statusline._git_ref_cache_path("/some/repo")
+    cache_path = statusline._git_ref_cache_path("/some/repo", state_dir=tmpdir)
     if not os.path.exists(cache_path):
         failures.append("cache miss must write a cache file")
 
 
 def _check_cache_hit_skips_git(failures, tmpdir):
-    statusline._GIT_REF_CACHE_DIR = tmpdir
-    cache_path = statusline._git_ref_cache_path("/cached/repo")
+    cache_path = statusline._git_ref_cache_path("/cached/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(
             {
-                "computed_at_unix": time.time(),
+                "cached_at_unix": time.time(),
                 "branch": "feature",
                 "short_hash": "def456",
             },
@@ -84,7 +89,9 @@ def _check_cache_hit_skips_git(failures, tmpdir):
     original = statusline._git_command
     statusline._git_command = fake_git
     try:
-        branch, short_hash = statusline._git_ref_raw_cached("/cached/repo")
+        branch, short_hash = statusline._git_ref_raw_cached(
+            "/cached/repo", state_dir=tmpdir
+        )
     finally:
         statusline._git_command = original
 
@@ -97,13 +104,12 @@ def _check_cache_hit_skips_git(failures, tmpdir):
 
 
 def _check_cache_expiry_recomputes(failures, tmpdir):
-    statusline._GIT_REF_CACHE_DIR = tmpdir
-    cache_path = statusline._git_ref_cache_path("/expired/repo")
+    cache_path = statusline._git_ref_cache_path("/expired/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     stale_ts = time.time() - statusline._GIT_REF_CACHE_TTL_SECONDS - 1
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(
-            {"computed_at_unix": stale_ts, "branch": "old", "short_hash": "old123"}, f
+            {"cached_at_unix": stale_ts, "branch": "old", "short_hash": "old123"}, f
         )
 
     calls = []
@@ -115,7 +121,9 @@ def _check_cache_expiry_recomputes(failures, tmpdir):
     original = statusline._git_command
     statusline._git_command = fake_git
     try:
-        branch, short_hash = statusline._git_ref_raw_cached("/expired/repo")
+        branch, short_hash = statusline._git_ref_raw_cached(
+            "/expired/repo", state_dir=tmpdir
+        )
     finally:
         statusline._git_command = original
 
@@ -126,8 +134,7 @@ def _check_cache_expiry_recomputes(failures, tmpdir):
 
 
 def _check_corrupt_cache_degrades(failures, tmpdir):
-    statusline._GIT_REF_CACHE_DIR = tmpdir
-    cache_path = statusline._git_ref_cache_path("/corrupt/repo")
+    cache_path = statusline._git_ref_cache_path("/corrupt/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         f.write("not-json")
@@ -137,7 +144,9 @@ def _check_corrupt_cache_degrades(failures, tmpdir):
         "recovered" if args[0] == "symbolic-ref" else "rec789"
     )
     try:
-        branch, short_hash = statusline._git_ref_raw_cached("/corrupt/repo")
+        branch, short_hash = statusline._git_ref_raw_cached(
+            "/corrupt/repo", state_dir=tmpdir
+        )
     finally:
         statusline._git_command = original
 
@@ -155,14 +164,16 @@ def _check_unwritable_cache_dir_still_returns_value(failures):
         # A path component that is a file makes os.makedirs fail with an
         # OSError subclass on every platform -- simulates an unwritable
         # cache dir without relying on chmod semantics that differ on Windows.
-        statusline._GIT_REF_CACHE_DIR = os.path.join(blocker_file, "state")
+        unwritable_state_dir = os.path.join(blocker_file, "state")
 
         original = statusline._git_command
         statusline._git_command = lambda cwd, *args: (
             "ok" if args[0] == "symbolic-ref" else "okhash"
         )
         try:
-            branch, short_hash = statusline._git_ref_raw_cached("/unwritable/repo")
+            branch, short_hash = statusline._git_ref_raw_cached(
+                "/unwritable/repo", state_dir=unwritable_state_dir
+            )
         finally:
             statusline._git_command = original
 
@@ -174,9 +185,8 @@ def _check_unwritable_cache_dir_still_returns_value(failures):
 
 
 def _check_distinct_cwds_get_distinct_cache_entries(failures, tmpdir):
-    statusline._GIT_REF_CACHE_DIR = tmpdir
-    path_a = statusline._git_ref_cache_path("/repo/a")
-    path_b = statusline._git_ref_cache_path("/repo/b")
+    path_a = statusline._git_ref_cache_path("/repo/a", state_dir=tmpdir)
+    path_b = statusline._git_ref_cache_path("/repo/b", state_dir=tmpdir)
     if path_a == path_b:
         failures.append(
             "distinct cwds must map to distinct cache files (concurrent-safe keying)"
@@ -184,11 +194,10 @@ def _check_distinct_cwds_get_distinct_cache_entries(failures, tmpdir):
 
 
 def _check_git_ref_uses_cache(failures, tmpdir):
-    statusline._GIT_REF_CACHE_DIR = tmpdir
     original = statusline._git_ref_raw_cached
-    statusline._git_ref_raw_cached = lambda cwd: ("main", "abc123")
+    statusline._git_ref_raw_cached = lambda cwd, state_dir=None: ("main", "abc123")
     try:
-        rendered = _strip(statusline._git_ref("/some/repo"))
+        rendered = _strip(statusline._git_ref("/some/repo", state_dir=tmpdir))
     finally:
         statusline._git_ref_raw_cached = original
     if rendered != "main:abc123":
@@ -204,24 +213,20 @@ def _check_git_ref_empty_cwd(failures):
 
 def main():
     failures = []
-    original_dir = statusline._GIT_REF_CACHE_DIR
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _check_cache_miss_computes_and_writes(failures, tmpdir)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _check_cache_hit_skips_git(failures, tmpdir)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _check_cache_expiry_recomputes(failures, tmpdir)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _check_corrupt_cache_degrades(failures, tmpdir)
-        _check_unwritable_cache_dir_still_returns_value(failures)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _check_distinct_cwds_get_distinct_cache_entries(failures, tmpdir)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _check_git_ref_uses_cache(failures, tmpdir)
-        _check_git_ref_empty_cwd(failures)
-    finally:
-        statusline._GIT_REF_CACHE_DIR = original_dir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _check_cache_miss_computes_and_writes(failures, tmpdir)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _check_cache_hit_skips_git(failures, tmpdir)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _check_cache_expiry_recomputes(failures, tmpdir)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _check_corrupt_cache_degrades(failures, tmpdir)
+    _check_unwritable_cache_dir_still_returns_value(failures)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _check_distinct_cwds_get_distinct_cache_entries(failures, tmpdir)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _check_git_ref_uses_cache(failures, tmpdir)
+    _check_git_ref_empty_cwd(failures)
 
     if failures:
         for failure in failures:

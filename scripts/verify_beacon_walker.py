@@ -491,7 +491,14 @@ def _check_beacons_latest_walk_is_local_only(failures):
     the SMB extra roots measured 170-190ms per render vs ~55ms local-only --
     paid on EVERY render, uncached (found via profile: 0.5s of a 0.63s warm
     render was this one call). Exercises the REAL beacon_cache path (a cache
-    miss) end to end through format_beacon, not a stubbed cache lookup."""
+    miss) end to end through format_beacon, not a stubbed cache lookup.
+
+    format_beacon doesn't take a state_dir seam (the cache dir is an
+    implementation detail of beacon_cache.py it never needs), so isolation
+    here goes through the CLAUDE_STATE_DIR env var that base.state_dir()
+    honors -- the same mechanism scripts/verify_render_timer.py's subprocess
+    end-to-end checks use, just via env var instead of a spawned process.
+    """
     captured = []
 
     def fake_walker(*args, **kw):
@@ -499,15 +506,18 @@ def _check_beacons_latest_walk_is_local_only(failures):
         return
 
     original_walker = _beacon_cache_mod._walker_subcommand
-    original_dir = _beacon_cache_mod._BEACON_LATEST_CACHE_DIR
+    original_env = os.environ.get("CLAUDE_STATE_DIR")
     _beacon_cache_mod._walker_subcommand = fake_walker
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmp
+            os.environ["CLAUDE_STATE_DIR"] = tmp
             _beacon_mod.format_beacon("some-session-id")
     finally:
         _beacon_cache_mod._walker_subcommand = original_walker
-        _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = original_dir
+        if original_env is None:
+            os.environ.pop("CLAUDE_STATE_DIR", None)
+        else:
+            os.environ["CLAUDE_STATE_DIR"] = original_env
 
     if not captured:
         failures.append("format_beacon should invoke the walker")
@@ -523,18 +533,21 @@ def _check_beacons_latest_cache_hit_skips_walker(failures, tmpdir):
     all, and must return the previously-cached payload verbatim (including a
     now-stale age_seconds -- acceptable, since the staleness threshold that
     matters is beacon._BEACON_STALE_SECONDS, two orders of magnitude looser)."""
-    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
     _beacon_cache_mod._walker_subcommand = lambda *args, **kw: {
         "beacon": {"kind": "report", "eta_seconds": 90, "summary": "first"},
         "age_seconds": 1,
     }
-    data1 = _beacon_cache_mod._beacons_latest_cached("cache-hit-session")
+    data1 = _beacon_cache_mod._beacons_latest_cached(
+        "cache-hit-session", state_dir=tmpdir
+    )
 
     calls = []
     _beacon_cache_mod._walker_subcommand = lambda *args, **kw: (
         calls.append(1) or {"beacon": {"kind": "report"}, "age_seconds": 999}
     )
-    data2 = _beacon_cache_mod._beacons_latest_cached("cache-hit-session")
+    data2 = _beacon_cache_mod._beacons_latest_cached(
+        "cache-hit-session", state_dir=tmpdir
+    )
     if calls:
         failures.append(
             f"a fresh cache entry must not call the walker again; got {len(calls)} calls"
@@ -547,8 +560,9 @@ def _check_beacons_latest_cache_hit_skips_walker(failures, tmpdir):
 
 
 def _check_beacons_latest_cache_expiry_recomputes(failures, tmpdir):
-    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
-    cache_path = _beacon_cache_mod._beacon_latest_cache_path("expiring-session")
+    cache_path = _beacon_cache_mod._beacon_latest_cache_path(
+        "expiring-session", state_dir=tmpdir
+    )
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     stale_ts = (
         datetime.now(UTC).timestamp()
@@ -564,7 +578,9 @@ def _check_beacons_latest_cache_expiry_recomputes(failures, tmpdir):
     _beacon_cache_mod._walker_subcommand = lambda *args, **kw: (
         calls.append(1) or {"beacon": {"kind": "report", "summary": "fresh"}}
     )
-    data = _beacon_cache_mod._beacons_latest_cached("expiring-session")
+    data = _beacon_cache_mod._beacons_latest_cached(
+        "expiring-session", state_dir=tmpdir
+    )
     if len(calls) != 1:
         failures.append(
             f"an expired cache entry must recompute (1 walker call); got {len(calls)} calls"
@@ -577,8 +593,9 @@ def _check_beacons_latest_cache_expiry_recomputes(failures, tmpdir):
 
 
 def _check_beacons_latest_cache_corrupt_file_recomputes(failures, tmpdir):
-    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
-    cache_path = _beacon_cache_mod._beacon_latest_cache_path("corrupt-session")
+    cache_path = _beacon_cache_mod._beacon_latest_cache_path(
+        "corrupt-session", state_dir=tmpdir
+    )
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         f.write("not-json")
@@ -586,7 +603,7 @@ def _check_beacons_latest_cache_corrupt_file_recomputes(failures, tmpdir):
     _beacon_cache_mod._walker_subcommand = lambda *args, **kw: {
         "beacon": {"kind": "report", "summary": "recovered"}
     }
-    data = _beacon_cache_mod._beacons_latest_cached("corrupt-session")
+    data = _beacon_cache_mod._beacons_latest_cached("corrupt-session", state_dir=tmpdir)
     beacon = data.get("beacon") or {}
     if beacon.get("summary") != "recovered":
         failures.append(
@@ -605,11 +622,13 @@ def _check_beacons_latest_cache_unwritable_dir_still_returns_value(
     # A path component that is a file makes os.makedirs fail with an OSError
     # subclass on every platform -- simulates an unwritable cache dir without
     # relying on chmod semantics that differ on Windows.
-    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = os.path.join(blocker_file, "state")
+    unwritable_state_dir = os.path.join(blocker_file, "state")
     _beacon_cache_mod._walker_subcommand = lambda *args, **kw: {
         "beacon": {"kind": "report", "summary": "still works"}
     }
-    data = _beacon_cache_mod._beacons_latest_cached("unwritable-session")
+    data = _beacon_cache_mod._beacons_latest_cached(
+        "unwritable-session", state_dir=unwritable_state_dir
+    )
     beacon = data.get("beacon") or {}
     if beacon.get("summary") != "still works":
         failures.append(
@@ -620,9 +639,8 @@ def _check_beacons_latest_cache_unwritable_dir_still_returns_value(
 def _check_beacons_latest_cache_distinct_sessions(failures, tmpdir):
     """Two session ids rendering concurrently must not clobber each other's
     cache entry (each gets its own per-session file)."""
-    _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = tmpdir
-    path_a = _beacon_cache_mod._beacon_latest_cache_path("session-a")
-    path_b = _beacon_cache_mod._beacon_latest_cache_path("session-b")
+    path_a = _beacon_cache_mod._beacon_latest_cache_path("session-a", state_dir=tmpdir)
+    path_b = _beacon_cache_mod._beacon_latest_cache_path("session-b", state_dir=tmpdir)
     if path_a == path_b:
         failures.append(
             "distinct session ids must map to distinct cache files (concurrent-safe keying)"
@@ -631,7 +649,6 @@ def _check_beacons_latest_cache_distinct_sessions(failures, tmpdir):
 
 def _check_beacons_latest_cache_mechanics(failures):
     original_walker = _beacon_cache_mod._walker_subcommand
-    original_dir = _beacon_cache_mod._BEACON_LATEST_CACHE_DIR
     try:
         with tempfile.TemporaryDirectory() as base:
             with tempfile.TemporaryDirectory(dir=base) as tmpdir:
@@ -648,7 +665,6 @@ def _check_beacons_latest_cache_mechanics(failures):
                 _check_beacons_latest_cache_distinct_sessions(failures, tmpdir)
     finally:
         _beacon_cache_mod._walker_subcommand = original_walker
-        _beacon_cache_mod._BEACON_LATEST_CACHE_DIR = original_dir
 
 
 def main():

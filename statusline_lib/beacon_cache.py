@@ -13,53 +13,40 @@ threshold that matters (beacon.py's `_BEACON_STALE_SECONDS`, 5 minutes) is
 two orders of magnitude looser.
 
 Imports:
-  base   -- for app_dir
-  walker -- for _walker_subcommand
+  base     -- for state_dir, sanitize_state_key
+  ttlcache -- for the shared TTL-check + atomic-write mechanics
+  walker   -- for _walker_subcommand
 """
 
-import json
 import os
-from datetime import UTC, datetime
 
-from .base import app_dir
+from .base import sanitize_state_key
+from .base import state_dir as _resolve_state_dir
+from .ttlcache import read_ttl_cache, write_ttl_cache
 from .walker import _walker_subcommand
 
-_BEACON_LATEST_CACHE_DIR = os.path.join(app_dir(), "state")
+# Independent knob from statusline.py's _GIT_REF_CACHE_TTL_SECONDS -- the two
+# happen to share the same 2.5s value today, but they cache unrelated things
+# (beacon payloads vs. git refs) and may reasonably diverge later.
 _BEACON_LATEST_CACHE_TTL_SECONDS = 2.5
 
 
-def _sanitize_session_id(session_id):
-    """Keep session ids filename-safe. They are UUID-ish in practice, but a
-    path component should never be built from unsanitized input."""
-    return "".join(c for c in str(session_id or "") if c.isalnum() or c in "-_")
-
-
-def _beacon_latest_cache_path(session_id):
+def _beacon_latest_cache_path(session_id, state_dir=None):
     return os.path.join(
-        _BEACON_LATEST_CACHE_DIR,
-        f"beacons-latest-{_sanitize_session_id(session_id)}.json",
+        _resolve_state_dir(state_dir),
+        f"beacons-latest-{sanitize_state_key(session_id)}.json",
     )
 
 
-def _beacons_latest_cached(session_id):
+def _beacons_latest_cached(session_id, state_dir=None):
     """Return the beacons-latest walker payload for `session_id`, TTL-cached
     on disk keyed by session id so concurrent sessions never clobber each
     other's entry. A cache miss still pays the walker cost inline; a hit
     skips the subprocess entirely."""
-    path = _beacon_latest_cache_path(session_id)
-    try:
-        with open(path, encoding="utf-8") as f:
-            cached = json.load(f)
-        if (
-            isinstance(cached, dict)
-            and datetime.now(UTC).timestamp() - cached.get("cached_at_unix", 0)
-            < _BEACON_LATEST_CACHE_TTL_SECONDS
-        ):
-            return cached.get("data")
-    except (OSError, ValueError):
-        # No cache yet, or a corrupt/partial file -- fall through to a fresh
-        # walker read rather than guess at a beacon.
-        pass
+    path = _beacon_latest_cache_path(session_id, state_dir)
+    cached = read_ttl_cache(path, _BEACON_LATEST_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached.get("data")
 
     # --no-config: this session's transcript is on THIS machine by
     # definition; the SMB extra roots cost 170-190ms per render (uncached,
@@ -67,15 +54,5 @@ def _beacons_latest_cached(session_id):
     data = _walker_subcommand(
         "beacons-latest", "--session-id", session_id, "--no-config"
     )
-    payload = {"cached_at_unix": datetime.now(UTC).timestamp(), "data": data}
-    try:
-        os.makedirs(_BEACON_LATEST_CACHE_DIR, exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        os.replace(tmp, path)
-    except OSError:
-        # Best-effort cache write; a failed write must not break rendering,
-        # just cost the next render a recompute.
-        pass
+    write_ttl_cache(path, {"data": data})
     return data

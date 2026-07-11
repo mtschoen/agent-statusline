@@ -9,7 +9,6 @@ Adapted from statusline.py for Qwen Code's payload structure.
 import contextlib
 import json
 import os
-import socket
 import sys
 import time
 
@@ -27,6 +26,10 @@ from statusline_lib import (
     format_qwen_files,
     format_qwen_thinking,
     format_qwen_tokens,
+    hostname,
+    log_traceback,
+    safe_write,
+    spinner_frame,
 )
 from statusline_lib.rendertimer import format_render_suffix, record_render
 
@@ -34,27 +37,9 @@ _INPUT_LOG = os.path.expanduser("~/.qwen/.qwen-statusline-input.log")
 _RAW_LOG = os.path.expanduser("~/.qwen/.qwen-statusline-input-raw.json")
 _ERROR_LOG = os.path.expanduser("~/.qwen/.qwen-statusline-error.log")
 
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-
-def _safe_write(path, text):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-    except OSError:
-        # Best-effort debug dump: a failed log write must never break the statusline.
-        pass
-
-
-def _hostname():
-    try:
-        return socket.gethostname().split(".")[0] or "unknown"
-    except OSError:
-        return "unknown"
-
 
 def _line1(d, cwd, spinner):
-    host = _hostname()
+    host = hostname()
     line1 = f"{spinner} [{host}] {cwd}"
     n_sessions = debounce_session_count(count_active_sessions(cwd), cwd)
     if n_sessions >= 2:
@@ -92,8 +77,8 @@ def _model_summaries(models):
 
 def main():
     raw = sys.stdin.read()
-    _safe_write(_INPUT_LOG, raw)
-    _safe_write(_RAW_LOG, raw)  # Raw JSON dump for inspection
+    safe_write(_INPUT_LOG, raw)
+    safe_write(_RAW_LOG, raw)  # Raw JSON dump for inspection
     print("RAW_JSON:" + raw, file=sys.stderr)  # Also stderr for debugging
 
     try:
@@ -131,7 +116,7 @@ def main():
     vim_mode = vim.get("mode") or ""
     vim_summary = f"VIM:{vim_mode}" if vim_mode else ""
 
-    spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
+    spinner = spinner_frame()
     line1 = _line1(d, cwd, spinner)
 
     # Qwen's payload carries no session id, so the render timer collapses
@@ -161,15 +146,7 @@ def main():
 
 
 def _log_error():
-    try:
-        import traceback
-
-        with open(_ERROR_LOG, "a", encoding="utf-8") as f:
-            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-            traceback.print_exc(file=f)
-    except OSError:
-        # The error log itself is unwritable; nowhere left to report, so stay silent.
-        pass
+    log_traceback(_ERROR_LOG)
 
 
 if __name__ == "__main__":

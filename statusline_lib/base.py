@@ -5,7 +5,9 @@ No imports from sibling modules — keeps the dependency order clean.
 
 import json
 import os
+import socket
 import sys
+import time
 
 # orjson: optional, ~3-5x faster per-line parse; stdlib json fallback.
 try:
@@ -132,3 +134,85 @@ def app_dir():
             return os.path.join(home, ".claude")
         return os.path.join(home, ".gemini", "antigravity-cli")
     return os.path.join(os.path.expanduser("~"), ".claude")
+
+
+def state_dir(state_dir=None):
+    """Resolve the state directory: explicit arg > CLAUDE_STATE_DIR >
+    ANTIGRAVITY_STATE_DIR > app_dir()/state. Shared by every module that
+    persists per-session or per-key state on disk (wrap-nudge occupancy,
+    render-timer, the git-ref/beacons-latest TTL caches) -- the two env vars
+    exist purely for verify-script test isolation so tests never touch the
+    real ~/.claude/state."""
+    return (
+        state_dir
+        or os.environ.get("CLAUDE_STATE_DIR")
+        or os.environ.get("ANTIGRAVITY_STATE_DIR")
+        or os.path.join(app_dir(), "state")
+    )
+
+
+def sanitize_state_key(key):
+    """Keep a state-file key (session id, etc.) filename-safe. Session ids
+    are UUID-ish in practice, but a path component should never be built
+    from unsanitized input."""
+    return "".join(c for c in str(key or "") if c.isalnum() or c in "-_")
+
+
+# --- Entry-script glue shared by statusline.py / qwen_statusline.py /
+# subagent_statusline.py. Small enough, and used narrowly enough (best-effort
+# I/O helpers, host/mode/spinner lookups), that a dedicated module would be
+# more ceremony than the code it holds.
+
+SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def spinner_frame():
+    """The spinner glyph for "now", cycling through SPINNER_FRAMES at 4Hz."""
+    return SPINNER_FRAMES[int(time.time() * 4) % len(SPINNER_FRAMES)]
+
+
+def hostname():
+    """Short hostname (no domain suffix), or "unknown" if unavailable."""
+    try:
+        return socket.gethostname().split(".")[0] or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def is_local_mode():
+    """True when the render should badge itself LOCAL: either local-mode env
+    var is set, or the ~/.claude/.local-mode marker file exists."""
+    return (
+        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
+        or os.environ.get("ANTIGRAVITY_LOCAL_MODE") == "1"
+        or os.path.isfile(os.path.join(app_dir(), ".local-mode"))
+    )
+
+
+def safe_write(path, text):
+    """Best-effort whole-file write (debug/input-log dumps). A failed write
+    is non-fatal and must never break rendering."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError:
+        # Best-effort write (cache/state/log file); a failed write is
+        # non-fatal and must not break rendering.
+        pass
+
+
+def log_traceback(path):
+    """Best-effort append a timestamped traceback of the in-flight exception
+    to `path` (call from within an `except` block). The logger itself must
+    never raise: an unwritable log path costs the trace, not the caller's own
+    error handling."""
+    try:
+        import traceback
+
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            traceback.print_exc(file=f)
+    except OSError:
+        # The logger itself must never raise; if the log file is unwritable
+        # there is nothing useful left to do.
+        pass

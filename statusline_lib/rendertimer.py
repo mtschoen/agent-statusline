@@ -18,15 +18,15 @@ A harness with no session id in its payload (Qwen) collapses onto one shared
 file.
 
 State lives under ``~/.claude/state`` (override with ``CLAUDE_STATE_DIR``),
-the same directory ``nudge.py`` uses for the wrap-nudge state -- ``_state_dir``
-is imported from there rather than re-implemented.
+the same directory ``nudge.py`` uses for the wrap-nudge state -- the resolver
+is shared (``base.state_dir``) rather than re-implemented.
 """
 
 import json
 import os
 
-from .base import RESET
-from .nudge import _state_dir
+from .base import RESET, sanitize_state_key
+from .base import state_dir as _resolve_state_dir
 
 # Same env var name and default-on/"0"-disables semantics as the Pi footer.
 RENDER_TIMING_ENV_VAR = "STATUSLINE_RENDER_TIMING"
@@ -43,15 +43,14 @@ def timing_enabled():
 
 
 def _sanitize(session_id):
-    """Keep session ids filename-safe; empty/absent ids collapse onto one
-    shared key (Qwen's payload carries no session id at all)."""
-    key = "".join(c for c in str(session_id or "") if c.isalnum() or c in "-_")
-    return key or _SHARED_KEY
+    """Thin wrapper around the shared sanitizer: empty/absent ids collapse
+    onto one shared key (Qwen's payload carries no session id at all)."""
+    return sanitize_state_key(session_id) or _SHARED_KEY
 
 
 def render_timer_path(session_id=None, state_dir=None):
     return os.path.join(
-        _state_dir(state_dir), f"render-timer-{_sanitize(session_id)}.json"
+        _resolve_state_dir(state_dir), f"render-timer-{_sanitize(session_id)}.json"
     )
 
 

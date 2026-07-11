@@ -43,6 +43,9 @@ from statusline_lib import (
     format_context,
     format_cost,
     format_model_badge,
+    is_local_mode,
+    log_traceback,
+    safe_write,
     walk_transcript,
 )
 
@@ -73,16 +76,6 @@ _LEAD_TYPES = ("lead", "main", "coordinator")
 # rather than letting it tick forever past completion (the input gives us no
 # `endTime`, so a completed row with `now - startTime` would lie).
 _TERMINAL = ("complet", "success", "done", "ok", "error", "fail")
-
-
-def _safe_write(path, text):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-    except OSError:
-        # Best-effort write; a failed write is non-fatal and must not break
-        # the panel render.
-        pass
 
 
 def _agent_jsonl_path(parent_transcript_path, task_id):
@@ -289,7 +282,7 @@ def _row_for_task(task, parent_transcript_path, session_id):
 
 def main():
     raw = sys.stdin.read()
-    _safe_write(_INPUT_LOG, raw)
+    safe_write(_INPUT_LOG, raw)
 
     try:
         d = json.loads(raw)
@@ -304,12 +297,7 @@ def main():
         parent = _find_session_jsonl(session_id) or ""
     out = sys.stdout
 
-    _local_mode = (
-        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
-        or os.environ.get("ANTIGRAVITY_LOCAL_MODE") == "1"
-        or os.path.isfile(os.path.join(app_dir(), ".local-mode"))
-    )
-    _local_prefix = f"{ORANGE}LOCAL{RESET} | " if _local_mode else ""
+    _local_prefix = f"{ORANGE}LOCAL{RESET} | " if is_local_mode() else ""
 
     for task in d.get("tasks") or []:
         try:
@@ -326,16 +314,7 @@ def main():
 
 
 def _log_error():
-    try:
-        import traceback
-
-        with open(_ERROR_LOG, "a", encoding="utf-8") as f:
-            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-            traceback.print_exc(file=f)
-    except OSError:
-        # The error logger itself must never raise; nothing to do if the log
-        # file is unwritable.
-        pass
+    log_traceback(_ERROR_LOG)
 
 
 if __name__ == "__main__":

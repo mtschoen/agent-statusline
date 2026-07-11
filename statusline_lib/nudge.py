@@ -22,7 +22,8 @@ each other's occupancy or one-shot marker.
 import json
 import os
 
-from .base import app_dir
+from .base import sanitize_state_key
+from .base import state_dir as _resolve_state_dir
 
 # Context-hygiene caution line; also the statusline yellow anchor on 1M models.
 # NOT a pricing boundary -- the 1M tier bills flat (see module docstring).
@@ -50,28 +51,16 @@ def format_nudge(ctx_used):
     )
 
 
-def _state_dir(state_dir=None):
-    """Resolve the state directory: explicit arg > CLAUDE_STATE_DIR > default."""
-    return (
-        state_dir
-        or os.environ.get("CLAUDE_STATE_DIR")
-        or os.environ.get("ANTIGRAVITY_STATE_DIR")
-        or os.path.join(app_dir(), "state")
+def ctx_state_path(session_id, state_dir=None):
+    return os.path.join(
+        _resolve_state_dir(state_dir), f"ctx-{sanitize_state_key(session_id)}.json"
     )
 
 
-def _sanitize(session_id):
-    """Keep session ids filename-safe. They are UUID-ish in practice, but a path
-    component should never be built from unsanitized input."""
-    return "".join(c for c in str(session_id or "") if c.isalnum() or c in "-_")
-
-
-def ctx_state_path(session_id, state_dir=None):
-    return os.path.join(_state_dir(state_dir), f"ctx-{_sanitize(session_id)}.json")
-
-
 def marker_path(session_id, state_dir=None):
-    return os.path.join(_state_dir(state_dir), f"wrap-nudge-{_sanitize(session_id)}")
+    return os.path.join(
+        _resolve_state_dir(state_dir), f"wrap-nudge-{sanitize_state_key(session_id)}"
+    )
 
 
 def write_ctx_state(session_id, ctx_used, window_size, now, state_dir=None):

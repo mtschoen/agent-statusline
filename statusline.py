@@ -11,7 +11,6 @@ import contextlib
 import hashlib
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -48,13 +47,21 @@ try:
         format_session_timing,
         format_teammates,
         format_ttl,
+        hostname,
+        is_local_mode,
+        log_traceback,
         pref_bool,
+        read_ttl_cache,
         resolve_flags,
+        safe_write,
+        spinner_frame,
         terminal_columns,
         visible_width,
         walk_transcript,
         weekly_exhaustion,
+        write_ttl_cache,
     )
+    from statusline_lib import state_dir as _resolve_state_dir
     from statusline_lib.nudge import write_ctx_state
     from statusline_lib.rendertimer import format_render_suffix, record_render
 except Exception:
@@ -78,25 +85,6 @@ except Exception:
 
 _INPUT_LOG = os.path.join(app_dir(), ".statusline-input.log")
 _ERROR_LOG = os.path.join(app_dir(), ".statusline-error.log")
-
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-
-def _safe_write(path, text):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-    except OSError:
-        # Best-effort write (cache/state file); a failed write is non-fatal
-        # and must not break rendering.
-        pass
-
-
-def _hostname():
-    try:
-        return socket.gethostname().split(".")[0] or "unknown"
-    except OSError:
-        return "unknown"
 
 
 def _git_command(cwd, *arguments):
@@ -124,62 +112,41 @@ _HOST_COLOR = "\x1b[38;5;96m"  # muted mauve - distinct from the tan hash and bl
 # never clobber each other's entry. The coloured rendering itself is NOT
 # cached -- colours are stable constants, so caching the plain strings keeps
 # the cache file reusable and keeps this module's ANSI styling in one place.
+#
+# Independent knob from beacon_cache.py's _BEACON_LATEST_CACHE_TTL_SECONDS --
+# the two happen to share the same 2.5s value today, but they cache unrelated
+# things (git refs vs. beacon payloads) and may reasonably diverge later.
 _GIT_REF_CACHE_TTL_SECONDS = 2.5
-_GIT_REF_CACHE_DIR = os.path.join(app_dir(), "state")
 
 
-def _git_ref_cache_path(cwd):
+def _git_ref_cache_path(cwd, state_dir=None):
     normalized = os.path.normcase(os.path.normpath(cwd))
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-    return os.path.join(_GIT_REF_CACHE_DIR, f"gitref-{digest}.json")
+    return os.path.join(_resolve_state_dir(state_dir), f"gitref-{digest}.json")
 
 
-def _git_ref_raw_cached(cwd):
+def _git_ref_raw_cached(cwd, state_dir=None):
     """Return (branch, short_hash) for cwd, TTL-cached on disk. A cache miss
     still pays the git cost inline; a hit skips both subprocess calls."""
-    path = _git_ref_cache_path(cwd)
-    try:
-        with open(path, encoding="utf-8") as f:
-            cached = json.load(f)
-        if (
-            isinstance(cached, dict)
-            and time.time() - cached.get("computed_at_unix", 0)
-            < _GIT_REF_CACHE_TTL_SECONDS
-        ):
-            return cached.get("branch", ""), cached.get("short_hash", "")
-    except (OSError, ValueError):
-        # No cache yet, or a corrupt/partial file -- fall through to a fresh
-        # computation rather than guess at a ref.
-        pass
+    path = _git_ref_cache_path(cwd, state_dir)
+    cached = read_ttl_cache(path, _GIT_REF_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached.get("branch", ""), cached.get("short_hash", "")
 
     branch = _git_command(cwd, "symbolic-ref", "--short", "HEAD")
     short_hash = _git_command(cwd, "rev-parse", "--short", "HEAD")
-    payload = {
-        "computed_at_unix": time.time(),
-        "branch": branch,
-        "short_hash": short_hash,
-    }
-    try:
-        os.makedirs(_GIT_REF_CACHE_DIR, exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        os.replace(tmp, path)
-    except OSError:
-        # Best-effort cache write; a failed write must not break rendering,
-        # just cost the next render a recompute.
-        pass
+    write_ttl_cache(path, {"branch": branch, "short_hash": short_hash})
     return branch, short_hash
 
 
-def _git_ref(cwd):
+def _git_ref(cwd, state_dir=None):
     """Render the git ref as `branch:hash` (e.g. `main:abc123`) so the commit
     hash is visually distinct from the session-id badge on line 1. The hash is
     tinted a muted tan while the branch keeps the default colour. On a detached
     HEAD there is no branch, so just the short hash is shown."""
     if not cwd:
         return ""
-    branch, short_hash = _git_ref_raw_cached(cwd)
+    branch, short_hash = _git_ref_raw_cached(cwd, state_dir)
     tinted_hash = f"{_GIT_HASH_COLOR}{short_hash}{RESET}" if short_hash else ""
     if branch and tinted_hash:
         return f"{branch}:{tinted_hash}"
@@ -223,15 +190,10 @@ def _format_cwd(home, current):
 
 
 def _line1(d, cwd, cwd_display, spinner, terminal_width_hint=None):
-    local_mode = (
-        os.environ.get("CLAUDE_LOCAL_MODE") == "1"
-        or os.environ.get("ANTIGRAVITY_LOCAL_MODE") == "1"
-        or os.path.isfile(os.path.join(app_dir(), ".local-mode"))
-    )
-    host = f"{_HOST_COLOR}{_hostname()}{RESET}"
+    host = f"{_HOST_COLOR}{hostname()}{RESET}"
     line1 = (
         f"{spinner} {ORANGE}LOCAL{RESET} [{host}] {cwd_display}"
-        if local_mode
+        if is_local_mode()
         else f"{spinner} [{host}] {cwd_display}"
     )
     # Suppress the brief 2-process overlap during a session restart (old process
@@ -452,7 +414,7 @@ def main():
     raw = sys.stdin.read()
     # Truncate-on-write dump of the latest payload. Useful when Claude Code
     # adds new fields we could read directly. Bounded size; cheap.
-    _safe_write(_INPUT_LOG, raw)
+    safe_write(_INPUT_LOG, raw)
 
     try:
         d = json.loads(raw)
@@ -516,7 +478,7 @@ def main():
     terminal_width_hint = d.get("terminal_width")
     is_agy = d.get("product") == "antigravity"
 
-    spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
+    spinner = spinner_frame()
     line1 = _line1(d, cwd, cwd_display, spinner, terminal_width_hint)
 
     # Resolve compact verbosity (STATUSLINE_COMPACT + $COLUMNS): re-render the
@@ -565,16 +527,7 @@ def main():
 
 
 def _log_error():
-    try:
-        import traceback
-
-        with open(_ERROR_LOG, "a", encoding="utf-8") as f:
-            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-            traceback.print_exc(file=f)
-    except OSError:
-        # The error logger itself must never raise; if the log file is
-        # unwritable there is nothing useful left to do.
-        pass
+    log_traceback(_ERROR_LOG)
 
 
 # A render slower than this gets a line in the error log. Claude Code re-invokes

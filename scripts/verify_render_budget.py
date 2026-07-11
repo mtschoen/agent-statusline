@@ -29,6 +29,8 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from statusline_lib.rendertimer import render_timer_path
+
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The render path: everything importable from a statusline render. install.py
@@ -251,7 +253,18 @@ def check_warm_core_median(failures):
     interpreter+imports excluded) must beat _CORE_BUDGET_MS in the fixture
     environment. One child interpreter renders 9 times and reports the
     median, so spawn/import cost and first-render cache warming are excluded
-    from the figure -- this is the number the async-refresher work ratchets."""
+    from the figure -- this is the number the async-refresher work ratchets.
+
+    The child calls statusline.main() directly (see _CORE_TIMER_SNIPPET), never
+    the `if __name__ == "__main__":` block -- so record_render() (which WRITES
+    the render-timer state) never runs here, on any of the 9 renders. Left
+    unaddressed, format_render_suffix()'s read always hit the "no prior state"
+    branch, so this benchmark never paid for the warm json.load() a real second
+    render does. Seeding one render-timer entry up front (using rendertimer's
+    own path function, not a re-derived path, so this can't drift from the
+    production layout) makes every one of the 9 in-process renders exercise
+    the real warm-read branch.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         home = os.path.join(tmp, "home")
         _build_fixture_home(home)
@@ -259,9 +272,17 @@ def check_warm_core_median(failures):
         env["HOME"] = home
         env["USERPROFILE"] = home
         env.pop("CLAUDE_WALKER_BIN", None)
+
+        session_id = str(uuid.uuid4())
+        state_dir = os.path.join(home, ".claude", "state")
+        os.makedirs(state_dir, exist_ok=True)
+        seed_path = render_timer_path(session_id, state_dir=state_dir)
+        with open(seed_path, "w", encoding="utf-8") as f:
+            json.dump({"last_ms": 5.0, "peak_ms": 5.0}, f)
+
         payload = json.dumps(
             {
-                "session_id": str(uuid.uuid4()),
+                "session_id": session_id,
                 "cwd": _REPO,
                 "workspace": {"current_dir": _REPO, "project_dir": _REPO},
                 "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},

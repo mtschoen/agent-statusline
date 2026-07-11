@@ -23,7 +23,11 @@ deviating project reconciles exactly once 1-hour writes bill at 2.0x). The Opus
 (official "Long context pricing": the full 1M window bills at standard rates).
 
 Package layout (dependency order, no cycles):
-  base     -- _json_loads (orjson fallback), color constants, fmt, color helpers
+  base     -- _json_loads (orjson fallback), color constants, fmt, color helpers,
+              state_dir/sanitize_state_key, entry-script glue (hostname,
+              is_local_mode, spinner_frame, safe_write, log_traceback)
+  ttlcache -- generic single-value TTL disk-cache mechanics (read/write),
+              shared by the git-ref and beacons-latest caches
   cachefmt -- shared cache count/hit formatting across harness adapters
   prefs    -- live ~/.claude/.statusline-prefs.json resolver (pref/pref_bool)
   sessions -- session counting (psutil lazy), debounce state
@@ -79,14 +83,22 @@ from .base import (
     RAMP,
     RED,
     RESET,
+    SPINNER_FRAMES,
     YELLOW,
     _json_loads,
     app_dir,
     color_high_bad,
     color_high_good,
     fmt,
+    hostname,
+    is_local_mode,
+    log_traceback,
     ramp_color,
     ramp_color_for,
+    safe_write,
+    sanitize_state_key,
+    spinner_frame,
+    state_dir,
 )
 from .beacon import (
     _BEACON_BLOCK_RE,
@@ -225,6 +237,10 @@ from .teams import (
     _teammate_summary,
     format_teammates,
 )
+from .ttlcache import (
+    read_ttl_cache,
+    write_ttl_cache,
+)
 from .walker import (
     _WALKER_BIN_ENV,
     _WALKER_ROOTS_CONFIG_PATH,
@@ -246,6 +262,7 @@ __all__ = [
     "RED",
     "RED_MARGIN_TOKENS",
     "RESET",
+    "SPINNER_FRAMES",
     "YELLOW",
     "app_dir",
     "cache_hit_percent",
@@ -281,16 +298,25 @@ __all__ = [
     "format_teammates",
     "format_ttl",
     "full_flags",
+    "hostname",
+    "is_local_mode",
     "load_prefs",
+    "log_traceback",
     "pref",
     "pref_bool",
     "prefs_path",
     "ramp_color",
     "ramp_color_for",
+    "read_ttl_cache",
     "resolve_flags",
+    "safe_write",
+    "sanitize_state_key",
+    "spinner_frame",
+    "state_dir",
     "terminal_columns",
     "visible_width",
     "walk_transcript",
     "weekly_exhaustion",
     "weekly_needle",
+    "write_ttl_cache",
 ]

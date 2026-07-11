@@ -288,6 +288,35 @@ def _check_format_cache_render(failures):
         )
 
 
+def _check_format_cache_read_cost_not_passed_through_fmt(failures):
+    # Regression guard for a real production crash (10+ occurrences in
+    # ~/.claude/.statusline-error.log): format_cache must render the dollar
+    # cost through its own f-string, never by handing the pre-formatted
+    # `$N.NN` STRING to format_cache_read/format_cache_write, whose fmt()
+    # expects a numeric token count and raises TypeError on a string. Use a
+    # read count >1M so fmt()'s `n >= 1_000_000` branch actually runs -- a
+    # regression here crashes regardless of which branch, but this exercises
+    # the exact shape from the traceback (large read count + cost args, full
+    # money/show_output breakdown enabled).
+    from statusline_lib.costfmt import format_cache
+
+    result = format_cache(
+        12_345_678,
+        428_100,
+        50_000,
+        read_cost=1.23,
+        write_cost=4.56,
+        output_t=2_000,
+        output_cost=0.07,
+        show_output=True,
+    )
+    if "($1.23)" not in result or "($4.56)" not in result or "($0.07)" not in result:
+        failures.append(
+            f"format_cache with a >1M read count and cost args must render all "
+            f"three $ figures without crashing; got {result!r}"
+        )
+
+
 def _check_model_rates(failures):
     # Fable 5 bills $10/$50 per MTok (platform.claude.com models overview).
     # Before the fable row existed, _rates_for fell back to sonnet ($3/$15)
@@ -376,6 +405,7 @@ def check(failures):
     _check_ttl_threshold_derived_from_write(failures)
     _check_missing_timestamps_not_evicted(failures)
     _check_format_cache_render(failures)
+    _check_format_cache_read_cost_not_passed_through_fmt(failures)
     _check_parse_ts_bad_value(failures)
     _check_walk_skips_junk_lines(failures)
     _check_walk_one_transcript_oserror(failures)

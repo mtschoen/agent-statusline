@@ -515,6 +515,10 @@ Code-specific signals that Pi does not currently expose as the same payload
 progress-beacon calibration) are omitted until Pi surfaces equivalent data or a
 separate walker is added.
 
+The Pi footer appends the previous render duration and session peak
+(`ui 1.25ms peak 4.80ms`) to line 3. Set `STATUSLINE_RENDER_TIMING=0` before
+starting Pi to disable this instrumentation.
+
 ### Per-agent status lines
 
 When `subagentStatusLine` is configured, each row in the agent panel below

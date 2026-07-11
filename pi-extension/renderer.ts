@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { dirname, join, normalize, relative } from "node:path";
+import { join, normalize, relative } from "node:path";
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
@@ -22,6 +23,8 @@ const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPEND_WINDOW_MS_5M = 300_000;
 const SPEND_WINDOW_MS_24H = 86_400_000;
 const SPEND_CACHE_TTL_MS = 15_000;
+const GIT_CACHE_TTL_MS = 5_000;
+const execFileAsync = promisify(execFile);
 
 export interface RenderState {
 	turnActive: boolean;
@@ -32,7 +35,8 @@ export interface RenderState {
 	spendCache: Map<string, { computedAt: number; spend: number; sourcePath?: string }>;
 	gitCache: { cwd: string; computedAt: number; value: string } | undefined;
 	diffCache: { cwd: string; computedAt: number; value: string } | undefined;
-	gitRepoCache: { cwd: string; computedAt: number; value: boolean } | undefined;
+	gitRefreshPromise: Promise<void> | undefined;
+	requestRender: (() => void) | undefined;
 	totalsCache: CachedTotals | undefined;
 	branchSpendCache: BranchSpendCache | undefined;
 	spendSessionPath: string | undefined;
@@ -128,7 +132,7 @@ function formatDuration(milliseconds: number): string {
 	return `${remainingSeconds}s`;
 }
 
-function modelBadge(modelId: string | undefined): string {
+export function modelBadge(modelId: string | undefined): string {
 	const id = (modelId ?? "").toLowerCase();
 	if (!id) return "";
 	const specs: Array<[string, string]> = [
@@ -140,13 +144,9 @@ function modelBadge(modelId: string | undefined): string {
 		["gemini", MODEL_HAIKU],
 	];
 	for (const [family, ansi] of specs) {
-		if (!id.includes(family)) continue;
-		const version = id.match(new RegExp(`${family}[-.]?(\\d+)(?:[-.](\\d+))?`));
-		const suffix = id.includes("1m") || id.includes("1000000") ? "[1m]" : "";
-		const body = version ? `${family}${version[1]}${version[2] ? `.${version[2]}` : ""}${suffix}` : `${family}${suffix}`;
-		return color(body, ansi);
+		if (id.includes(family)) return color(modelId ?? "", ansi);
 	}
-	return color((modelId ?? "").replace(/^claude-/, "").replace(/^openai\//, ""), DIM);
+	return color(modelId ?? "", DIM);
 }
 
 function timestampMs(value: string | number | undefined): number | undefined {
@@ -225,11 +225,9 @@ function totalsFromBranch(branch: any[]): Totals {
 }
 
 function branchTotals(ctx: any, state: RenderState): Totals {
+	if (state.totalsCache) return state.totalsCache.value;
 	const branch = ctx.sessionManager.getBranch();
 	const fingerprint = branchFingerprint(branch);
-	if (state.totalsCache?.fingerprint === fingerprint) {
-		return state.totalsCache.value;
-	}
 	const totals = totalsFromBranch(branch);
 	state.totalsCache = { fingerprint, value: totals };
 	return totals;
@@ -261,13 +259,13 @@ function spendFromBranchWindows(branch: any[], now: number): Record<number, numb
 
 function spendByWindowFromBranch(ctx: any, state: RenderState, sessionId: string | undefined, now: number): Record<number, number> | undefined {
 	if (!sessionId) return undefined;
+	const cached = state.branchSpendCache;
+	if (cached && cached.sessionId === sessionId && now - cached.computedAt < SPEND_CACHE_TTL_MS) {
+		return cached.spendByWindow;
+	}
 	const branch = ctx.sessionManager.getBranch() || [];
 	if (!branch.length) return undefined;
 	const fingerprint = branchFingerprint(branch);
-	const cached = state.branchSpendCache;
-	if (cached && cached.sessionId === sessionId && cached.fingerprint === fingerprint && now - cached.computedAt < SPEND_CACHE_TTL_MS && cached.spendByWindow[SPEND_WINDOW_MS_5M] !== undefined && cached.spendByWindow[SPEND_WINDOW_MS_24H] !== undefined) {
-		return cached.spendByWindow;
-	}
 	const spendByWindow = spendFromBranchWindows(branch, now);
 	state.branchSpendCache = {
 		sessionId,
@@ -440,73 +438,55 @@ function rateLimitSummary(state: RenderState): string {
 	return parts.length ? color(`rl ${parts.join(" ")}`, DIM) : "";
 }
 
-function isGitRepository(cwd: string, state: RenderState): boolean {
+function scheduleGitRefresh(cwd: string, state: RenderState): void {
 	const now = Date.now();
-	const cached = state.gitRepoCache;
-	if (cached && cached.cwd === cwd && now - cached.computedAt < 5000) return cached.value;
+	if (state.gitRefreshPromise) return;
+	if (state.gitCache?.cwd === cwd && state.diffCache?.cwd === cwd && now - state.gitCache.computedAt < GIT_CACHE_TTL_MS) return;
 
-	let current = cwd;
-	while (true) {
-		if (existsSync(join(current, ".git"))) {
-			try {
-				const stat = statSync(join(current, ".git"));
-				if (stat.isDirectory() || stat.isFile()) {
-					state.gitRepoCache = { cwd, computedAt: now, value: true };
-					return true;
-				}
-			} catch {
-				// fall through
+	state.gitRefreshPromise = (async () => {
+		let reference = "";
+		let difference = "";
+		try {
+			await execFileAsync("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 1000 });
+			const [branchResult, hashResult, differenceResult] = await Promise.allSettled([
+				execFileAsync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8", timeout: 1000 }),
+				execFileAsync("git", ["-C", cwd, "rev-parse", "--short", "HEAD"], { encoding: "utf8", timeout: 1000 }),
+				execFileAsync("git", ["-C", cwd, "diff", "--numstat"], { encoding: "utf8", timeout: 1000 }),
+			]);
+			const branch = branchResult.status === "fulfilled" ? branchResult.value.stdout.trim() : "";
+			const hash = hashResult.status === "fulfilled" ? hashResult.value.stdout.trim() : "";
+			reference = branch && hash ? `${branch}:${color(hash, TAN)}` : branch || (hash ? color(hash, TAN) : "");
+
+			let added = 0;
+			let removed = 0;
+			const output = differenceResult.status === "fulfilled" ? differenceResult.value.stdout : "";
+			for (const line of output.trim().split(/\r?\n/)) {
+				if (!line) continue;
+				const [addedText, removedText] = line.split(/\s+/);
+				added += Number(addedText) || 0;
+				removed += Number(removedText) || 0;
 			}
+			difference = added || removed ? `${color(`+${added}`, GREEN)}/${color(`-${removed}`, RED)}` : "";
+		} catch {
+			// A non-repository working directory has no Git status to display.
 		}
-		const parent = dirname(current);
-		if (parent === current) break;
-		current = parent;
-	}
-	state.gitRepoCache = { cwd, computedAt: now, value: false };
-	return false;
+		const computedAt = Date.now();
+		state.gitCache = { cwd, computedAt, value: reference };
+		state.diffCache = { cwd, computedAt, value: difference };
+	})().finally(() => {
+		state.gitRefreshPromise = undefined;
+		state.requestRender?.();
+	});
 }
 
 function gitRef(cwd: string, state: RenderState): string {
-	const now = Date.now();
-	if (!isGitRepository(cwd, state)) {
-		state.gitCache = { cwd, computedAt: now, value: "" };
-		return "";
-	}
-	if (state.gitCache && state.gitCache.cwd === cwd && now - state.gitCache.computedAt < 8000) return state.gitCache.value;
-	let value = "";
-	try {
-		const branch = execFileSync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8", timeout: 1000 }).trim();
-		const hash = execFileSync("git", ["-C", cwd, "rev-parse", "--short", "HEAD"], { encoding: "utf8", timeout: 1000 }).trim();
-		value = branch && hash ? `${branch}:${color(hash, TAN)}` : branch || color(hash, TAN);
-	} catch {
-		value = "";
-	}
-	state.gitCache = { cwd, computedAt: now, value };
-	return value;
+	scheduleGitRefresh(cwd, state);
+	return state.gitCache?.cwd === cwd ? state.gitCache.value : "";
 }
 
 function diffStat(cwd: string, state: RenderState): string {
-	const now = Date.now();
-	if (!isGitRepository(cwd, state)) {
-		state.diffCache = { cwd, computedAt: now, value: "" };
-		return "";
-	}
-	if (state.diffCache && state.diffCache.cwd === cwd && now - state.diffCache.computedAt < 5000) return state.diffCache.value;
-	let added = 0;
-	let removed = 0;
-	try {
-		for (const line of execFileSync("git", ["-C", cwd, "diff", "--numstat"], { encoding: "utf8", timeout: 1000 }).trim().split(/\r?\n/)) {
-			if (!line) continue;
-			const [add, remove] = line.split(/\s+/);
-			added += Number(add) || 0;
-			removed += Number(remove) || 0;
-		}
-	} catch {
-		added = 0;
-		removed = 0;
-	}
-	state.diffCache = { cwd, computedAt: now, value: added || removed ? `${color(`+${added}`, GREEN)}/${color(`-${removed}`, RED)}` : "" };
-	return state.diffCache.value;
+	scheduleGitRefresh(cwd, state);
+	return state.diffCache?.cwd === cwd ? state.diffCache.value : "";
 }
 
 function formatCwd(home: string, current: string): string {
@@ -546,17 +526,23 @@ function line2(ctx: any, state: RenderState, width: number): string {
 	].filter(Boolean).join(" | ");
 }
 
-function line3(ctx: any, state: RenderState): string {
+function line3(ctx: any, state: RenderState, renderTiming?: { last: number; peak: number }): string {
 	const parts = [];
 	const headerTimestamp = timestampMs(ctx.sessionManager.getHeader()?.timestamp);
 	if (headerTimestamp) parts.push(`⏳ ${formatDuration(Date.now() - headerTimestamp)}`);
 	if (state.turnActive && state.turnStart) parts.push(`⏱ turn ${state.turnIndex} (${formatDuration(Date.now() - state.turnStart)})`);
 	if (state.lastProviderStatus) parts.push(color(`http ${state.lastProviderStatus}`, state.lastProviderStatus >= 400 ? RED : DIM));
+	if (renderTiming) parts.push(color(`ui ${renderTiming.last.toFixed(2)}ms peak ${renderTiming.peak.toFixed(2)}ms`, DIM));
 	return parts.join(" · ");
 }
 
 export function installStatuslineFooter(ctx: any, state: RenderState): void {
 	ctx.ui.setFooter((tui: any, _theme: any, footerData: any) => {
+		const requestRender = () => tui.requestRender();
+		state.requestRender = requestRender;
+		const timingEnabled = process.env.STATUSLINE_RENDER_TIMING !== "0";
+		let lastRenderMilliseconds = 0;
+		let peakRenderMilliseconds = 0;
 		const unsub = footerData.onBranchChange(() => {
 			state.totalsCache = undefined;
 			state.branchSpendCache = undefined;
@@ -569,10 +555,22 @@ export function installStatuslineFooter(ctx: any, state: RenderState): void {
 			dispose() {
 				unsub();
 				clearInterval(interval);
+				if (state.requestRender === requestRender) state.requestRender = undefined;
 			},
 			invalidate() {},
 			render(width: number): string[] {
-				return [line1(ctx, state), line2(ctx, state, width), line3(ctx, state)].filter(Boolean).map((line) => truncateToWidth(line, width));
+				const startedAt = timingEnabled ? performance.now() : 0;
+				const renderTiming = timingEnabled && lastRenderMilliseconds > 0
+					? { last: lastRenderMilliseconds, peak: peakRenderMilliseconds }
+					: undefined;
+				const lines = [line1(ctx, state), line2(ctx, state, width), line3(ctx, state, renderTiming)]
+					.filter(Boolean)
+					.map((line) => truncateToWidth(line, width));
+				if (timingEnabled) {
+					lastRenderMilliseconds = performance.now() - startedAt;
+					peakRenderMilliseconds = Math.max(peakRenderMilliseconds, lastRenderMilliseconds);
+				}
+				return lines;
 			},
 		};
 	});

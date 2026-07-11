@@ -12,7 +12,8 @@ export default function (pi: any) {
 		spendCache: new Map(),
 		gitCache: undefined,
 		diffCache: undefined,
-		gitRepoCache: undefined,
+		gitRefreshPromise: undefined,
+		requestRender: undefined,
 		totalsCache: undefined,
 		branchSpendCache: undefined,
 		spendSessionPath: undefined,
@@ -26,7 +27,7 @@ export default function (pi: any) {
 		state.spendSessionId = undefined;
 		state.gitCache = undefined;
 		state.diffCache = undefined;
-		state.gitRepoCache = undefined;
+		state.gitRefreshPromise = undefined;
 		state.branchSpendCache = undefined;
 		if (ctx.hasUI) installStatuslineFooter(ctx, state);
 	});

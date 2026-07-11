@@ -81,9 +81,14 @@ def ramp_color_for(value, warn, danger):
     """ramp_color for a threshold-style value: `warn` is the green edge, `danger`
     the red edge. Solid green at/beyond warn (away from danger), ramps through
     yellow to red at danger, solid red beyond. Covers high-bad (warn < danger)
-    and high-good (warn > danger) by orientation of the two anchors."""
+    and high-good (warn > danger) by orientation of the two anchors.
+
+    warn == danger collapses both anchors onto one point, which carries no
+    orientation: nothing distinguishes a high-bad caller from a high-good one,
+    so favoring either color extreme would invert intent for the other. Render
+    the neutral ramp midpoint instead of guessing."""
     if warn == danger:
-        return ramp_color(1.0 if value >= warn else 0.0)
+        return ramp_color(0.5)
     return ramp_color((value - warn) / (danger - warn))
 
 

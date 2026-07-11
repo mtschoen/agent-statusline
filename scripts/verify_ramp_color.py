@@ -106,24 +106,20 @@ def _check_threshold_colorizers(failures):
 
 
 def _check_equal_warn_danger(failures):
-    # ramp_color_for(value, warn, danger) when warn == danger: value >= warn ->
-    # ramp_color(1.0) (the "hot" end), value < warn -> ramp_color(0.0) (the "cool"
-    # end). Covers base.py line 85.
-    result_at = ramp_color_for(5, 5, 5)
-    result_above = ramp_color_for(10, 5, 5)
-    result_below = ramp_color_for(3, 5, 5)
-    if result_at != ramp_color(1.0):
-        failures.append(
-            f"warn==danger, value==warn should be ramp_color(1.0); got {result_at!r}"
-        )
-    if result_above != ramp_color(1.0):
-        failures.append(
-            f"warn==danger, value>warn should be ramp_color(1.0); got {result_above!r}"
-        )
-    if result_below != ramp_color(0.0):
-        failures.append(
-            f"warn==danger, value<warn should be ramp_color(0.0); got {result_below!r}"
-        )
+    # ramp_color_for(value, warn, danger) when warn == danger is a degenerate,
+    # orientation-less threshold: the two args collapse to one point, so the
+    # function has no way to tell whether "at/above" it means good (a
+    # high-good caller) or bad (a high-bad caller). Committing to either color
+    # extreme would invert intent for the orientation it guessed wrong, so it
+    # must render the neutral ramp midpoint for every value. Covers base.py's
+    # warn==danger branch.
+    for value in (3, 5, 10):
+        result = ramp_color_for(value, 5, 5)
+        if result != ramp_color(0.5):
+            failures.append(
+                f"warn==danger must render the neutral ramp midpoint regardless "
+                f"of value; ramp_color_for({value}, 5, 5) got {result!r}"
+            )
 
 
 def _check_orjson_fallback(failures):

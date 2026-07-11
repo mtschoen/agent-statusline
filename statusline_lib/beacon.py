@@ -312,12 +312,19 @@ def _bias_factor_cached(period_seconds):
         if age < ttl:
             return c.get("n_pairs", 0), c.get("bias_factor")
 
+    # --no-config keeps this walk off the walker-roots.json extra roots: the
+    # SMB mount measured 8-38s against this call's 5s timeout, so every cache
+    # miss stalled a render and then failed anyway. Bias calibration is
+    # local-machine semantics (it corrects THIS machine's ETA behavior), so
+    # local-only is also the more correct population. Cross-machine roots
+    # still serve the burn-rate/pace spend walks, which have their own caches.
     data = _walker_subcommand(
         "beacons-history",
         "--period",
         key,
         "--win-start",
         "0",
+        "--no-config",
         timeout=5,
     )
     entry = {

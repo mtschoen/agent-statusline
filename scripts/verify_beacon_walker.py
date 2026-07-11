@@ -453,8 +453,45 @@ def _check_format_calibrated_eta(failures):
         _beacon_mod._bias_factor_cached = original_bias
 
 
+def _check_bias_history_walk_is_local_only(failures):
+    """The beacons-history walk must pass --no-config so it never touches the
+    SMB extra roots from walker-roots.json: measured 8-38s over the network
+    mount vs 0.5s local, against a 5s subprocess timeout -- every cache miss
+    stalled a render for the full timeout and then failed. Bias calibration
+    is local-machine semantics, so local-only is also more correct."""
+    import os
+    import tempfile
+
+    import statusline_lib.beacon as _bm
+
+    captured = []
+
+    def fake_walker(*args, **kw):
+        captured.append(args)
+        return {"n_pairs": 3, "bias_factor": 1.5}
+
+    original_walker = _bm._walker_subcommand
+    original_path = _bm._BIAS_CACHE_PATH
+    _bm._walker_subcommand = fake_walker
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            _bm._BIAS_CACHE_PATH = os.path.join(tmp, "bias.json")
+            _bm._bias_factor_cached(604800)
+    finally:
+        _bm._walker_subcommand = original_walker
+        _bm._BIAS_CACHE_PATH = original_path
+
+    if not captured:
+        failures.append("bias walk should invoke the walker on a cold cache")
+    elif "--no-config" not in captured[0]:
+        failures.append(
+            f"beacons-history must pass --no-config (local roots only); got {captured[0]!r}"
+        )
+
+
 def main():
     failures = []
+    _check_bias_history_walk_is_local_only(failures)
     _check_format_beacon(failures)
     _check_format_beacon_bad_eta_seconds(failures)
     _check_bias_factor_cached(failures)

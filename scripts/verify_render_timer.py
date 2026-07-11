@@ -163,6 +163,28 @@ def check_record_render_oserror(failures):
         record_render(1.0, SID, state_dir=bad_state_dir)  # must not raise
 
 
+def check_record_render_bad_elapsed(failures):
+    # A non-numeric elapsed_ms (e.g. a caller bug upstream) must neither
+    # raise nor write a corrupt state file -- record_render's whole job is
+    # to never break the render that calls it at process exit.
+    with tempfile.TemporaryDirectory() as tmp:
+        record_render("not-a-number", SID, state_dir=tmp)  # must not raise
+        if read_previous(SID, state_dir=tmp) is not None:
+            failures.append("a bad elapsed_ms must not produce a readable state file")
+
+        record_render(None, OTHER, state_dir=tmp)  # must not raise
+        if read_previous(OTHER, state_dir=tmp) is not None:
+            failures.append("elapsed_ms=None must not produce a readable state file")
+
+        # A subsequent, valid call must still work -- the bad call above
+        # should not have left anything behind that corrupts the next write.
+        record_render(9.0, SID, state_dir=tmp)
+        if read_previous(SID, state_dir=tmp) != (9.0, 9.0):
+            failures.append(
+                "a valid record_render after a bad one should still round-trip"
+            )
+
+
 def _run_statusline(tmp_home, payload):
     env = dict(os.environ)
     env["HOME"] = tmp_home
@@ -288,6 +310,7 @@ def main():
         check_disabled_gate_suppresses_suffix_and_record,
         check_corrupt_state_file,
         check_record_render_oserror,
+        check_record_render_bad_elapsed,
         check_statusline_end_to_end,
         check_statusline_timing_disabled_end_to_end,
         check_qwen_end_to_end,

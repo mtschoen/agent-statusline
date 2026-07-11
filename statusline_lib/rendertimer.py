@@ -77,23 +77,23 @@ def read_previous(session_id=None, state_dir=None):
 
 def record_render(elapsed_ms, session_id=None, state_dir=None):
     """Persist this render's duration + the updated session peak for the next
-    process to read. Best-effort and must never raise: a failed or skipped
-    write degrades the NEXT render's suffix, never this one."""
+    process to read. Best-effort and must never raise: a bad ``elapsed_ms``,
+    a full disk, or an unwritable state dir should cost us the NEXT render's
+    timing suffix, never break the render calling this at process exit."""
     if not timing_enabled():
         return
-    previous = read_previous(session_id, state_dir)
-    peak_ms = max(float(elapsed_ms), previous[1] if previous else 0.0)
-    path = render_timer_path(session_id, state_dir)
-    payload = {"last_ms": float(elapsed_ms), "peak_ms": peak_ms}
     try:
+        elapsed_ms = float(elapsed_ms)
+        previous = read_previous(session_id, state_dir)
+        peak_ms = max(elapsed_ms, previous[1] if previous else 0.0)
+        path = render_timer_path(session_id, state_dir)
+        payload = {"last_ms": elapsed_ms, "peak_ms": peak_ms}
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
         os.replace(tmp, path)
-    except OSError:
-        # Non-essential side channel; a full disk or unwritable state dir
-        # should cost us the timing suffix, not the render itself.
+    except (OSError, TypeError, ValueError):
         pass
 
 

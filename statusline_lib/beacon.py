@@ -244,7 +244,13 @@ def format_beacon(session_id):
         minutes = max(0, int(age) // 60)
         return (f"{RED}⏱ stale {minutes}m{RESET}", beacon)
 
-    eta_seconds = beacon.get("eta_seconds") or 0
+    # Defensive float() coercion, matching _apply_beacon's handling of the
+    # same field: a malformed transcript can carry a non-numeric eta_seconds,
+    # which must degrade gracefully rather than crash the render.
+    try:
+        eta_seconds = float(beacon.get("eta_seconds") or 0)
+    except (TypeError, ValueError):
+        eta_seconds = 0.0
     eta_min = max(1, int(eta_seconds // 60))
     summary = (beacon.get("summary") or "")[:60]
 
@@ -280,21 +286,34 @@ def _bias_factor_cached(period_seconds):
     render without a manual flush. Failures are negative-cached under the
     longer _BIAS_FAILURE_TTL_SECONDS so a slow walker degrades the calibrated
     ETA (which is optional) instead of stalling every render.
+
+    The cache file holds one entry PER PERIOD (keyed by the string period, so
+    the 5h and weekly windows -- or any other caller -- each keep their own
+    fresh entry). A single shared entry would have a fresh call for period B
+    overwrite period A's still-fresh entry outright, forcing a recompute on
+    every call whenever callers alternate between periods.
     """
+    key = str(int(period_seconds))
+    cache = {}
     try:
         with open(_BIAS_CACHE_PATH, encoding="utf-8") as f:
-            c = json.load(f)
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            cache = loaded
+    except (OSError, ValueError):
+        pass
+
+    c = cache.get(key)
+    if isinstance(c, dict):
         age = datetime.now(UTC).timestamp() - c.get("computed_at_unix", 0)
         ttl = _BIAS_FAILURE_TTL_SECONDS if c.get("failed") else _BIAS_CACHE_TTL_SECONDS
-        if age < ttl and c.get("period_seconds") == period_seconds:
+        if age < ttl:
             return c.get("n_pairs", 0), c.get("bias_factor")
-    except (OSError, ValueError, KeyError):
-        pass
 
     data = _walker_subcommand(
         "beacons-history",
         "--period",
-        str(int(period_seconds)),
+        key,
         "--win-start",
         "0",
         timeout=5,
@@ -307,9 +326,10 @@ def _bias_factor_cached(period_seconds):
     }
     if not data:
         entry["failed"] = True
+    cache[key] = entry
     try:
         with open(_BIAS_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(entry, f)
+            json.dump(cache, f)
     except OSError:
         # Best-effort cache write; failure just means we recompute next time.
         pass

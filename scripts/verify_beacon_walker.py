@@ -236,6 +236,92 @@ def _check_bias_cache_invalidation(failures, tmpdir):
         )
 
 
+def _check_format_beacon_bad_eta_seconds(failures):
+    """A string eta_seconds (malformed transcript data) must degrade
+    gracefully, not raise. _apply_beacon already float()-coerces the same
+    field defensively; format_beacon must match."""
+    original_walker = _beacon_mod._walker_subcommand
+    original_anchors = _beacon_mod._find_beacon_anchors
+    try:
+        _beacon_mod._walker_subcommand = lambda *args, **kw: {
+            "beacon": {
+                "kind": "report",
+                "eta_seconds": "not-a-number",
+                "summary": "working",
+            },
+            "age_seconds": 10,
+        }
+        _beacon_mod._find_beacon_anchors = lambda _sid: (None, None, None)
+        try:
+            rendered, _beacon_out = format_beacon("some-session")
+        except TypeError as exc:
+            failures.append(f"format_beacon must not raise on bad eta_seconds: {exc}")
+            return
+        if rendered is None:
+            failures.append("format_beacon with bad eta_seconds must still render")
+        elif "~1m" not in _strip(rendered):
+            failures.append(
+                f"format_beacon with bad eta_seconds should degrade to ~1m, "
+                f"got {rendered!r}"
+            )
+    finally:
+        _beacon_mod._walker_subcommand = original_walker
+        _beacon_mod._find_beacon_anchors = original_anchors
+
+
+def _check_bias_cache_alternating_periods(failures, tmpdir):
+    """Two periods interleaved within TTL must each stay cached, not thrash.
+
+    Before the cache was keyed by period, a fresh entry for period B would
+    overwrite period A's fresh entry outright (a single-entry cache file), so
+    alternating calls (A, B, A, B, ...) recomputed on every single call even
+    though each period's own entry was still well within TTL.
+    """
+    cache_path = os.path.join(tmpdir, "bias-cache-alternating.json")
+    _beacon_mod._BIAS_CACHE_PATH = cache_path
+
+    calls = []
+
+    def fake_walker(*_args, **kw):
+        calls.append(kw.get("timeout"))
+        period = _args[2] if len(_args) > 2 else None
+        return {"n_pairs": 30, "bias_factor": 1.0 if period == "604800" else 2.0}
+
+    _beacon_mod._walker_subcommand = fake_walker
+
+    period_a, period_b = 604800, 300
+    n_a1, bias_a1 = _beacon_mod._bias_factor_cached(period_a)
+    n_b1, bias_b1 = _beacon_mod._bias_factor_cached(period_b)
+    if len(calls) != 2:
+        failures.append(
+            f"alternating periods: both first calls should walk; got {len(calls)} calls"
+        )
+    # Re-querying period A right after B must hit A's own cached entry, not
+    # recompute just because B's entry is now the most recent write.
+    n_a2, bias_a2 = _beacon_mod._bias_factor_cached(period_a)
+    if len(calls) != 2:
+        failures.append(
+            f"alternating periods: re-querying period A must be a cache hit "
+            f"(no new walker call); got {len(calls)} total calls"
+        )
+    if (n_a2, bias_a2) != (n_a1, bias_a1):
+        failures.append(
+            f"alternating periods: period A's cached value must be stable; "
+            f"got ({n_a1!r},{bias_a1!r}) then ({n_a2!r},{bias_a2!r})"
+        )
+    n_b2, bias_b2 = _beacon_mod._bias_factor_cached(period_b)
+    if len(calls) != 2:
+        failures.append(
+            f"alternating periods: re-querying period B must also be a cache "
+            f"hit; got {len(calls)} total calls"
+        )
+    if (n_b2, bias_b2) != (n_b1, bias_b1):
+        failures.append(
+            f"alternating periods: period B's cached value must be stable; "
+            f"got ({n_b1!r},{bias_b1!r}) then ({n_b2!r},{bias_b2!r})"
+        )
+
+
 def _check_bias_factor_cached(failures):
     original_walker = _beacon_mod._walker_subcommand
     original_cache_path = _beacon_mod._BIAS_CACHE_PATH
@@ -243,6 +329,7 @@ def _check_bias_factor_cached(failures):
         try:
             _check_bias_cache_read(failures, tmpdir)
             _check_bias_cache_invalidation(failures, tmpdir)
+            _check_bias_cache_alternating_periods(failures, tmpdir)
         finally:
             _beacon_mod._walker_subcommand = original_walker
             _beacon_mod._BIAS_CACHE_PATH = original_cache_path
@@ -296,6 +383,7 @@ def _check_format_calibrated_eta(failures):
 def main():
     failures = []
     _check_format_beacon(failures)
+    _check_format_beacon_bad_eta_seconds(failures)
     _check_bias_factor_cached(failures)
     _check_format_calibrated_eta(failures)
     if failures:

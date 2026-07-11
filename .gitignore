@@ -21,3 +21,7 @@ node_modules/
 
 # pytest cache (no pytest suite; stray runs still drop it)
 .pytest_cache/
+
+# aislop tool state (scan artifacts); config.yml stays tracked
+.aislop/*
+!.aislop/config.yml

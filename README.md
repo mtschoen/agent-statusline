@@ -402,6 +402,74 @@ cache/TTL/cost/burn-rate, transcript walker, teammate summary, and calibrated
 progress-beacon rows cannot be carried over. Re-run `/statusline` inside Codex
 to interactively adjust the installed field order.
 
+### Antigravity CLI
+
+Antigravity CLI runs the same `statusline.py` Claude Code does (install with
+`--platform antigravity`) - it's a command-backed statusline like Claude's, not
+a native footer or TypeScript extension. Its stdin payload shares the
+Claude-common shape (`context_window`, `model`, `workspace`, ...) but swaps
+`rate_limits`/`cost` for its own `quota` block and adds a few fields Claude's
+payload doesn't carry, all handled in `statusline_lib/agy.py`:
+
+- **Quota** - agy's `quota` block holds four windows: `gemini-5h`/`gemini-weekly`
+  (the Gemini model quota) and `3p-5h`/`3p-weekly` (third-party-provider quota),
+  each `{remaining_fraction, reset_time, reset_in_seconds}`. These map onto the
+  same `5h: P% +Hh wk: P% +Hh` render Claude's `rate_limits` produces
+  (`used_percentage = (1 - remaining_fraction) * 100`, `resets_at` from
+  `reset_time`). The **gemini-\* pair is primary** for a Gemini-model session,
+  but the **3p-\* pair is shown instead** when it is more utilized somewhere in
+  its pair - surfacing whichever provider is actually closer to its cap beats
+  always defaulting to gemini. Both windows use the same **payload-only**
+  extrapolation the `5h:` window uses everywhere (`util / elapsed-so-far`
+  projected to the window length) - agy's `wk:` window does NOT get Claude's
+  trailing-24h current-rate forecast (see below for why).
+- **Model badge** - Gemini ids (`"Gemini 3.5 Flash (High)"`) get their own
+  family entry: `flash` (bright yellow) and `pro` (bright magenta) are colored
+  distinctly, matching the per-family palette the Claude/Qwen badges use. The
+  parenthesized reasoning tier (`(High)`) renders as a separate, compact mauve
+  tag after the badge rather than being folded into the model name.
+- **Agent state** - a small muted `[● working]` / `[○ idle]` tag on line 1
+  from agy's `agent_state` field. Absent (and thus a no-op) on every other
+  harness, which carries no such field.
+- **Terminal width** - agy carries `terminal_width` in the payload instead of
+  setting a `$COLUMNS` env var. It's used as the compact-mode width fallback
+  only when `$COLUMNS` is unset; `$COLUMNS` always wins when both are present.
+- **Cache (reduced)** - a per-**turn** `reads / writes / hit%` field from
+  `context_window.current_usage`, with no `$` figures (agy has no per-Mtok
+  rate to price tokens at). This is a fallback: it only renders when the
+  transcript walk (below) finds nothing, which for agy is always.
+
+**Why the rest can't exist.** Antigravity's brain transcripts
+(`~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`)
+carry **zero usage or cost data** - verified empirically by inspecting a real
+transcript file, not inferred. Every Claude-specific feature built on walking
+those files is therefore structurally impossible for agy, not just
+unimplemented:
+
+- **Session-cumulative cache** (the Claude/Qwen `reads ($R) / writes ($W) /
+  hit%` column, summed across the whole session + subagent transcripts) - the
+  walk that builds it finds nothing, hence the reduced per-turn fallback above.
+- **TTL eviction detection** (`⚠ TTL:N (~$X.XX)`) - eviction detection reads
+  consecutive turns' cache read/write pairs from the transcript; there are no
+  turns to read.
+- **Weekly trailing-rate forecast** - Claude's `wk:` window blends a
+  cumulative-pace number with a trailing-24h current-rate forecast calibrated
+  from an hourly walk of local transcripts (`pace._pace_hourly_cached`). agy's
+  quota render uses the plain payload-only extrapolation for both windows
+  instead (see Quota above).
+- **Cost, subagent cost split, burn rate ($/min), daily budget** - all derived
+  from either `cost.total_cost_usd` (a field agy's payload doesn't carry) or
+  the transcript walk's per-turn cost accumulation (no turns to accumulate).
+- **Progress-beacon calibration** - the bias factor is derived from historical
+  `(begin, end)` beacon pairs in local transcripts; with no transcript data to
+  scan, no calibration is possible (a live beacon can still render if the
+  agent emits `<progress-beacon>` blocks - only the calibration multiplier is
+  unavailable).
+
+None of this is a gap that transcript-walker changes on our side could close -
+it would require Antigravity itself to start writing usage/cost data into its
+transcript logs.
+
 ### Pi extension
 
 Pi does not run command-style `statusLine` scripts. Instead, it loads a

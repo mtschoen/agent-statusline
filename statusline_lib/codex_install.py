@@ -3,24 +3,45 @@
 Codex owns its TUI footer and accepts an ordered list of built-in item IDs; it
 does not invoke an external command with a JSON payload.  These helpers install
 the closest native equivalent while preserving unrelated config text.
+
+The merge is regex-based text surgery, not a real TOML writer -- it never
+builds an AST, so it cannot express structural edits a hand-rolled parser
+could (e.g. reformatting an existing status_line array in place rather than
+replacing it wholesale). It IS a real bracket/quote/comment scanner
+(`_array_value_end`), correctly handling TOML's basic vs literal string
+quoting rules (only double-quoted strings support backslash escapes;
+single-quoted literal strings do not) and nested arrays -- verified against
+multi-line arrays, inline comments, CRLF, and adversarial cases like
+triple-quoted strings. Its actual safety net is `merge_codex_config`
+re-parsing the merged text through `tomllib` and checking the installed
+`status_line` matches `CODEX_STATUS_LINE_ITEMS` exactly before returning: a
+scanner miscount fails loudly with `ValueError` rather than silently
+corrupting the user's config.
 """
 
 import re
 import tomllib
 
 CODEX_STATUS_LINE_ITEMS = (
+    # Order mirrors this project's own line-2 rendering philosophy
+    # (statusline.py _render_line2): model, then directory/git, then context
+    # usage, then tokens, then rate limits, with session/mode metadata last.
+    # Ids confirmed against openai/codex codex-rs/tui/src/bottom_pane/
+    # status_line_setup.rs (StatusLineItem enum), 2026-07-11.
     "run-state",
-    "current-dir",
-    "git-branch",
-    "pull-request-number",
     "model-with-reasoning",
+    "current-dir",
+    "project-name",
+    "git-branch",
+    "branch-changes",
+    "pull-request-number",
     "context-used",
-    "five-hour-limit",
-    "weekly-limit",
+    "context-window-size",
     "used-tokens",
     "total-input-tokens",
     "total-output-tokens",
-    "branch-changes",
+    "five-hour-limit",
+    "weekly-limit",
     "permissions",
     "approval-mode",
     "fast-mode",

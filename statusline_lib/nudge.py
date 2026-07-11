@@ -63,7 +63,7 @@ def _state_dir(state_dir=None):
 def _sanitize(session_id):
     """Keep session ids filename-safe. They are UUID-ish in practice, but a path
     component should never be built from unsanitized input."""
-    return "".join(c for c in (session_id or "") if c.isalnum() or c in "-_")
+    return "".join(c for c in str(session_id or "") if c.isalnum() or c in "-_")
 
 
 def ctx_state_path(session_id, state_dir=None):

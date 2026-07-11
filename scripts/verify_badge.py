@@ -396,6 +396,16 @@ def _check_format_model_badge_unknown_bare_question_mark(failures):
         )
 
 
+def _check_format_model_badge_non_string_display_name(failures):
+    # A harness (e.g. Antigravity) sending a non-string display_name must not
+    # crash the ".strip()" fallback -- coerce to str first.
+    badge = format_model_badge("some-unknown-model", 42)
+    if "42" not in badge:
+        failures.append(
+            f"format_model_badge: non-string display_name should coerce to str, got {badge!r}"
+        )
+
+
 def main():
     failures = []
 
@@ -421,6 +431,7 @@ def main():
     _check_format_model_badge_unknown_with_display_name(failures)
     _check_format_model_badge_unknown_strips_claude_prefix(failures)
     _check_format_model_badge_unknown_bare_question_mark(failures)
+    _check_format_model_badge_non_string_display_name(failures)
 
     if failures:
         for failure in failures:

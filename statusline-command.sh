@@ -14,4 +14,4 @@ elif command -v python3 >/dev/null 2>&1; then
 else
   PY=python
 fi
-exec $PY "$(dirname "$0")/statusline.py"
+exec $PY "$(dirname "$0")/statusline.py" "$@"

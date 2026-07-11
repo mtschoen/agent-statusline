@@ -73,6 +73,7 @@ def _find_session_jsonl(session_id):
     """Locate the JSONL transcript for `session_id` across project dirs."""
     if not session_id:
         return None
+    session_id = str(session_id)
     home = os.path.expanduser("~")
     # For Antigravity CLI:
     antigravity_path = os.path.join(
@@ -232,6 +233,7 @@ def format_beacon(session_id):
     """
     if not session_id:
         return (None, None)
+    session_id = str(session_id)
     data = _walker_subcommand("beacons-latest", "--session-id", session_id)
     if not data:
         return (None, None)

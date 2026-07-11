@@ -101,6 +101,10 @@ def _check_find_session_jsonl(failures):
         failures.append("_find_session_jsonl(None) must return None")
     if _beacon_mod._find_session_jsonl("nonexistent-session-xyz-12345") is not None:
         failures.append("_find_session_jsonl(nonexistent) must return None")
+    # A harness sending a non-string session id (e.g. int) must not crash
+    # os.path.join -- coerce to str before building either candidate path.
+    if _beacon_mod._find_session_jsonl(987654321) is not None:
+        failures.append("_find_session_jsonl(non-string, nonexistent) must return None")
     home = os.path.expanduser("~")
     test_dir = os.path.join(home, ".claude", "projects", "_beacon_test_proj_")
     test_sid = "beacon-test-session-findme-0001"

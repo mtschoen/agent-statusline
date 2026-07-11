@@ -29,7 +29,7 @@ IDLE_THRESHOLD_SECONDS = 30
 
 def _team_name_for_session(session_id):
     """Team dirs are named `session-<first 8 hex chars>` (agent-teams doc)."""
-    sid = (session_id or "").strip()
+    sid = str(session_id or "").strip()
     if not sid:
         return ""
     return f"session-{sid[:8]}"

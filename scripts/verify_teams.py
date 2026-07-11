@@ -58,6 +58,10 @@ def _check_team_name_derivation(failures):
         failures.append("empty session id should yield no team name")
     if _team_name_for_session(None) != "":
         failures.append("None session id should yield no team name")
+    # A harness sending a non-string session id (e.g. int) must not crash the
+    # ".strip()" call -- coerce to str first.
+    if _team_name_for_session(12345678) != "session-12345678":
+        failures.append("non-string session id should coerce to str, not crash")
 
 
 def _check_no_config(failures):

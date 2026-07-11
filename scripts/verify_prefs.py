@@ -178,6 +178,52 @@ def _check_app_dir(failures):
         os.environ.update(original_environ)
 
 
+def _check_app_dir_argv_override(failures):
+    # install.py injects `--statusline-platform antigravity` into the
+    # configured command string so routing is deterministic regardless of
+    # whether the host CLI happens to set ANTIGRAVITY_AGENT /
+    # ANTIGRAVITY_CONVERSATION_ID for the subprocess (Antigravity CLI does
+    # not, which was the root cause of the statusline writing all its state
+    # to ~/.claude instead of ~/.gemini/antigravity-cli).
+    from statusline_lib.base import app_dir
+
+    original_environ = os.environ.copy()
+    original_argv = sys.argv[:]
+    try:
+        os.environ.clear()
+
+        # 1. Space-separated form, no env set.
+        sys.argv = ["statusline.py", "--statusline-platform", "antigravity"]
+        res = app_dir()
+        if not res.endswith(os.path.join(".gemini", "antigravity-cli")):
+            failures.append(f"app_dir with argv platform=antigravity failed: {res}")
+
+        # 2. `=`-joined form.
+        sys.argv = ["statusline.py", "--statusline-platform=antigravity"]
+        res = app_dir()
+        if not res.endswith(os.path.join(".gemini", "antigravity-cli")):
+            failures.append(
+                f"app_dir with argv platform=antigravity (=form) failed: {res}"
+            )
+
+        # 3. No matching flag -> unaffected.
+        sys.argv = ["statusline.py"]
+        res = app_dir()
+        if not res.endswith(".claude"):
+            failures.append(f"app_dir with no matching argv flag failed: {res}")
+
+        # 4. STATUSLINE_PLATFORM env still wins over argv when both are set.
+        sys.argv = ["statusline.py", "--statusline-platform", "antigravity"]
+        os.environ["STATUSLINE_PLATFORM"] = "claude"
+        res = app_dir()
+        if not res.endswith(".claude"):
+            failures.append(f"env should take precedence over argv; got {res}")
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        sys.argv = original_argv
+
+
 def _check_app_dir_antigravity_agent_fallback(failures):
     # ANTIGRAVITY_AGENT / ANTIGRAVITY_CONVERSATION_ID auto-detect: used when
     # STATUSLINE_PLATFORM is unset (the CLI didn't set it explicitly), so
@@ -233,6 +279,7 @@ def check(failures):
     _check_pref_bool(failures)
     _check_broken_file_is_empty(failures)
     _check_app_dir(failures)
+    _check_app_dir_argv_override(failures)
     _check_app_dir_antigravity_agent_fallback(failures)
 
 

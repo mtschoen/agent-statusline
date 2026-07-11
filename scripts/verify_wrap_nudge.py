@@ -66,6 +66,19 @@ def check_roundtrip(failures):
             failures.append("empty session id should not produce readable state")
 
 
+def check_non_string_session_id(failures):
+    # A harness sending a non-string session id (e.g. int) must not crash
+    # _sanitize's char-filter iteration -- coerce to str first. Caught live
+    # via fuzzing statusline.py with {"session_id": 987654}: write_ctx_state
+    # -> ctx_state_path -> _sanitize raised "TypeError: 'int' object is not
+    # iterable" *before* write_ctx_state's own try/except OSError guard, so
+    # it wasn't swallowed like the other best-effort state-write failures.
+    with tempfile.TemporaryDirectory() as tmp:
+        write_ctx_state(987654, 234_567, 1_000_000, now=1000.0, state_dir=tmp)
+        if read_ctx_used(987654, state_dir=tmp) != 234_567:
+            failures.append("non-string session id should coerce to str, not crash")
+
+
 def check_corrupt(failures):
     with tempfile.TemporaryDirectory() as tmp:
         path = ctx_state_path(SID, state_dir=tmp)
@@ -176,6 +189,7 @@ def main():
         check_threshold,
         check_one_shot,
         check_roundtrip,
+        check_non_string_session_id,
         check_corrupt,
         check_concurrent_keying,
         check_hook_subprocess,

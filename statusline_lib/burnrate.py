@@ -68,8 +68,11 @@ def _spend_from_path(path, seen_ids, win_start):
                 if model_id:
                     last_model = model_id
                 total += _cost_for_turn(usage, model_id or last_model)
-    except OSError:
-        # Unreadable transcript files are skipped; partial spend is still useful.
+    except (OSError, MemoryError):
+        # Unreadable or pathological (e.g. a single line too large to buffer)
+        # transcript files are skipped; partial spend is still useful. This
+        # walk crosses every session under every walker root, so one bad file
+        # must not cost the whole burn-rate figure.
         pass
     return total
 

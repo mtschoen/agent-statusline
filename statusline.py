@@ -203,7 +203,7 @@ def _append_session_id(line1, session_id):
     """Append a short session-id hash in brackets after the path/branch.
     Unconditional - it is tiny and useful for matching a statusline to a
     transcript file, so unlike the session title it is not width-gated."""
-    sid = (session_id or "").strip()
+    sid = str(session_id or "").strip()
     if not sid:
         return line1
     return f"{line1} {_SESSION_ID_COLOR}[{sid[:_SESSION_ID_LEN]}]{RESET}"
@@ -216,7 +216,7 @@ def _append_session_name(line1, session_name):
     first thing to yield - it is a nicety, never worth pushing the path off
     screen - so on a known-too-narrow terminal it is dropped entirely. Long
     titles are clipped to keep line 1 bounded even when width is unknown."""
-    name = (session_name or "").strip()
+    name = str(session_name or "").strip()
     if not name:
         return line1
     if len(name) > _SESSION_NAME_MAX:

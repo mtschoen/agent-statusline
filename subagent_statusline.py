@@ -161,7 +161,11 @@ def _is_terminal(status):
 def _format_elapsed(start_time_ms, status):
     if _is_terminal(status):
         return ""
-    if not start_time_ms or start_time_ms <= 0:
+    try:
+        start_time_ms = float(start_time_ms or 0)
+    except (TypeError, ValueError):
+        return ""
+    if start_time_ms <= 0:
         return ""
     seconds = max(0, int(time.time() * 1000 - start_time_ms) // 1000)
     if seconds < 60:

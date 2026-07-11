@@ -8,6 +8,7 @@ adaptive weekly target) lives in its sibling verify_target_rate.py.
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
 
+import builtins
 import contextlib
 import json
 import os
@@ -245,6 +246,30 @@ def _check_spend_from_path_oserror(failures):
         )
 
 
+def _check_spend_from_path_memory_error(failures):
+    # burnrate.py line ~63: a pathological transcript (huge single line, no
+    # newline) can exhaust memory mid-iteration. That must degrade like an
+    # unreadable file (skip, return 0.0) rather than taking the whole render
+    # down -- the walk crosses every session under every walker root, so one
+    # bad file must not cost the other sessions their spend total.
+    real_open = builtins.open
+
+    def _raising_open(path, *args, **kwargs):
+        if path == "poison.jsonl":
+            raise MemoryError("simulated: line too large to buffer")
+        return real_open(path, *args, **kwargs)
+
+    builtins.open = _raising_open
+    try:
+        result = burnrate._spend_from_path("poison.jsonl", set(), 0)
+    finally:
+        builtins.open = real_open
+    if result != 0.0:
+        failures.append(
+            f"_spend_from_path on a MemoryError-raising file should return 0.0; got {result!r}"
+        )
+
+
 def _check_sum_window_spend_fixture(failures):
     """Cover the real walk-and-sum path: a fixture root with one parsable
     assistant turn plus a junk line sums to that turn's cost. CI runners have
@@ -354,6 +379,7 @@ def check(failures):
     _check_rate_number_colored_in_field(failures)
     _check_glyph_text_presentation(failures)
     _check_spend_from_path_oserror(failures)
+    _check_spend_from_path_memory_error(failures)
     _check_sum_window_spend_fixture(failures)
     _check_sum_window_spend_no_roots(failures)
     _check_window_spend_cache_write_oserror(failures)

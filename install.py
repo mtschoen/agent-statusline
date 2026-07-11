@@ -113,11 +113,17 @@ def _commands_for_platform(repo, platform="claude"):
         main_target = f"{repo}/statusline.py"
         subagent_target = f"{repo}/subagent_statusline.py"
         if platform == "antigravity":
+            # Antigravity CLI doesn't set ANTIGRAVITY_AGENT / ANTIGRAVITY_
+            # CONVERSATION_ID for the statusline subprocess, so app_dir()'s
+            # env-based auto-detect never fires and everything (state, error
+            # log, payload log) silently lands in ~/.claude instead of
+            # ~/.gemini/antigravity-cli. Make routing deterministic by
+            # putting the platform in the command string itself.
             return (
                 main_target,
                 subagent_target,
-                f"py -3 {main_target}",
-                f"py -3 {subagent_target}",
+                f"py -3 {main_target} --statusline-platform antigravity",
+                f"py -3 {subagent_target} --statusline-platform antigravity",
             )
         return (
             main_target,
@@ -127,6 +133,13 @@ def _commands_for_platform(repo, platform="claude"):
         )
     main_target = f"{repo}/statusline-command.sh"
     subagent_target = f"{repo}/subagent-statusline.sh"
+    if platform == "antigravity":
+        return (
+            main_target,
+            subagent_target,
+            f'bash "{main_target}" --statusline-platform antigravity',
+            f'bash "{subagent_target}" --statusline-platform antigravity',
+        )
     return (
         main_target,
         subagent_target,

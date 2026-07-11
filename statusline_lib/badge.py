@@ -185,5 +185,5 @@ def format_model_badge(model_id, display_name=""):
                     return f"{color}{label}{version}{size_part}{RESET}"
                 version = _version_for(mid, key)
                 return f"{color}{label}{version}{suffix}{RESET}"
-    fallback = display_name.strip() or _re.sub(r"^claude-", "", model_id)
+    fallback = str(display_name or "").strip() or _re.sub(r"^claude-", "", model_id)
     return f"{CTX_DENOM}{fallback or '?'}{RESET}"

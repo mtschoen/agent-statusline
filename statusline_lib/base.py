@@ -5,6 +5,7 @@ No imports from sibling modules — keeps the dependency order clean.
 
 import json
 import os
+import sys
 
 # orjson: optional, ~3-5x faster per-line parse; stdlib json fallback.
 try:
@@ -92,13 +93,31 @@ def ramp_color_for(value, warn, danger):
     return ramp_color((value - warn) / (danger - warn))
 
 
+def _platform_from_argv():
+    """Return the `--statusline-platform <value>` (or `=`-joined) argv value,
+    or None. install.py injects this into the configured command string for
+    Antigravity CLI so platform routing is deterministic regardless of
+    whether the host CLI sets ANTIGRAVITY_AGENT / ANTIGRAVITY_CONVERSATION_ID
+    for the statusline subprocess -- it does not, which was the root cause of
+    Antigravity's statusline state/logs landing in ~/.claude instead of
+    ~/.gemini/antigravity-cli."""
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--statusline-platform" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--statusline-platform="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def app_dir():
     """Return the absolute path to the app's configuration/data directory.
     Defaults to ~/.claude, but switches to ~/.gemini/antigravity-cli
     if running under Antigravity CLI."""
-    if os.environ.get("STATUSLINE_PLATFORM") == "antigravity":
+    platform = os.environ.get("STATUSLINE_PLATFORM") or _platform_from_argv()
+    if platform == "antigravity":
         return os.path.join(os.path.expanduser("~"), ".gemini", "antigravity-cli")
-    if os.environ.get("STATUSLINE_PLATFORM") == "claude":
+    if platform == "claude":
         return os.path.join(os.path.expanduser("~"), ".claude")
 
     if os.environ.get("ANTIGRAVITY_AGENT") == "1" or os.environ.get(

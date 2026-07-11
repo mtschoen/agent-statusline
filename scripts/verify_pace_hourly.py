@@ -151,6 +151,36 @@ def _check_parse_pace_line_edge_cases(failures):
         failures.append(f"no-id assistant line should return tuple, got {result3!r}")
 
 
+def _check_parse_pace_line_truncated_id_not_poisoned(failures):
+    """A truncated line (same id, no/bad timestamp) must not mark the id as
+    seen -- otherwise the later complete line with that id is wrongly dropped
+    as a duplicate, silently undercounting spend."""
+    win_start = 1_700_000_000.0
+    seen = set()
+
+    truncated = json.dumps({"message": {"role": "assistant", "id": "trunc1"}})
+    result_truncated = pace._parse_pace_line(truncated.encode(), seen, win_start)
+    if result_truncated is not None:
+        failures.append(
+            f"truncated line (no timestamp) should return None, got {result_truncated!r}"
+        )
+
+    good_ts = (
+        datetime.fromtimestamp(win_start + 60, tz=UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    complete = json.dumps(
+        {"message": {"role": "assistant", "id": "trunc1"}, "timestamp": good_ts}
+    )
+    result_complete = pace._parse_pace_line(complete.encode(), seen, win_start)
+    if result_complete is None:
+        failures.append(
+            "complete line following a truncated same-id line must not be "
+            "dropped as a duplicate (id poisoned by the truncated line)"
+        )
+
+
 def _check_pace_hourly_for_file_oserror(failures):
     """Cover the OSError return in _pace_hourly_for_file (lines 117-118)."""
     result = pace._pace_hourly_for_file(
@@ -347,6 +377,7 @@ def _check_walk_hourly_parallel_worker_failure(failures):
 def check(failures):
     _check_hourly_binning(failures)
     _check_parse_pace_line_edge_cases(failures)
+    _check_parse_pace_line_truncated_id_not_poisoned(failures)
     _check_pace_hourly_for_file_oserror(failures)
     _check_walk_pace_hourly_empty_roots(failures)
     _check_walk_pace_hourly_empty_groups(failures)

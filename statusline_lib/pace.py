@@ -51,10 +51,8 @@ def _parse_pace_line(line, seen_ids, earliest):
     if msg.get("role") != "assistant":
         return None
     mid = msg.get("id")
-    if mid:
-        if mid in seen_ids:
-            return None
-        seen_ids.add(mid)
+    if mid and mid in seen_ids:
+        return None
     ts_str = e.get("timestamp")
     if not ts_str:
         return None
@@ -64,6 +62,11 @@ def _parse_pace_line(line, seen_ids, earliest):
         return None
     if ts < earliest:
         return None
+    # Only mark the id as seen once the line fully validates -- a truncated
+    # line (e.g. missing timestamp) must not poison the id, or the later
+    # complete copy of the same message gets dropped as a false duplicate.
+    if mid:
+        seen_ids.add(mid)
     return ts, (msg.get("usage") or {}), (msg.get("model") or "")
 
 

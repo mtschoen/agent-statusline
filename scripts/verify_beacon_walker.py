@@ -236,6 +236,78 @@ def _check_bias_cache_invalidation(failures, tmpdir):
         )
 
 
+def _check_bias_cache_valid_key_ttl_expiry(failures, tmpdir):
+    """A VALIDLY-KEYED entry (new per-period cache shape) whose TTL has
+    expired must still trigger a recompute, and a validly-keyed fresh entry
+    must NOT.
+
+    _check_bias_cache_invalidation's "stale cache" case seeds a flat,
+    LEGACY-shaped file (no period key at all) -- under the new per-period
+    format that's a key-miss (cache.get(key) is None), which also forces a
+    recompute but never exercises the `age < ttl` comparison on an entry
+    that actually matched its key. This closes that gap directly.
+    """
+    cache_path = os.path.join(tmpdir, "bias-cache-valid-key-ttl.json")
+    _beacon_mod._BIAS_CACHE_PATH = cache_path
+    period = 604800
+    key = str(period)
+
+    calls = []
+    _beacon_mod._walker_subcommand = lambda *_a, **_kw: (
+        calls.append(1) or {"n_pairs": 50, "bias_factor": 3.0}
+    )
+
+    # Expired: computed_at_unix is older than the (non-failure) TTL.
+    expired = {
+        key: {
+            "computed_at_unix": datetime.now(UTC).timestamp()
+            - _beacon_mod._BIAS_CACHE_TTL_SECONDS
+            - 1,
+            "period_seconds": period,
+            "n_pairs": 5,
+            "bias_factor": 0.5,
+        }
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(expired, f)
+    n, bias = _beacon_mod._bias_factor_cached(period)
+    if len(calls) != 1:
+        failures.append(
+            f"expired validly-keyed entry must recompute (1 walker call); "
+            f"got {len(calls)} calls"
+        )
+    if (n, bias) != (50, 3.0):
+        failures.append(
+            f"expired validly-keyed entry must return the fresh walk result; "
+            f"got ({n!r},{bias!r})"
+        )
+
+    # Fresh: computed_at_unix is well within TTL -- must be a cache hit, no
+    # new walker call, and must return the OLD (still-cached) values.
+    fresh = {
+        key: {
+            "computed_at_unix": datetime.now(UTC).timestamp() - 1,
+            "period_seconds": period,
+            "n_pairs": 8,
+            "bias_factor": 0.8,
+        }
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(fresh, f)
+    calls.clear()
+    n2, bias2 = _beacon_mod._bias_factor_cached(period)
+    if len(calls) != 0:
+        failures.append(
+            f"fresh validly-keyed entry must be a cache hit (0 walker calls); "
+            f"got {len(calls)} calls"
+        )
+    if (n2, bias2) != (8, 0.8):
+        failures.append(
+            f"fresh validly-keyed entry must return the cached values; "
+            f"got ({n2!r},{bias2!r})"
+        )
+
+
 def _check_format_beacon_bad_eta_seconds(failures):
     """A string eta_seconds (malformed transcript data) must degrade
     gracefully, not raise. _apply_beacon already float()-coerces the same
@@ -329,6 +401,7 @@ def _check_bias_factor_cached(failures):
         try:
             _check_bias_cache_read(failures, tmpdir)
             _check_bias_cache_invalidation(failures, tmpdir)
+            _check_bias_cache_valid_key_ttl_expiry(failures, tmpdir)
             _check_bias_cache_alternating_periods(failures, tmpdir)
         finally:
             _beacon_mod._walker_subcommand = original_walker

@@ -46,9 +46,8 @@ Package layout (dependency order, no cycles):
 
 from .agy import (
     _AGENT_STATE_GLYPHS,
-    _AGY_QUOTA_PAIRS,
-    _agy_pair_worst_utilization,
-    _agy_primary_pair,
+    _AGY_QUOTA_HORIZONS,
+    _agy_most_constrained_window,
     _agy_window_metrics,
     format_agent_state,
     format_agy_cache,

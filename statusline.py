@@ -300,6 +300,11 @@ class _Line2(NamedTuple):
     # brain transcripts carry no usage data at all, so this is always the
     # case there).
     current_usage: dict | None = None
+    # True only when the payload self-identifies as Antigravity CLI
+    # (`product == "antigravity"`). Gates the per-turn cache fallback below --
+    # see _render_line2 for why this must be an explicit identity check, not
+    # "the transcript walk found nothing".
+    is_agy: bool = False
 
 
 def _render_line2(flags, inputs):
@@ -333,12 +338,25 @@ def _render_line2(flags, inputs):
         show_input=flags["cache_input"] and money,
         show_output=flags["cache_output"] and money,
     )
-    if not cache_summary:
-        # Nothing from the transcript walk -- always true for Antigravity CLI
-        # (its brain transcripts carry no usage data), occasionally true for a
-        # brand-new session elsewhere. Fall back to the payload's own
-        # per-turn current_usage; format_agy_cache degrades to "" itself when
-        # that has no cache activity either.
+    if not cache_summary and inputs.is_agy:
+        # The per-turn fallback is gated on an explicit identity check
+        # (`product == "antigravity"`, threaded in as inputs.is_agy), NOT on
+        # "the transcript walk found nothing". An earlier version used the
+        # latter and was a truthfulness bug: a Claude Code (or any other)
+        # payload whose walk fails for an unrelated reason (missing/renamed
+        # transcript, a start-of-session race, an OSError) would silently
+        # render this turn-only snapshot through the exact same
+        # read/write/hit% layout and colors the session-cumulative field
+        # uses -- indistinguishable in form from the real thing, worse than
+        # the pre-fallback "" (an honest "no data" signal). Scoping to agy
+        # payloads specifically means a broken walk on any other harness goes
+        # back to rendering nothing, which is the honest degrade. `product`
+        # was chosen over "the quota block is present" as the gate signal
+        # because it's agy's explicit self-identification, not a payload-shape
+        # proxy that could coincidentally match some other harness's fields.
+        # format_agy_cache also prefixes its own muted "turn" marker as a
+        # second, independent safeguard -- even here, the two meanings can
+        # never be visually confused.
         cache_summary = format_agy_cache(
             inputs.current_usage, show_hit=flags["cache_hit"]
         )
@@ -441,6 +459,7 @@ def main():
     # (see compact.py). Threaded through both line 1's title fit-check and
     # line 2's compact-mode resolution.
     terminal_width_hint = d.get("terminal_width")
+    is_agy = d.get("product") == "antigravity"
 
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
     line1 = _line1(d, cwd, cwd_display, spinner, terminal_width_hint)
@@ -460,6 +479,7 @@ def main():
         lines_summary,
         agy_quota=d.get("quota"),
         current_usage=cu,
+        is_agy=is_agy,
     )
     flags = resolve_flags(lambda f: _render_line2(f, line2_inputs), terminal_width_hint)
     line2 = _render_line2(flags, line2_inputs)

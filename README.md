@@ -416,10 +416,15 @@ payload doesn't carry, all handled in `statusline_lib/agy.py`:
   each `{remaining_fraction, reset_time, reset_in_seconds}`. These map onto the
   same `5h: P% +Hh wk: P% +Hh` render Claude's `rate_limits` produces
   (`used_percentage = (1 - remaining_fraction) * 100`, `resets_at` from
-  `reset_time`). The **gemini-\* pair is primary** for a Gemini-model session,
-  but the **3p-\* pair is shown instead** when it is more utilized somewhere in
-  its pair - surfacing whichever provider is actually closer to its cap beats
-  always defaulting to gemini. Both windows use the same **payload-only**
+  `reset_time`). Selection is **per horizon, independently**: the `5h:` slot
+  shows whichever of `gemini-5h`/`3p-5h` is more utilized, and the `wk:` slot
+  shows whichever of `gemini-weekly`/`3p-weekly` is more utilized - the two
+  slots can legitimately come from different providers. (An earlier design
+  picked one whole provider by its worst-of-two window and rendered both of
+  that provider's windows, which could hide the single most-utilized window
+  entirely when it was paired with a low-utilization sibling from the same
+  provider - comparing window-to-window per horizon means the hottest number
+  in each slot can never be hidden.) Both windows use the same **payload-only**
   extrapolation the `5h:` window uses everywhere (`util / elapsed-so-far`
   projected to the window length) - agy's `wk:` window does NOT get Claude's
   trailing-24h current-rate forecast (see below for why).
@@ -434,10 +439,20 @@ payload doesn't carry, all handled in `statusline_lib/agy.py`:
 - **Terminal width** - agy carries `terminal_width` in the payload instead of
   setting a `$COLUMNS` env var. It's used as the compact-mode width fallback
   only when `$COLUMNS` is unset; `$COLUMNS` always wins when both are present.
-- **Cache (reduced)** - a per-**turn** `reads / writes / hit%` field from
-  `context_window.current_usage`, with no `$` figures (agy has no per-Mtok
-  rate to price tokens at). This is a fallback: it only renders when the
-  transcript walk (below) finds nothing, which for agy is always.
+- **Cache (reduced)** - a muted `turn` label followed by a per-**turn**
+  `reads / writes / hit%` field from `context_window.current_usage`, with no
+  `$` figures (agy has no per-Mtok rate to price tokens at). This is a
+  fallback for the session-cumulative field below, gated specifically on the
+  payload self-identifying as Antigravity (`product == "antigravity"`) - it
+  does **not** fire generically whenever the transcript walk finds nothing.
+  An earlier version used the latter trigger and was a truthfulness bug: any
+  harness whose walk failed for an unrelated reason (missing/renamed
+  transcript, a start-of-session race) would silently render this turn-only
+  snapshot through the exact same layout and colors as the session-cumulative
+  field, indistinguishable from it in form. Two independent safeguards now
+  prevent that: the caller-side `product` gate (agy-only), and the `turn`
+  label itself, so even in the one payload shape that's allowed to reach this
+  fallback, the render can't be misread as the cumulative figure.
 
 **Why the rest can't exist.** Antigravity's brain transcripts
 (`~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`)

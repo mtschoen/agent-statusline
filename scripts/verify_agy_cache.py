@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from statusline_lib.agy import format_agy_cache
+from statusline_lib.agy import _MUTED_LABEL_COLOR, _TURN_LABEL, format_agy_cache
 from statusline_lib.base import CACHE_READ, CACHE_WRITE, RESET
 
 
@@ -48,6 +48,11 @@ def _check_renders_read_write_hit(failures):
         )
     if RESET not in out:
         failures.append("format_agy_cache: colored output must reset")
+    if not out.startswith(f"{_MUTED_LABEL_COLOR}{_TURN_LABEL}{RESET}"):
+        failures.append(
+            f"format_agy_cache: must lead with the muted 'turn' marker so it can "
+            f"never be misread as the session-cumulative cache field, got {out!r}"
+        )
 
 
 def _check_no_cache_activity_is_empty(failures):

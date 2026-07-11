@@ -1,7 +1,16 @@
 """Verify statusline_lib.agy's quota adapter: agy's `quota` payload block
 (remaining_fraction/reset_time/reset_in_seconds per window) mapped into the
 same '5h: P% +Hh wk: P% +Hh' form pace.format_quota renders for Claude's
-rate_limits, plus the gemini-vs-3p pair-selection rule.
+rate_limits, plus the per-horizon window-selection rule.
+
+Selection is per-HORIZON, not per-pair: the 5h slot independently picks the
+more-utilized of {gemini-5h, 3p-5h}, and the wk slot independently picks the
+more-utilized of {gemini-weekly, 3p-weekly}. A prior pair-vs-pair design (pick
+one whole family by its worst window, render both of that family's windows)
+could hide the single most-utilized window when it was paired with a
+low-utilization sibling from the same family -- see
+_check_format_agy_quota_never_hides_hottest_window for the reviewer's exact
+reproduction of that bug, kept as a permanent regression test.
 
 Run from anywhere; imports from schoen-claude-status by path.
 """
@@ -12,8 +21,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.pace as pace
 from statusline_lib.agy import (
-    _agy_pair_worst_utilization,
-    _agy_primary_pair,
+    _AGY_QUOTA_HORIZONS,
+    _agy_most_constrained_window,
     _agy_window_metrics,
     format_agy_quota,
 )
@@ -86,45 +95,40 @@ def _check_window_metrics_malformed(failures):
             )
 
 
-def _check_pair_worst_utilization(failures):
+def _check_horizons_shape(failures):
+    if _AGY_QUOTA_HORIZONS.get("5h") != ("gemini-5h", "3p-5h"):
+        failures.append(
+            f"_AGY_QUOTA_HORIZONS['5h'] should be ('gemini-5h', '3p-5h'), got {_AGY_QUOTA_HORIZONS.get('5h')!r}"
+        )
+    if _AGY_QUOTA_HORIZONS.get("wk") != ("gemini-weekly", "3p-weekly"):
+        failures.append(
+            f"_AGY_QUOTA_HORIZONS['wk'] should be ('gemini-weekly', '3p-weekly'), got {_AGY_QUOTA_HORIZONS.get('wk')!r}"
+        )
+
+
+def _check_most_constrained_window_picks_higher_util(failures):
     quota = {
         "gemini-5h": _window(0.9, _HOUR),  # 10% used
-        "gemini-weekly": _window(0.4, 5 * _HOUR),  # 60% used
-    }
-    worst = _agy_pair_worst_utilization(quota, ("gemini-5h", "gemini-weekly"))
-    if worst is None or abs(worst - 60.0) > 0.01:
-        failures.append(
-            f"_agy_pair_worst_utilization: should pick the higher-util window, got {worst!r}"
-        )
-    if _agy_pair_worst_utilization(quota, ("missing-a", "missing-b")) is not None:
-        failures.append("_agy_pair_worst_utilization: missing keys should yield None")
-
-
-def _check_primary_pair_defaults_gemini(failures):
-    quota = {
-        "gemini-5h": _window(0.9, _HOUR),
-        "3p-5h": _window(0.9, _HOUR),
-    }
-    if _agy_primary_pair(quota) != ("gemini-5h", "gemini-weekly"):
-        failures.append(
-            "_agy_primary_pair: equal utilization should default to gemini pair"
-        )
-
-
-def _check_primary_pair_switches_to_3p(failures):
-    quota = {
-        "gemini-5h": _window(0.95, _HOUR),  # 5% used
         "3p-5h": _window(0.2, _HOUR),  # 80% used -- more constrained
     }
-    if _agy_primary_pair(quota) != ("3p-5h", "3p-weekly"):
-        failures.append("_agy_primary_pair: strictly-more-utilized 3p pair should win")
-
-
-def _check_primary_pair_no_gemini_data(failures):
-    quota = {"3p-5h": _window(0.5, _HOUR)}
-    if _agy_primary_pair(quota) != ("3p-5h", "3p-weekly"):
+    best = _agy_most_constrained_window(quota, ("gemini-5h", "3p-5h"))
+    if best is None or abs(best[0] - 80.0) > 0.01:
         failures.append(
-            "_agy_primary_pair: 3p should win when gemini has no usable data at all"
+            f"_agy_most_constrained_window: should pick the higher-util candidate, got {best!r}"
+        )
+
+
+def _check_most_constrained_window_missing_keys(failures):
+    if _agy_most_constrained_window({}, ("missing-a", "missing-b")) is not None:
+        failures.append("_agy_most_constrained_window: missing keys should yield None")
+
+
+def _check_most_constrained_window_one_side_missing(failures):
+    quota = {"gemini-5h": _window(0.5, _HOUR)}
+    best = _agy_most_constrained_window(quota, ("gemini-5h", "3p-5h"))
+    if best is None or abs(best[0] - 50.0) > 0.01:
+        failures.append(
+            f"_agy_most_constrained_window: should use the only usable candidate, got {best!r}"
         )
 
 
@@ -173,25 +177,61 @@ def _check_format_agy_quota_show_pace_toggle(failures):
         )
 
 
-def _check_format_agy_quota_selects_3p_pair(failures):
+def _check_format_agy_quota_per_horizon_selection(failures):
+    # The 5h slot and wk slot are chosen INDEPENDENTLY: gemini wins 5h (higher
+    # util), but 3p wins wk (higher util) -- a genuine cross-family split.
     def render():
         quota = {
-            "gemini-5h": _window(0.98, 2 * _HOUR),  # near-empty utilization
-            "3p-5h": _window(0.1, 2 * _HOUR),  # 90% used -- should be surfaced
+            "gemini-5h": _window(0.1, 2 * _HOUR),  # 90% used -- wins the 5h slot
+            "gemini-weekly": _window(0.9, 3 * 86400),  # 10% used
+            "3p-5h": _window(0.95, 2 * _HOUR),  # 5% used
+            "3p-weekly": _window(0.4, 3 * 86400),  # 60% used -- wins the wk slot
         }
         return format_agy_quota(quota)
 
     out = _pin(render)
-    band = out.split("5h:")[-1].split(" ")[0]
-    if not band.startswith(ramp_color(1.0)) and "90" not in out:
+    if "90" not in out.split("wk:")[0]:
         failures.append(
-            f"format_agy_quota: should surface the more-constrained 3p pair, got {out!r}"
+            f"format_agy_quota: 5h slot should show gemini's 90%, got {out!r}"
+        )
+    if "60" not in out.split("wk:")[-1]:
+        failures.append(f"format_agy_quota: wk slot should show 3p's 60%, got {out!r}")
+
+
+def _check_format_agy_quota_never_hides_hottest_window(failures):
+    # Reviewer's exact reproduction: a prior pair-vs-pair rule picked the whole
+    # 3p pair here (3p-weekly's 96% beats gemini's pair-worst of 95%), which
+    # rendered 3p-5h's irrelevant 5% and completely hid gemini-5h's 95% -- the
+    # single most urgent, soonest-actionable number. Per-horizon selection
+    # must show gemini-5h (95%, the hotter 5h window) in the 5h slot AND
+    # 3p-weekly (96%, the hotter wk window) in the wk slot -- both real
+    # numbers, neither hidden.
+    def render():
+        quota = {
+            "gemini-5h": _window(0.05, 2 * _HOUR),  # 95% used
+            "gemini-weekly": _window(0.9, 3 * 86400),  # 10% used
+            "3p-5h": _window(0.95, 2 * _HOUR),  # 5% used
+            "3p-weekly": _window(0.04, 3 * 86400),  # 96% used
+        }
+        return format_agy_quota(quota)
+
+    out = _pin(render)
+    five_hour_part, _, weekly_part = out.partition("wk:")
+    if "95" not in five_hour_part:
+        failures.append(
+            f"format_agy_quota: must not hide gemini-5h's 95% behind the 3p pair, got {out!r}"
+        )
+    if "5%" in five_hour_part.replace("95%", ""):
+        failures.append(
+            f"format_agy_quota: 5h slot must not show 3p-5h's irrelevant 5%, got {out!r}"
+        )
+    if "96" not in weekly_part:
+        failures.append(
+            f"format_agy_quota: wk slot should show 3p-weekly's 96%, got {out!r}"
         )
 
 
-def _check_format_agy_quota_never_raises(failures):
-    # A non-dict quota, or one whose values are the wrong shape, must degrade
-    # to "" rather than raise into the render path.
+def _check_format_agy_quota_malformed_never_raises(failures):
     for bad in (
         "nope",
         42,
@@ -209,19 +249,32 @@ def _check_format_agy_quota_never_raises(failures):
             )
 
 
+def _check_format_agy_quota_color_bands(failures):
+    def render(util):
+        return format_agy_quota({"gemini-5h": _window(1.0 - util / 100.0, 2 * _HOUR)})
+
+    high = _pin(lambda: render(95.0))
+    if ramp_color(1.0) not in high:
+        failures.append(
+            f"format_agy_quota: 95% util should hit the red ramp end, got {high!r}"
+        )
+
+
 def check(failures):
     _check_window_metrics_basic(failures)
     _check_window_metrics_clamps(failures)
     _check_window_metrics_malformed(failures)
-    _check_pair_worst_utilization(failures)
-    _check_primary_pair_defaults_gemini(failures)
-    _check_primary_pair_switches_to_3p(failures)
-    _check_primary_pair_no_gemini_data(failures)
+    _check_horizons_shape(failures)
+    _check_most_constrained_window_picks_higher_util(failures)
+    _check_most_constrained_window_missing_keys(failures)
+    _check_most_constrained_window_one_side_missing(failures)
     _check_format_agy_quota_empty(failures)
     _check_format_agy_quota_renders_both_windows(failures)
     _check_format_agy_quota_show_pace_toggle(failures)
-    _check_format_agy_quota_selects_3p_pair(failures)
-    _check_format_agy_quota_never_raises(failures)
+    _check_format_agy_quota_per_horizon_selection(failures)
+    _check_format_agy_quota_never_hides_hottest_window(failures)
+    _check_format_agy_quota_malformed_never_raises(failures)
+    _check_format_agy_quota_color_bands(failures)
 
 
 def main():
@@ -231,7 +284,9 @@ def main():
         for failure in failures:
             print(f"FAIL: {failure}")
         sys.exit(1)
-    print("OK: agy quota adapter maps quota -> the same 5h/wk render form")
+    print(
+        "OK: agy quota adapter selects the hottest window per horizon, never hides it"
+    )
 
 
 if __name__ == "__main__":

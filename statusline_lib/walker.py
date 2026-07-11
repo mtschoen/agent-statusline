@@ -54,23 +54,20 @@ def _walker_root_list():
     Failure modes match the SPEC: missing file => no extras; malformed JSON =>
     stderr message + no extras. Only directories that exist on disk make it
     into the result. Realpath-deduped.
+
+    The platform/root-dir decision is delegated to app_dir() rather than
+    duplicated here -- a prior fix (dccc87e) had to update this function and
+    app_dir() in lockstep because they used to encode the same routing
+    decision independently; routing through app_dir() means there is only
+    one place left to get it right (env > argv > ANTIGRAVITY_* auto-detect).
     """
-    home = os.path.expanduser("~")
-    if os.environ.get("STATUSLINE_PLATFORM") == "antigravity":
-        default = os.path.join(home, ".gemini", "antigravity-cli", "brain")
-    elif os.environ.get("STATUSLINE_PLATFORM") == "claude":
-        default = os.path.join(home, ".claude", "projects")
-    elif os.environ.get("ANTIGRAVITY_AGENT") == "1" or os.environ.get(
-        "ANTIGRAVITY_CONVERSATION_ID"
-    ):
-        if not os.path.exists(
-            os.path.join(home, ".gemini", "antigravity-cli")
-        ) and os.path.exists(os.path.join(home, ".claude")):
-            default = os.path.join(home, ".claude", "projects")
-        else:
-            default = os.path.join(home, ".gemini", "antigravity-cli", "brain")
-    else:
-        default = os.path.join(home, ".claude", "projects")
+    base = app_dir()
+    subdir = (
+        "brain"
+        if base == os.path.join(os.path.expanduser("~"), ".gemini", "antigravity-cli")
+        else "projects"
+    )
+    default = os.path.join(base, subdir)
     all_paths = [default]
     try:
         with open(_WALKER_ROOTS_CONFIG_PATH, encoding="utf-8") as f:

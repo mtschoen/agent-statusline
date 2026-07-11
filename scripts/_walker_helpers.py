@@ -7,6 +7,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.walker as walker_module
 
 
+def fake_expanduser_for(tmp, original):
+    """os.path.expanduser replacement routing "~" at `tmp`, everything else
+    through `original`. Shared by verify_walker*.py scripts that need a fake
+    HOME for _walker_root_list()'s platform-detection paths."""
+
+    def fake_expanduser(path):
+        return tmp if path == "~" else original(path)
+
+    return fake_expanduser
+
+
 def save_walker_state():
     return {
         "shutil_which": walker_module.shutil.which,

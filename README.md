@@ -362,17 +362,19 @@ comments:
 [tui]
 status_line = [
   "run-state",
-  "current-dir",
-  "git-branch",
-  "pull-request-number",
   "model-with-reasoning",
+  "current-dir",
+  "project-name",
+  "git-branch",
+  "branch-changes",
+  "pull-request-number",
   "context-used",
-  "five-hour-limit",
-  "weekly-limit",
+  "context-window-size",
   "used-tokens",
   "total-input-tokens",
   "total-output-tokens",
-  "branch-changes",
+  "five-hour-limit",
+  "weekly-limit",
   "permissions",
   "approval-mode",
   "fast-mode",
@@ -382,9 +384,10 @@ status_line = [
 status_line_use_colors = true
 ```
 
-This maps the information Codex exposes natively: activity, cwd/branch/PR/diff,
-model and reasoning, context, quota, total/input/output tokens, permissions,
-approval and fast-mode state, thread title, and plan progress. The verbose
+This maps the information Codex exposes natively: activity, model and
+reasoning, cwd/project/branch/diff/PR, context usage and window size,
+total/input/output tokens, quota, permissions, approval and fast-mode state,
+thread title, and plan progress. The verbose
 thread UUID is deliberately omitted to leave more room for live telemetry.
 
 Codex currently has no cached-token item, caller-defined shorthand, custom ANSI

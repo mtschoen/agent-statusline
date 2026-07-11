@@ -78,6 +78,17 @@ corpus must beat an 8s wall-clock budget. If a new data source can't fit the
 cap, it doesn't belong in the render path — cache it, delegate it to the
 walker, or precompute it from a hook.
 
+Performance-conformance tiers (same script enforces the first two; budgets
+ratchet down per the PLAN.md render-perf item):
+- warm core (payload -> string, in-process, caches warm): <= 350ms today,
+  targeting <50ms after git/beacon caching, <10ms after the async-refresher
+  split. The <10ms cached path is also the Pi bridge's per-keypress budget.
+- cold end-to-end (fixture corpus, empty caches): <= 8s (realistically ~1s;
+  first/second render may block on basics like cwd/git).
+- spawn-per-render harnesses (Claude/Qwen/agy) additionally pay ~100ms of
+  interpreter+import outside our control — wall-clock budgets live on top of
+  that floor, and Claude Code refreshes at most every ~300ms anyway.
+
 ## Debugging the compact-mode width gate
 
 `statusline_lib/compact.py` auto-sheds line-2 fields only when the rendered width

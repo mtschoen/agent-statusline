@@ -489,8 +489,38 @@ def _check_bias_history_walk_is_local_only(failures):
         )
 
 
+def _check_beacons_latest_walk_is_local_only(failures):
+    """beacons-latest must pass --no-config for the same reason the bias walk
+    does: the session transcript it looks up always lives on THIS machine, and
+    the SMB extra roots measured 170-190ms per render vs ~55ms local-only --
+    paid on EVERY render, uncached (found via profile: 0.5s of a 0.63s warm
+    render was this one call)."""
+    import statusline_lib.beacon as _bm
+
+    captured = []
+
+    def fake_walker(*args, **kw):
+        captured.append(args)
+        return
+
+    original_walker = _bm._walker_subcommand
+    _bm._walker_subcommand = fake_walker
+    try:
+        _bm.format_beacon("some-session-id")
+    finally:
+        _bm._walker_subcommand = original_walker
+
+    if not captured:
+        failures.append("format_beacon should invoke the walker")
+    elif "--no-config" not in captured[0]:
+        failures.append(
+            f"beacons-latest must pass --no-config (local roots only); got {captured[0]!r}"
+        )
+
+
 def main():
     failures = []
+    _check_beacons_latest_walk_is_local_only(failures)
     _check_bias_history_walk_is_local_only(failures)
     _check_format_beacon(failures)
     _check_format_beacon_bad_eta_seconds(failures)

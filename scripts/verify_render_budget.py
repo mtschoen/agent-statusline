@@ -47,6 +47,13 @@ _RENDER_PATH_FILES += [
 
 _MAX_SUBPROCESS_TIMEOUT = 2.0
 _RENDER_BUDGET_SECONDS = float(os.environ.get("STATUSLINE_TEST_RENDER_BUDGET", "8"))
+# Warm-core conformance: median in-process render (payload -> string, caches
+# warm, fixture corpus) must beat this. Evidence 2026-07-11: ~100-150ms in the
+# fixture environment (real-machine median 317ms includes walker+git against
+# live data). Ratchet plan lives in PLAN.md: cache git-ref and beacons-latest
+# (-> <50ms), then the wave-3 async-refresher split (-> <10ms cached path,
+# which is also the Pi bridge's keypress budget).
+_CORE_BUDGET_MS = float(os.environ.get("STATUSLINE_TEST_CORE_BUDGET_MS", "350"))
 
 
 def _numeric_value(node):
@@ -218,10 +225,96 @@ def check_cold_render_budget(failures):
             )
 
 
+_CORE_TIMER_SNIPPET = """
+import contextlib, io, json, sys, time
+sys.path.insert(0, {repo!r})
+import statusline
+payload = {payload!r}
+times = []
+for i in range(9):
+    sys.stdin = io.StringIO(payload)
+    with contextlib.redirect_stdout(io.StringIO()):
+        t0 = time.perf_counter()
+        with contextlib.suppress(SystemExit):
+            statusline.main()
+        times.append((time.perf_counter() - t0) * 1000)
+times.sort()
+print(times[len(times) // 2])
+"""
+
+
+def check_warm_core_median(failures):
+    """Median warm in-process render (the 'core': payload -> rendered string,
+    interpreter+imports excluded) must beat _CORE_BUDGET_MS in the fixture
+    environment. One child interpreter renders 9 times and reports the
+    median, so spawn/import cost and first-render cache warming are excluded
+    from the figure -- this is the number the async-refresher work ratchets."""
+    with tempfile.TemporaryDirectory() as tmp:
+        home = os.path.join(tmp, "home")
+        _build_fixture_home(home)
+        env = dict(os.environ)
+        env["HOME"] = home
+        env["USERPROFILE"] = home
+        env.pop("CLAUDE_WALKER_BIN", None)
+        payload = json.dumps(
+            {
+                "session_id": str(uuid.uuid4()),
+                "cwd": _REPO,
+                "workspace": {"current_dir": _REPO, "project_dir": _REPO},
+                "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
+                "context_window": {
+                    "context_window_size": 200000,
+                    "total_input_tokens": 50000,
+                    "total_output_tokens": 5000,
+                    "current_usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 50,
+                        "cache_creation_input_tokens": 100,
+                        "cache_read_input_tokens": 40000,
+                    },
+                },
+                "cost": {
+                    "total_cost_usd": 1.5,
+                    "total_duration_ms": 600000,
+                    "total_api_duration_ms": 300000,
+                    "total_lines_added": 10,
+                    "total_lines_removed": 2,
+                },
+            }
+        )
+        code = _CORE_TIMER_SNIPPET.format(repo=_REPO, payload=payload)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=env,
+                timeout=_RENDER_BUDGET_SECONDS * 6,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append("warm-core timing child exceeded its hard kill")
+            return
+        if result.returncode != 0:
+            failures.append(
+                f"warm-core timing child exited {result.returncode}:"
+                f" {result.stderr[-200:]!r}"
+            )
+            return
+        median_ms = float(result.stdout.strip())
+        if median_ms > _CORE_BUDGET_MS:
+            failures.append(
+                f"warm core median {median_ms:.0f}ms exceeds"
+                f" {_CORE_BUDGET_MS:.0f}ms -- blocking work crept into the"
+                " happy-path render"
+            )
+
+
 def main():
     failures = []
     check_render_path_sync_calls(failures)
     check_cold_render_budget(failures)
+    check_warm_core_median(failures)
 
     if failures:
         for f in failures:

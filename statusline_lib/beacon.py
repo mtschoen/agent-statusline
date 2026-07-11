@@ -234,7 +234,12 @@ def format_beacon(session_id):
     if not session_id:
         return (None, None)
     session_id = str(session_id)
-    data = _walker_subcommand("beacons-latest", "--session-id", session_id)
+    # --no-config: this session's transcript is on THIS machine by
+    # definition; the SMB extra roots cost 170-190ms per render (uncached,
+    # every render) vs ~55ms local-only. Render-budget invariant applies.
+    data = _walker_subcommand(
+        "beacons-latest", "--session-id", session_id, "--no-config"
+    )
     if not data:
         return (None, None)
     beacon = data.get("beacon")

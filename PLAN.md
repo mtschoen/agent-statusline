@@ -13,6 +13,21 @@
       status_line, second ordered array; doubles the TOML-surgery surface —
       deliberately skipped in the 2026-07-11 preset refresh).
 
+- [ ] Render-perf ratchet (conformance test: scripts/verify_render_budget.py,
+      warm-core budget currently 350ms; measured 2026-07-11 real-machine
+      median 317ms / p90 650ms after the --no-config fixes). Steps, each
+      lowering the enforced budget:
+      1. TTL-cache _git_ref (~55ms/render of git subprocesses; 2-3s TTL is
+         invisible at statusline cadence).
+      2. TTL/mtime-cache the beacons-latest lookup (~60ms/render local).
+         Target after 1+2: core < 50ms, budget 100ms.
+      3. Wave-3 async-refresher split: renders NEVER pay a TTL-miss walk
+         inline — the render uses the stale cache and kicks a detached
+         refresher for the next render (kills the p90/max tail). Target:
+         cached-path core < 10ms, which is also the Pi bridge's per-keypress
+         budget. Blocking on first/second render (cwd/git basics) stays
+         acceptable per the cold budget (8s, realistically ~1s).
+
 ## Done
 
 - 2026-06-10 triage batch CLOSED (2026-07-11, wave-1 subagent fan-out; all

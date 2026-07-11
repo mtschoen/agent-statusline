@@ -160,9 +160,12 @@ def _is_excluded_by_tree(pid, snap, cmdline_of):
     seen = set()
     child_ctime = ctime
     cur = ppid
-    while cur in snap and cur not in seen and len(seen) < _ANCESTOR_WALK_LIMIT:
+    while cur not in seen and len(seen) < _ANCESTOR_WALK_LIMIT:
+        row = snap.get(cur)
+        if row is None:
+            break  # chain breaks above the first ancestor: ends the walk
         seen.add(cur)
-        next_ppid, name, pctime = snap[cur]
+        next_ppid, name, pctime = row
         if (pctime or 0) > (child_ctime or 0):
             break  # recycled pid above the first ancestor: chain ends here
         n = (name or "").lower()
@@ -189,25 +192,64 @@ def _process_matches(name, cmdline, cwd, target_cwd):
     return os.path.normcase(cwd) == os.path.normcase(target_cwd)
 
 
+class _LazySnapshot:
+    """pid -> (ppid, name, create_time) mapping, filled on demand.
+
+    Names come from the same cheap process_iter(["name"]) pass the candidate
+    pre-filter uses (one toolhelp snapshot on Windows, ~20ms for ~600 procs);
+    ppid/create_time cost an OpenProcess per pid there (~11s observed when
+    requested as process_iter attrs), so they are fetched only for the pids
+    the tree walk actually visits -- candidates plus their ancestor chains,
+    a handful.
+    """
+
+    def __init__(self, psutil, names):
+        self._psutil = psutil
+        self._names = names
+        self._rows = {}
+
+    def get(self, pid, default=None):
+        if pid is None:
+            return default
+        if pid not in self._rows:
+            self._rows[pid] = self._fetch(pid)
+        row = self._rows[pid]
+        return default if row is None else row
+
+    def _fetch(self, pid):
+        psutil = self._psutil
+        try:
+            proc = psutil.Process(pid)
+            name = self._names.get(pid)
+            if name is None:
+                name = proc.name()
+            return (proc.ppid(), name, proc.create_time())
+        except psutil.NoSuchProcess:
+            return None  # dead pid: absent, same as a vanished parent
+        except psutil.AccessDenied:
+            # Unreadable but alive: present and non-agent, so the walk ends
+            # here without tripping the orphan rule (a candidate is only an
+            # orphan when its parent is *gone*, not merely opaque).
+            return (None, self._names.get(pid), 0.0)
+
+
 def _count_via_psutil(target_cwd, psutil):
-    # One pass over the process table builds both the pid->(ppid, name,
-    # create_time) snapshot the tree walk needs and the candidate list. The
-    # walk reads names from the snapshot rather than calling per-ancestor
-    # psutil APIs -- those AccessDenied mid-chain and silently truncate.
-    snap = {}
+    # The enumeration pass must stay attrs=["name"]: names come from one
+    # toolhelp snapshot, while ppid/create_time force an OpenProcess per pid
+    # on Windows (measured 20ms vs 11s over ~600 processes). The tree walk
+    # gets those lazily from _LazySnapshot for the few pids it visits, which
+    # also avoids per-ancestor cmdline() calls -- those AccessDenied
+    # mid-chain and silently truncate the walk.
+    names = {}
     candidates = []
-    for p in psutil.process_iter(["pid", "ppid", "name", "create_time"]):
-        info = p.info
-        snap[info.get("pid")] = (
-            info.get("ppid"),
-            info.get("name"),
-            info.get("create_time"),
-        )
-        name = (info.get("name") or "").lower()
+    for p in psutil.process_iter(["name"]):
+        names[p.pid] = p.info.get("name")
+        name = (p.info.get("name") or "").lower()
         # Cheap name pre-filter -- avoids calling cmdline()/cwd() on every
         # process (hundreds on a typical box).
         if name in _AGENT_PROCESS_NAMES or name in _NODE_PROCESS_NAMES:
-            candidates.append((info.get("pid"), name, p))
+            candidates.append((p.pid, name, p))
+    snap = _LazySnapshot(psutil, names)
 
     def cmdline_of(pid):
         try:

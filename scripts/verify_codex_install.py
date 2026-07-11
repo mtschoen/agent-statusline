@@ -58,21 +58,37 @@ def _check_preset_fields(failures):
 
 
 def _check_preset_order(failures):
-    order = {item: index for index, item in enumerate(CODEX_STATUS_LINE_ITEMS)}
-    # Mirrors this project's own line-2 rendering philosophy (statusline.py
+    # Pins the full order, not just a handful of sentinels: the preset IS
+    # the canonical list, so asserting the exact sequence is no more brittle
+    # than a subset check and catches any accidental reordering. Mirrors
+    # this project's own line-2 rendering philosophy (statusline.py
     # _render_line2): model, then directory/git, then context usage, then
-    # tokens, then rate limits.
-    philosophy = [
+    # tokens, then rate limits, with session/mode metadata last.
+    expected = (
+        "run-state",
         "model-with-reasoning",
         "current-dir",
+        "project-name",
+        "git-branch",
+        "branch-changes",
+        "pull-request-number",
         "context-used",
+        "context-window-size",
         "used-tokens",
+        "total-input-tokens",
+        "total-output-tokens",
         "five-hour-limit",
-    ]
-    indices = [order[item] for item in philosophy]
-    if indices != sorted(indices):
+        "weekly-limit",
+        "permissions",
+        "approval-mode",
+        "fast-mode",
+        "thread-title",
+        "task-progress",
+    )
+    if expected != CODEX_STATUS_LINE_ITEMS:
         failures.append(
-            "preset: item order does not mirror the model/dir/context/tokens/limits philosophy"
+            f"preset: order does not match the expected philosophy sequence: "
+            f"got {CODEX_STATUS_LINE_ITEMS}, expected {expected}"
         )
 
 
@@ -216,16 +232,26 @@ def _check_idempotent_merge(failures):
 def _check_trailing_content_after_tui(failures):
     """[tui] immediately followed by a [tui.child] sub-table (not a sibling
     top-level table) must bound [tui]'s content at the child header, not
-    swallow it, and extra keys on both sides of the preset assignments must
-    survive."""
+    swallow it. [tui] itself carries no status_line/status_line_use_colors
+    of its own -- only the child table does, as a decoy -- because
+    `_assignment_span` only strips the *first* match of each key
+    (`re.search`, not `re.findall`): if a real preset key were also present
+    directly under [tui], it would always win that first-match race and the
+    decoy would never be reached regardless of how wrong the bounds are,
+    making the test blind to the exact bug it's meant to catch. With no
+    competing match under [tui], a `_table_bounds` bug that widens [tui]'s
+    content window past the child header (e.g. treating only undotted
+    headers as boundaries, or defaulting to end-of-file) makes the decoy the
+    first and only match in range, so the assignment stripper deletes it
+    even though it lives inside a different table."""
     text = (
         "[tui]\n"
         "animations = false\n"
-        'status_line = ["model"]\n'
-        "status_line_use_colors = false\n"
         "show_tooltips = true\n"
         "\n"
-        '[tui.model_availability_nux]\n"gpt-5.5" = 1\n'
+        "[tui.model_availability_nux]\n"
+        '"gpt-5.5" = 1\n'
+        'status_line_use_colors = "decoy-should-survive"\n'
         "\n"
         "[history]\n"
         'persistence = "none"\n'
@@ -238,6 +264,12 @@ def _check_trailing_content_after_tui(failures):
         failures.append("trailing content: trailing sibling key changed")
     if data["tui"]["model_availability_nux"]["gpt-5.5"] != 1:
         failures.append("trailing content: child table under [tui] changed")
+    child_decoy = data["tui"]["model_availability_nux"].get("status_line_use_colors")
+    if child_decoy != "decoy-should-survive":
+        failures.append(
+            "trailing content: [tui] bounds swallowed the child table's own "
+            f"status_line_use_colors key (got {child_decoy!r})"
+        )
     if data["history"]["persistence"] != "none":
         failures.append("trailing content: table after the child table changed")
     if not codex_config_current(merged):
@@ -245,23 +277,26 @@ def _check_trailing_content_after_tui(failures):
 
 
 def _check_no_trailing_newline(failures):
-    """[tui] as the last table in the file, with no trailing newline at EOF
-    and an extra key after status_line_use_colors, must still merge cleanly."""
+    """The status_line_use_colors assignment being merged away is itself the
+    literal last bytes of the file, with no trailing newline. This is the
+    only way to exercise `_assignment_span`'s EOF branch
+    (`line_end < 0` -> span ends at `end`, not `line_end + 1`): if any
+    content follows the assignment on a later line, `text.find("\\n", ...)`
+    always finds that line's terminator and the branch is never taken."""
     text = (
         'model = "gpt-5.5"\n'
         "\n"
         "[tui]\n"
         "animations = false\n"
         'status_line = ["model"]\n'
-        "status_line_use_colors = false\n"
-        "extra_after = true"
+        "status_line_use_colors = false"
     )
     merged = merge_codex_config(text)
     data = tomllib.loads(merged)
+    if data["model"] != "gpt-5.5":
+        failures.append("no trailing newline: unrelated setting changed")
     if data["tui"]["animations"] is not False:
         failures.append("no trailing newline: leading sibling key changed")
-    if data["tui"]["extra_after"] is not True:
-        failures.append("no trailing newline: trailing key (no EOF newline) dropped")
     if not codex_config_current(merged):
         failures.append("no trailing newline: preset was not retained")
 

@@ -65,6 +65,19 @@ against a synthetic window start) and never lean on live `~/.claude` data:
 coverage that comes from the dev machine's real transcripts evaporates on a
 clean CI runner (13 lines failed the gate's first run exactly this way).
 
+## Render-budget invariant (no long sync calls in the render path)
+
+Three production incidents shared one disease — a synchronous call inside a
+render that can block for seconds (2026-07-02 SMB stats + walker stalls, 20s;
+2026-07-10 psutil attr expansion, 11s; 2026-07-11 beacons-history over SMB,
+5s timeout stalls). `scripts/verify_render_budget.py` enforces the invariant
+mechanically: every subprocess call reachable from a render carries an
+explicit `timeout=` <= 2s (wrapper defaults included), `Popen`/`time.sleep`
+are banned there, and a cold-cache end-to-end render against a synthetic
+corpus must beat an 8s wall-clock budget. If a new data source can't fit the
+cap, it doesn't belong in the render path — cache it, delegate it to the
+walker, or precompute it from a hook.
+
 ## Debugging the compact-mode width gate
 
 `statusline_lib/compact.py` auto-sheds line-2 fields only when the rendered width

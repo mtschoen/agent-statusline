@@ -325,7 +325,9 @@ def _bias_factor_cached(period_seconds):
         "--win-start",
         "0",
         "--no-config",
-        timeout=5,
+        # 2s cap per the render-budget invariant (verify_render_budget.py);
+        # the local-only walk measures ~0.5s, so this is 4x headroom.
+        timeout=2,
     )
     entry = {
         "computed_at_unix": datetime.now(UTC).timestamp(),

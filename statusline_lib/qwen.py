@@ -10,7 +10,8 @@ Payload structure: {prompt, completion, total, cached, thoughts}
 - `completion` = output tokens
 - `thoughts` = reasoning/thinking tokens
 
-Cache uses the same format as Claude Code: read / write / hit%.
+Cache renders as `cached / hit%` -- unlike Claude Code, Qwen has no priced
+cache-write side, so no write figure is shown (see format_qwen_cache).
 Thinking tokens are appended to the context column as (thk NNNK).
 """
 
@@ -22,21 +23,25 @@ from .base import (
     YELLOW,
     fmt,
 )
-from .cachefmt import format_cache_counts, format_cache_hit
+from .cachefmt import format_cache_hit, format_cache_read
 
 
 def format_qwen_cache(cached, prompt):
-    """Format cache as Claude Code style: `read / write / hit%`.
+    """Format cache as `cached / hit%` -- no Claude-style write figure.
 
-    Qwen doesn't expose cache writes, so write is always 0.
-    Hit rate = cached / prompt.
-    Returns: e.g. `1.78M / 660K / 73%` or "" if no cached data.
+    Qwen's implicit prompt cache bills cache-hit tokens at ~20% of the
+    standard input rate (Alibaba Model Studio docs: "the portion of the input
+    served from the cache is billed at 20% of the standard input token
+    price"), so cached tokens are a real, priced cost signal. But Qwen has no
+    priced cache-*write* side -- unlike Claude, there's no premium for
+    populating the cache, so a write figure here would borrow Claude's
+    write-cost visual language (CACHE_WRITE color) for a number that costs
+    nothing. Hit rate = cached / prompt.
+    Returns: e.g. `730.0K / 73%` or "" if no cached data.
     """
     if not cached or cached <= 0:
         return ""
-    # For Qwen, cached = cache reads, non-cached = prompt - cached
-    non_cached = max(0, prompt - cached)
-    return f"{format_cache_counts(cached, non_cached)} / {format_cache_hit(cached, prompt)}"
+    return f"{format_cache_read(cached)} / {format_cache_hit(cached, prompt)}"
 
 
 def format_qwen_tokens(tokens):

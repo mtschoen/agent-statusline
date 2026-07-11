@@ -391,9 +391,10 @@ Codex currently has no cached-token item, caller-defined shorthand, custom ANSI
 spans, external-command item, or multiline extension point. Its color toggle
 uses colors derived from the active Codex `/theme`; it cannot apply this
 project's Claude cache-read/cache-write/threshold palette. The Claude and Qwen
-adapters now share the cache count, hit-rate, and color-ramp formatter so those
-semantics are ready for Codex as soon as it exposes either cached-token data or
-a command-backed footer item. Until then, the Claude-specific
+adapters share the cache-read, hit-rate, and color-ramp formatters (Qwen has no
+priced cache-write side, so its cache column omits a write figure Claude's
+doesn't) so those semantics are ready for Codex as soon as it exposes either
+cached-token data or a command-backed footer item. Until then, the Claude-specific
 cache/TTL/cost/burn-rate, transcript walker, teammate summary, and calibrated
 progress-beacon rows cannot be carried over. Re-run `/statusline` inside Codex
 to interactively adjust the installed field order.

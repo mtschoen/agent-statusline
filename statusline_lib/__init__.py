@@ -110,7 +110,6 @@ from .burnrate import (
 )
 from .cachefmt import (
     cache_hit_percent,
-    format_cache_counts,
     format_cache_hit,
     format_cache_read,
     format_cache_write,
@@ -243,7 +242,6 @@ __all__ = [
     "format_beacon",
     "format_burn_rate",
     "format_cache",
-    "format_cache_counts",
     "format_cache_hit",
     "format_cache_read",
     "format_cache_write",

@@ -50,12 +50,19 @@ def _check_cache_empty_when_cached_negative(failures):
         )
 
 
-def _check_cache_renders_read_write_hit(failures):
+def _check_cache_renders_cached_and_hit_no_fake_write(failures):
+    """Qwen exposes no priced cache-write side (no write cost premium exists
+    the way it does for Claude), so the column must show cached tokens + hit%
+    only -- no CACHE_WRITE-colored figure standing in for a cost that isn't
+    real. See format_qwen_cache's docstring for the pricing citation."""
     result = format_qwen_cache(730_000, 1_000_000)
     if CACHE_READ not in result:
         failures.append(f"cache result must contain CACHE_READ color, got {result!r}")
-    if CACHE_WRITE not in result:
-        failures.append(f"cache result must contain CACHE_WRITE color, got {result!r}")
+    if CACHE_WRITE in result:
+        failures.append(
+            f"cache result must NOT contain CACHE_WRITE (no priced write side "
+            f"for Qwen), got {result!r}"
+        )
     if "73%" not in result:
         failures.append(f"cache result must contain '73%', got {result!r}")
     if RESET not in result:
@@ -63,6 +70,11 @@ def _check_cache_renders_read_write_hit(failures):
     if "730.0K" not in result:
         failures.append(
             f"cache result must contain cached size '730.0K', got {result!r}"
+        )
+    if result.count("/") != 1:
+        failures.append(
+            f"cache result must be a single 'cached / hit%' pair (one '/'), "
+            f"got {result!r}"
         )
 
 
@@ -307,7 +319,7 @@ def main():
     _check_cache_empty_when_no_cached(failures)
     _check_cache_empty_when_cached_none(failures)
     _check_cache_empty_when_cached_negative(failures)
-    _check_cache_renders_read_write_hit(failures)
+    _check_cache_renders_cached_and_hit_no_fake_write(failures)
     _check_cache_zero_prompt_no_divide(failures)
 
     _check_tokens_empty_when_none(failures)

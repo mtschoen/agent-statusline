@@ -6,13 +6,18 @@
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both now hard CI gates) |
-| **Tests** | 47 `scripts/verify_*.py`, all passing locally |
-| **Git** | `731efb7` + working tree (`sdd/render-timer`) |
+| **Tests** | 49 `scripts/verify_*.py`, all passing locally |
+| **Git** | `2d3b77c` (`main`) |
 
-**This run (Python render-timer port):** ported the Pi footer's render-timing
-instrumentation (`ui <dur> peak <peak>`, commit `0323dbc`) to the
-spawn-per-render Python harnesses. New `statusline_lib/rendertimer.py` (51
-statements, 100% coverage) mirrors Pi's PREVIOUS-render semantics via a small
+**This run (render-timer port + perf-ratchet steps 1+2, two reviewed
+branches merged):** ported the Pi footer's render-timing instrumentation
+(`ui <dur> peak <peak>`, commit `0323dbc`) to the spawn-per-render Python
+harnesses, and landed the PLAN.md render-perf ratchet's first two steps —
+TTL disk caches (2.5s) for `_git_ref` and the beacons-latest walker call
+(new `statusline_lib/beacon_cache.py`, 31 statements), dropping the enforced
+warm-core budget in `scripts/verify_render_budget.py` from 350ms to 100ms
+(measured fixture median: 48-51ms before, 2-3ms after). New
+`statusline_lib/rendertimer.py` (52 statements, 100% coverage) mirrors Pi's PREVIOUS-render semantics via a small
 per-session state file under `~/.claude/state`: `format_render_suffix` reads
 the prior render's duration + session peak (appended to the last output
 line), `record_render` persists the just-finished render's elapsed time +
@@ -27,10 +32,10 @@ peak tracking, session isolation, the no-session-id fallback, corrupt/absent
 state, OSError-swallowing on write, and end-to-end subprocess renders of both
 `statusline.py` and `qwen_statusline.py` (first render shows no suffix,
 second shows the first's timing; the disabled-gate path shows no suffix and
-writes no state at all). `scripts/verify_render_budget.py` stays green (no
-subprocess/sleep in the render path; warm-core median unaffected). Ruff and
-aislop (100/100, 0 errors) both clean; `statusline_lib` remains at **100%**
-(1838/1838 statements).
+writes no state at all). `scripts/verify_render_budget.py` is green at the
+new 100ms budget on the merged tree (no subprocess/sleep in the render path).
+Ruff and aislop both clean; `statusline_lib` remains at **100%**
+(1871/1871 statements).
 
 **This run (richer Codex preset + shared cache formatting):** the native Codex
 preset now trades the verbose thread UUID for PR number, input/output token
@@ -157,17 +162,17 @@ overrides.
 
 ## Coverage (hard gate, 100%)
 
-Measured by running all 47 `verify_*.py` under coverage.py and reporting
+Measured by running all 49 `verify_*.py` under coverage.py and reporting
 `statusline_lib/` - the package that holds all logic. CI fails below 100%,
 independently on each OS job (Linux and Windows each run the gate on their own
 run, not combined - a branch only covered on one leg fails the other).
 
-**Total: 1838 / 1838 statements (100%, verified this run on Windows)** -
-every module: `__init__` 17, `agy` 60, `badge` 110, `base` 66, `beacon` 222,
-`burnrate` 146, `cachefmt` 9, `codex_install` 100, `compact` 41, `cost` 114,
-`costfmt` 68, `diffstat` 7, `nudge` 53, `nudge_install` 37, `pace` 278,
-`prefs` 31, `project` 61, `qwen` 52, `rendertimer` 51, `sessions` 183, `teams` 67,
-`walker` 72.
+**Total: 1871 / 1871 statements (100%, verified this run on Windows)** -
+every module: `__init__` 17, `agy` 60, `badge` 110, `base` 66, `beacon` 223,
+`beacon_cache` 31, `burnrate` 146, `cachefmt` 9, `codex_install` 100,
+`compact` 41, `cost` 114, `costfmt` 68, `diffstat` 7, `nudge` 53,
+`nudge_install` 37, `pace` 278, `prefs` 31, `project` 61, `qwen` 52,
+`rendertimer` 52, `sessions` 183, `teams` 67, `walker` 65.
 
 **Scope:** entry-point glue is outside the measured set, by design -
 `statusline.py`, `subagent_statusline.py`, `qwen_statusline.py`,

@@ -9,6 +9,13 @@
       fixed); belongs to the wave-3 canonical-model adapters, which validate
       types at the boundary. Also: metrics.models as a non-dict (JSON array)
       needs one isinstance guard in _model_summaries.
+- [ ] Wave-3 canonical-model deliverable (decided 2026-07-11): fold
+      qwen_statusline.py into statusline.py as `--statusline-platform qwen`
+      — one entry point, per-harness adapters normalize payloads into the
+      canonical model. Precedent: antigravity already routes through
+      statusline.py via the same flag. Do NOT rename statusline.py
+      (it is the generic renderer, and every deployed machine's settings
+      embed the literal path).
 - [ ] Codex: optionally wire tui.terminal_title (same item vocabulary as
       status_line, second ordered array; doubles the TOML-surgery surface —
       deliberately skipped in the 2026-07-11 preset refresh).

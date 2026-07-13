@@ -38,7 +38,7 @@ support:
   threshold in `.aislop/config.yml`. Treat a failing gate like a failing test.
 
 To refresh the pinned binary after new commits land on the fork branch:
-`pnpm add -g --allow-build=aislop "github:mtschoen/aislop#feat/csharp-support"`
+`pnpm add -g --allow-build=aislop "github:mtschoen/aislop#schoen/main"`
 
 ## Coverage gate: 100% on statusline_lib
 

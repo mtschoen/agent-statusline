@@ -40,9 +40,9 @@ def format_nudge(ctx_used):
     used_k = round((ctx_used or 0) / 1000)
     ceiling_k = NUDGE_SOFT_CEILING_TOKENS // 1000
     return (
-        f"This session is around {used_k}K tokens of context. Long sessions "
-        "accumulate cache-read cost on every turn and model recall degrades as "
-        f"the window fills, so past ~{ceiling_k}K it is usually worth winding "
+        f"This session is around {used_k}K tokens of context. Model recall "
+        "degrades as the window fills (cost is NOT a concern -- the 1M tier "
+        f"bills flat), so past ~{ceiling_k}K it is usually worth winding "
         "down. If you are at a natural stopping point, consider suggesting "
         "`/wrap` to the user to close the session cleanly. Do not interrupt "
         "in-progress work -- finish the current thread first, and skip the "

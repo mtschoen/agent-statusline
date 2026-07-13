@@ -24,7 +24,7 @@ def save_walker_state():
         "os_path_isfile": walker_module.os.path.isfile,
         "os_path_isdir": walker_module.os.path.isdir,
         "os_path_realpath": walker_module.os.path.realpath,
-        "subprocess_run": walker_module.subprocess.run,
+        "run_captured": walker_module.run_captured,
         "environ": dict(os.environ),
         "roots_config_path": walker_module._WALKER_ROOTS_CONFIG_PATH,
         "os_path_expanduser": walker_module.os.path.expanduser,
@@ -36,7 +36,7 @@ def restore_walker_state(state):
     walker_module.os.path.isfile = state["os_path_isfile"]
     walker_module.os.path.isdir = state["os_path_isdir"]
     walker_module.os.path.realpath = state["os_path_realpath"]
-    walker_module.subprocess.run = state["subprocess_run"]
+    walker_module.run_captured = state["run_captured"]
     walker_module.os.path.expanduser = state["os_path_expanduser"]
     for key in list(os.environ.keys()):
         if key not in state["environ"]:

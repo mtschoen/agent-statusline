@@ -11,7 +11,6 @@ import contextlib
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import time
 from typing import NamedTuple
@@ -63,6 +62,7 @@ try:
     )
     from statusline_lib import state_dir as _resolve_state_dir
     from statusline_lib.nudge import write_ctx_state
+    from statusline_lib.process_safe import ProcessTimeout, run_captured
     from statusline_lib.rendertimer import format_render_suffix, record_render
 except Exception:
     # A broken statusline_lib (mid-edit syntax error, missing module) dies
@@ -88,16 +88,14 @@ _ERROR_LOG = os.path.join(app_dir(), ".statusline-error.log")
 
 
 def _git_command(cwd, *arguments):
+    # run_captured (not subprocess.run) so a git credential-helper grandchild
+    # that inherits the stdout pipe can't wedge the render past the timeout
+    # (bpo-31935 / process_safe's abandon-reader pattern).
     try:
-        out = subprocess.run(
-            ["git", "-C", cwd, *arguments],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        if out.returncode == 0:
-            return out.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+        result = run_captured(["git", "-C", cwd, *arguments], timeout=2)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, ProcessTimeout):
         pass
     return ""
 

@@ -14,18 +14,45 @@
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF"]
+select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF", "TID251"]
 
 # E (E402/E501) and ARG are intentionally unselected:
 #   - E402: statusline.py reconfigures stdout to UTF-8 before importing the
 #     shared lib, so module-level imports legitimately follow executable code.
 #   - E501: line length is not gated (ruff format handles wrapping).
 #
-# No rule-level ignores and no per-file-ignores: every finding the broad
-# select surfaces is FIXED rather than suppressed. The one unavoidable case
-# -- the U+00D7 MULTIPLICATION SIGN glyph rendered in the status line itself
-# -- carries a single targeted `# noqa: RUF001` at its one site in
-# statusline_lib.py, not a blanket rule ignore.
+# No rule-level ignores: every finding the broad select surfaces is FIXED
+# rather than suppressed. The one unavoidable case -- the U+00D7
+# MULTIPLICATION SIGN glyph rendered in the status line itself -- carries a
+# single targeted `# noqa: RUF001` at its one site in statusline_lib.py, not
+# a blanket rule ignore. TID251 (banned-api, below) is the one rule with
+# per-file-ignores: statusline_lib/process_safe.py is the sanctioned
+# subprocess home, and a handful of scripts/verify_*.py harnesses spawn real
+# subprocesses on purpose to exercise the installed CLI end-to-end -- see
+# per-file-ignores for the rationale on each.
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"subprocess.run".msg = "Use process_safe.run_captured / run_inherit. Raw subprocess.run(capture_output=True, timeout=...) can hang forever on Windows when a grandchild inherits the pipe (bpo-31935). See statusline_lib/process_safe.py."
+"subprocess.Popen".msg = "Use process_safe.run_captured / spawn_detached. See statusline_lib/process_safe.py."
+"subprocess.call".msg = "Use process_safe.run_inherit. See statusline_lib/process_safe.py."
+"subprocess.check_call".msg = "Use process_safe.run_inherit. See statusline_lib/process_safe.py."
+"subprocess.check_output".msg = "Use process_safe.run_captured. See statusline_lib/process_safe.py."
+
+[tool.ruff.lint.per-file-ignores]
+# The sanctioned subprocess home (see its module docstring) -- TID251 exists
+# to force everything else through it.
+"statusline_lib/process_safe.py" = ["TID251"]
+# Outer-harness scripts that deliberately spawn a real subprocess to exercise
+# installed-CLI / render-path behavior end-to-end (spawn-and-assert-on-output,
+# not the render path itself) -- classified SAFE by the 2026-07-12 subprocess
+# audit. Not process_safe candidates: they need the full subprocess.run
+# surface (arbitrary cwd/env, CalledProcessError, monkeypatching Popen/run to
+# fake child behavior) that the wrapper deliberately doesn't expose.
+"scripts/verify_install_settings_merge.py" = ["TID251"]
+"scripts/verify_process_safe.py" = ["TID251"]
+"scripts/verify_render_budget.py" = ["TID251"]
+"scripts/verify_render_timer.py" = ["TID251"]
+"scripts/verify_wrap_nudge.py" = ["TID251"]
 
 [tool.ruff.format]
 # ruff format defaults: double quotes, 88-column wrap, trailing commas.

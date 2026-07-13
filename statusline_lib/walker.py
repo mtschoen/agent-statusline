@@ -7,9 +7,9 @@ Imports:
 import json
 import os
 import shutil
-import subprocess
 
 from .base import _json_loads, app_dir
+from .process_safe import ProcessTimeout, run_captured
 
 _WALKER_BIN_ENV = "CLAUDE_WALKER_BIN"
 
@@ -111,13 +111,8 @@ def _walker_subcommand(subcommand, *args, timeout=2):
     if not bin_path:
         return None
     try:
-        result = subprocess.run(
-            [bin_path, subcommand, *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError):
+        result = run_captured([bin_path, subcommand, *args], timeout=timeout)
+    except (ProcessTimeout, OSError):
         return None
     if result.returncode != 0 or not result.stdout.strip():
         return None

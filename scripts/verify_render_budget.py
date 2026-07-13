@@ -44,7 +44,18 @@ _RENDER_PATH_FILES = [
 _RENDER_PATH_FILES += [
     os.path.join(_REPO, "statusline_lib", f)
     for f in sorted(os.listdir(os.path.join(_REPO, "statusline_lib")))
-    if f.endswith(".py") and f not in ("codex_install.py", "nudge_install.py")
+    if f.endswith(".py")
+    and f
+    not in (
+        "codex_install.py",
+        "nudge_install.py",
+        # process_safe.py implements the bounded-timeout replacement for
+        # subprocess.run/Popen this scan exists to enforce elsewhere (its
+        # Popen call is the sanctioned kill-then-abandon-reader pattern, not
+        # the unbounded raw usage the ban targets) -- scanning it would flag
+        # the fix as the violation.
+        "process_safe.py",
+    )
 ]
 
 _MAX_SUBPROCESS_TIMEOUT = 2.0

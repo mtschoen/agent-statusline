@@ -1,6 +1,6 @@
 """UserPromptSubmit hook: a one-shot nudge to consider ``/wrap`` once a session
-crosses the 250K-token context-hygiene line (NOT a pricing boundary -- the 1M
-tier bills flat; see ``statusline_lib/nudge.py``).
+crosses the 250K-token context-hygiene line (threshold rationale and economics
+in ``statusline_lib/nudge.py``).
 
 Reads the per-session occupancy file that ``statusline.py`` writes -- the
 UserPromptSubmit payload itself can't see ``context_window`` -- so it needs no

@@ -57,8 +57,8 @@ def ctx_window_for_model(model_id):
 def format_context(ctx_used, window_size, model_id="", show_denom=True, show_pct=True):
     """`usedK / windowK (P.P%)` colored by token-anchored thresholds.
 
-    Yellow at the wrap-nudge line (250K) for 1M models -- a context-hygiene
-    caution, NOT a pricing boundary (the 1M tier bills flat), at 50% otherwise.
+    Yellow at the wrap-nudge line (250K) for 1M models -- the context-hygiene
+    caution line (threshold rationale in nudge.py), at 50% otherwise.
     1M models also get an orange mid-band at 500K so the huge yellow
     span between the caution line and auto-compact has a visible
     midpoint cue. Red at `window_size - 33K compact buffer - 20K

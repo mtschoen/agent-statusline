@@ -268,8 +268,8 @@ giving ~1–2 turns of headroom before auto-compact fires. Set
 and the red band tracks it.
 
 Context yellow is **token-anchored on 1M models** (250K, the wrap-nudge caution
-line - the 1M tier bills flat, so this is a context-hygiene cue, not a pricing
-boundary) and **fraction-anchored otherwise** (50%, where model accuracy starts
+line - rationale under "Wrap nudge" below) and **fraction-anchored otherwise**
+(50%, where model accuracy starts
 to degrade - a fill-fraction signal, not a token target). The 1M case keeps the
 caution zone visually distinct.
 
@@ -711,10 +711,13 @@ want pace tracking with burn-rate % deltas,
 
 The Opus 1M-context tier bills at a **flat per-token rate** - there is no
 surcharge above 200K (confirmed against current Anthropic docs and against
-`~/.claude.json` billing across 28 Opus[1m] sessions). So the wrap nudge is
-about **context hygiene**, not cost avoidance: long sessions accumulate
-cache-read tokens on every turn (real spend, just not penalized) and model
-recall degrades as the window fills. This repo ships an optional
+`~/.claude.json` billing across 28 Opus[1m] sessions). Cost still scales
+**linearly** with carried context, though: every turn re-reads the whole prefix
+at the 0.1x cache-read rate, and an idle gap past the cache TTL re-writes it
+all at the 2x write rate - a fresh session's one-time prefix write pays for
+itself within a few turns (arithmetic in `statusline_lib/nudge.py`). Add that
+model recall degrades as the window fills, and long sessions are worth wrapping
+even without a pricing cliff. This repo ships an optional
 [`UserPromptSubmit` hook](https://code.claude.com/docs/en/hooks) that injects a
 **one-shot**, gentle reminder to the agent - "you're around NK of context,
 consider offering `/wrap` before ~300K" - the first time a session crosses

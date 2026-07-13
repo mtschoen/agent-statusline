@@ -6,13 +6,16 @@ Only the statusline's stdin payload carries live context-window occupancy
 So the statusline writes the occupancy to a per-session state file on every
 render, and the nudge hook reads that file -- no transcript walk required.
 
-The threshold is 250K tokens. There is NO pricing cliff here: the Opus
+The threshold is 250K tokens. There is no pricing *cliff* at 200K -- the Opus
 1M-context tier bills at a flat per-token rate (verified 2026-06 against current
-Anthropic docs and against ~/.claude.json billing across 28 Opus[1m] sessions --
-no 2x surcharge above 200K). So the nudge is about context hygiene, not cost
-avoidance: long sessions accumulate cache-read tokens on every turn (real spend,
-just not penalized) and model recall degrades as the window fills, so ~250K is a
-sensible point to start offering a clean wrap before the ~300K soft ceiling.
+Anthropic docs and ~/.claude.json billing across 28 Opus[1m] sessions) -- but
+cost still scales linearly with carried context: every turn re-reads the whole
+prefix at the 0.1x cache-read rate (~$0.13/turn more at 300K than a fresh
+session; a fresh session's one-time 2x prefix write pays back in ~3 turns), and
+an idle gap past the cache TTL re-writes the entire prefix at 2x (~$3 at 300K
+on the 1h TTL). Model recall also degrades as the window fills -- the primary
+reason. Together they make ~250K a sensible point to start offering a clean
+wrap before the ~300K soft ceiling.
 
 State lives under ``~/.claude/state`` (override with ``CLAUDE_STATE_DIR`` for
 tests). Both files are keyed by session id so concurrent sessions never clobber
@@ -26,7 +29,7 @@ from .base import sanitize_state_key
 from .base import state_dir as _resolve_state_dir
 
 # Context-hygiene caution line; also the statusline yellow anchor on 1M models.
-# NOT a pricing boundary -- the 1M tier bills flat (see module docstring).
+# Not a billing cliff -- cost scales linearly with context (module docstring).
 NUDGE_THRESHOLD_TOKENS = 250_000
 
 # Soft ceiling the nudge text points at; past here a wrap is overdue.
@@ -41,8 +44,8 @@ def format_nudge(ctx_used):
     ceiling_k = NUDGE_SOFT_CEILING_TOKENS // 1000
     return (
         f"This session is around {used_k}K tokens of context. Model recall "
-        "degrades as the window fills (cost is NOT a concern -- the 1M tier "
-        f"bills flat), so past ~{ceiling_k}K it is usually worth winding "
+        "degrades as the window fills, and every turn re-reads the full "
+        f"context, so past ~{ceiling_k}K it is usually worth winding "
         "down. If you are at a natural stopping point, consider suggesting "
         "`/wrap` to the user to close the session cleanly. Do not interrupt "
         "in-progress work -- finish the current thread first, and skip the "

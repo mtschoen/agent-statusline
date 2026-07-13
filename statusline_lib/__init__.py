@@ -223,6 +223,7 @@ from .qwen import (
 from .sessions import (
     _SESSION_DEBOUNCE_DWELL_SECONDS,
     _count_via_psutil,
+    _is_child_session_env,
     _load_debounce_state,
     _load_session_count_cache,
     _process_matches,

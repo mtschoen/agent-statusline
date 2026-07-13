@@ -4,9 +4,12 @@ Detects other Claude Code sessions running in the same cwd so the
 statusline can warn that a second interactive instance is active here.
 
 Enumerates `claude` processes whose own cwd matches, which are not in
-`-p` headless mode (scripted runs), and which pass the process-tree test
-in `_is_excluded_by_tree`: a real session is launched by a live shell, so
-a claude descendant of a claude (update check, helper, spawned agent
+`-p` headless mode (scripted runs), which don't carry Claude Code's own
+child-session environment marker (`_is_child_session_env` -- a subagent's
+tool-execution process, ground truth straight from the harness, no
+ancestry needed), and which pass the process-tree test in
+`_is_excluded_by_tree`: a real session is launched by a live shell, so a
+claude descendant of a claude (update check, helper, spawned agent
 runtime) or a claude whose launching parent is dead (disowned helper,
 dead-terminal zombie) is never an independent session no matter how long
 it lives -- structural truth where a time-based dwell can't work. Ground
@@ -192,6 +195,34 @@ def _process_matches(name, cmdline, cwd, target_cwd):
     return os.path.normcase(cwd) == os.path.normcase(target_cwd)
 
 
+# Claude Code sets this on processes it spawns to run a subagent's own tool
+# calls (issue #11: a Task-tool subagent sharing the parent's cwd was
+# tripping the [N sessions] badge). Verified empirically 2026-07-12: a live
+# Task-tool subagent's own Bash-tool child process carries
+# CLAUDE_CODE_CHILD_SESSION=1 in its environment while the shared top-level
+# `claude.exe` process it runs inside (and genuine independent sessions) do
+# not. This is authoritative straight from the harness -- no ancestry
+# needed -- so it catches shapes the process-tree walk can't see through
+# (a detached/relaunched spawn whose immediate parent isn't the session
+# that launched it).
+_CHILD_SESSION_ENV_VAR = "CLAUDE_CODE_CHILD_SESSION"
+_FALSY_ENV_VALUES = ("", "0", "false", "False")
+
+
+def _is_child_session_env(env):
+    """Pure classifier: does `env` (a process environment mapping, or None
+    when unreadable) carry Claude Code's child-session marker?
+
+    None/empty/falsy values are never a marker -- unreadable environ() (e.g.
+    AccessDenied) must fail OPEN here (not excluded), matching the rest of
+    this module's philosophy: at worst reproduces the old overcount, never
+    hides a real session.
+    """
+    if not env:
+        return False
+    return env.get(_CHILD_SESSION_ENV_VAR, "") not in _FALSY_ENV_VALUES
+
+
 class _LazySnapshot:
     """pid -> (ppid, name, create_time) mapping, filled on demand.
 
@@ -264,9 +295,18 @@ def _count_via_psutil(target_cwd, psutil):
             pcwd = p.cwd()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-        if _process_matches(
-            name, cmdline, pcwd, target_cwd
-        ) and not _is_excluded_by_tree(pid, snap, cmdline_of):
+        if not _process_matches(name, cmdline, pcwd, target_cwd):
+            continue
+        # environ() is only worth the syscall once name/cmdline/cwd already
+        # matched. Unreadable -> None -> _is_child_session_env fails open
+        # (not excluded), same as the tree walk's AccessDenied handling.
+        try:
+            env = p.environ()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            env = None
+        if _is_child_session_env(env):
+            continue
+        if not _is_excluded_by_tree(pid, snap, cmdline_of):
             count += 1
     return count
 

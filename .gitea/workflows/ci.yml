@@ -142,8 +142,12 @@ jobs:
         # psutil exercises the real process-enumeration path in the active-session
         # check instead of the mtime fallback (matches the Linux test job).
         # coverage powers the 100% line-coverage gate below.
+        # python -m pip, not bare pip: python-build-standalone install_only
+        # Windows archives ship pip as a module only (Scripts\ holds a single
+        # .empty placeholder, no pip.exe shim), so bare `pip` fails on any
+        # freshly provisioned runner (2026-07-16, first run on the chonkers box).
         shell: pwsh
-        run: pip install psutil coverage
+        run: python -m pip install psutil coverage
 
       - name: Check syntax (py_compile)
         shell: pwsh

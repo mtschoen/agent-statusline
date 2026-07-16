@@ -104,10 +104,11 @@ def _check_active_teammate_with_cost(failures):
         os.makedirs(sub_dir)
         jsonl = os.path.join(sub_dir, "agent-awatchme-abc123.jsonl")
         with open(jsonl, "w", encoding="utf-8") as f:
-            # opus 1M input tokens -> $5.00, but model here is sonnet: 1M
-            # input @ $3/Mtok -> $3.00.
+            # opus 1M input tokens -> $5.00, but model here is a generic
+            # sonnet: 1M input @ $3/Mtok -> $3.00. (Use sonnet-4-6, not
+            # sonnet-5 -- the latter is now a distinct, date-aware family.)
             f.write(
-                _assistant_line("claude-sonnet-5", {"input_tokens": 1_000_000}) + "\n"
+                _assistant_line("claude-sonnet-4-6", {"input_tokens": 1_000_000}) + "\n"
             )
         os.utime(jsonl, (990.0, 990.0))  # 10s before "now" -> active
 

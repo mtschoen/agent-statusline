@@ -149,7 +149,15 @@ def _pace_hourly_for_file(path, seen_ids, win_start_unix, n_buckets):
                     last_model = model_id
                 index = int((ts - win_start_unix) // 3600)
                 if 0 <= index < n_buckets:
-                    buckets[index] += _cost_for_turn(usage, model_id or last_model)
+                    # Date prefix (UTC) for date-aware sonnet-5 pricing. The
+                    # pace walk carries only the parsed epoch, so the date is
+                    # derived from it rather than the raw ISO string; the two
+                    # agree except within a sub-day timezone window around the
+                    # 2026-09-01 boundary, immaterial to a live pace estimate.
+                    date_prefix = datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
+                    buckets[index] += _cost_for_turn(
+                        usage, model_id or last_model, date_prefix
+                    )
     except OSError:
         return [0.0] * n_buckets
     return buckets

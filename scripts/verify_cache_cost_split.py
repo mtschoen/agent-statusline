@@ -253,20 +253,35 @@ def _check_format_cache_read_cost_not_passed_through_fmt(failures):
 def _check_model_rates(failures):
     # Fable 5 bills $10/$50 per MTok (platform.claude.com models overview).
     # Before the fable row existed, _rates_for fell back to sonnet ($3/$15)
-    # and every fable session under-estimated cost 3.33x.
+    # and every fable session under-estimated cost 3.33x. Mythos ids map to the
+    # same Fable family. Sonnet 5 is date-aware: intro $2/$10 through 2026-08-31,
+    # standard $3/$15 from 2026-09-01. "sonnet-5" must NOT catch "sonnet-4-5".
     from statusline_lib.cost import _rates_for
 
+    # (model_id, date_prefix, expected)
     cases = [
-        ("claude-fable-5", (10.0, 50.0)),
-        ("claude-fable-5[1m]", (10.0, 50.0)),
-        ("claude-opus-4-8", (5.0, 25.0)),
-        ("claude-haiku-4-5", (1.0, 5.0)),
-        ("totally-unknown-model", (3.0, 15.0)),  # sonnet fallback
+        ("claude-fable-5", "", (10.0, 50.0)),
+        ("claude-fable-5[1m]", "", (10.0, 50.0)),
+        ("claude-mythos-preview", "", (10.0, 50.0)),
+        ("claude-opus-4-8", "", (5.0, 25.0)),
+        ("claude-haiku-4-5", "", (1.0, 5.0)),
+        ("totally-unknown-model", "", (3.0, 15.0)),  # sonnet fallback
+        # Sonnet 5 date-aware boundary.
+        ("claude-sonnet-5", "2026-05-10", (2.0, 10.0)),
+        ("claude-sonnet-5", "2026-08-31", (2.0, 10.0)),
+        ("claude-sonnet-5", "2026-09-01", (3.0, 15.0)),
+        ("claude-sonnet-5", "2026-09-15", (3.0, 15.0)),
+        ("claude-sonnet-5", "", (2.0, 10.0)),  # no date -> intro
+        # Non-collision: sonnet-4-5 stays generic sonnet, date-independent.
+        ("claude-sonnet-4-5", "2026-05-10", (3.0, 15.0)),
+        ("claude-sonnet-4-5", "2026-09-15", (3.0, 15.0)),
     ]
-    for model_id, expected in cases:
-        got = _rates_for(model_id)
+    for model_id, date_prefix, expected in cases:
+        got = _rates_for(model_id, date_prefix)
         if got != expected:
-            failures.append(f"rates for {model_id!r}: {got!r} != {expected!r}")
+            failures.append(
+                f"rates for {model_id!r} @ {date_prefix!r}: {got!r} != {expected!r}"
+            )
 
 
 def _check_parse_ts_bad_value(failures):

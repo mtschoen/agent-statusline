@@ -9,7 +9,6 @@ Run from anywhere; imports from `schoen-claude-status` by path.
 """
 
 import builtins
-import contextlib
 import json
 import os
 import sys
@@ -26,34 +25,6 @@ from statusline_lib.base import (
     ramp_color,
 )
 from statusline_lib.pace import ARROW_DOWN, ARROW_UP, ON_TARGET_GLYPH
-
-
-def _check_cache_dedupes_walk(failures):
-    import tempfile
-
-    calls = {"n": 0}
-    real_sum = burnrate._sum_window_spend
-    real_path = burnrate._SPEND_CACHE_PATH
-    fd, tmp = tempfile.mkstemp(prefix="burnrate-cache-")
-    os.close(fd)
-    os.remove(tmp)  # start with no cache file present
-    burnrate._SPEND_CACHE_PATH = tmp
-    burnrate._sum_window_spend = lambda ws: (
-        calls.__setitem__("n", calls["n"] + 1),
-        12.5,
-    )[1]
-    try:
-        a = burnrate._window_spend_cached(_NOW - 300)
-        b = burnrate._window_spend_cached(_NOW - 300)
-    finally:
-        burnrate._sum_window_spend = real_sum
-        burnrate._SPEND_CACHE_PATH = real_path
-        with contextlib.suppress(OSError):
-            os.remove(tmp)
-    if a != 12.5 or b != 12.5:
-        failures.append(f"cache should return the walked total; got {a!r}, {b!r}")
-    if calls["n"] != 1:
-        failures.append(f"second cached call should not re-walk; walks={calls['n']}")
 
 
 def _check_five_min_rate_render(failures):
@@ -327,29 +298,6 @@ def _check_sum_window_spend_no_roots(failures):
         )
 
 
-def _check_window_spend_cache_write_oserror(failures):
-    # burnrate.py lines 121-123: cache write OSError is swallowed; the computed total
-    # is still returned. Point the cache path at an unwritable location.
-    import tempfile
-
-    real_path = burnrate._SPEND_CACHE_PATH
-    real_sum = burnrate._sum_window_spend
-    burnrate._sum_window_spend = lambda ws: 7.5
-    # Use a path inside a nonexistent directory so the open() raises OSError.
-    with tempfile.TemporaryDirectory() as tmp:
-        bad_path = os.path.join(tmp, "no_such_dir", "cache.json")
-        burnrate._SPEND_CACHE_PATH = bad_path
-        try:
-            result = burnrate._window_spend_cached(_NOW - 300)
-        finally:
-            burnrate._sum_window_spend = real_sum
-            burnrate._SPEND_CACHE_PATH = real_path
-    if result != 7.5:
-        failures.append(
-            f"_window_spend_cached should return total even when cache write fails; got {result!r}"
-        )
-
-
 def _check_day_field_no_budget(failures):
     # burnrate.py line 278: format_day_budget returns "" when no budget is configured.
     real = os.environ.get("STATUSLINE_DAILY_BUDGET")
@@ -366,7 +314,6 @@ def _check_day_field_no_budget(failures):
 
 
 def check(failures):
-    _check_cache_dedupes_walk(failures)
     _check_five_min_rate_render(failures)
     _check_omitted_when_idle_no_budget(failures)
     _check_budget_parse(failures)
@@ -382,7 +329,6 @@ def check(failures):
     _check_spend_from_path_memory_error(failures)
     _check_sum_window_spend_fixture(failures)
     _check_sum_window_spend_no_roots(failures)
-    _check_window_spend_cache_write_oserror(failures)
     _check_day_field_no_budget(failures)
 
 

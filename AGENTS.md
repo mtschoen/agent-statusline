@@ -67,16 +67,31 @@ clean CI runner (13 lines failed the gate's first run exactly this way).
 
 ## Render-budget invariant (no long sync calls in the render path)
 
-Three production incidents shared one disease — a synchronous call inside a
+Four production incidents shared one disease — a synchronous call inside a
 render that can block for seconds (2026-07-02 SMB stats + walker stalls, 20s;
 2026-07-10 psutil attr expansion, 11s; 2026-07-11 beacons-history over SMB,
-5s timeout stalls). `scripts/verify_render_budget.py` enforces the invariant
-mechanically: every subprocess call reachable from a render carries an
+5s timeout stalls; 2026-07-16 pace/spend transcript walks over an SMB extra
+root, ~5.5s renders — Claude Code replaces the render subprocess at its
+refresh interval (~3s), so no render ever finished, the TTL cache could never
+be rewritten, and the statusline froze at the session's first pre-token
+render, `0 / 1.00M`). `scripts/verify_render_budget.py` enforces the
+invariant mechanically: every subprocess call reachable from a render carries an
 explicit `timeout=` <= 2s (wrapper defaults included), `Popen`/`time.sleep`
 are banned there, and a cold-cache end-to-end render against a synthetic
 corpus must beat an 8s wall-clock budget. If a new data source can't fit the
 cap, it doesn't belong in the render path — cache it, delegate it to the
 walker, or precompute it from a hook.
+
+The sanctioned shape for transcript-walk data is stale-while-revalidate
+(`statusline_lib/refresh.py`, added after the 2026-07-16 freeze): the render
+serves whatever the cache holds — a stale entry beats a blank field beats a
+frozen line — and on a stale/missing entry spawns a detached child
+(`process_safe.spawn_detached`) that recomputes and rewrites the cache,
+debounced by an inflight marker. The pace hourly walk and the burn-rate
+spend rescan both go through it; a new walk-priced data source should too,
+not grow its own inline TTL cache (an inline recompute above the ~3s kill
+window can never complete, so its cache can never warm — the death spiral is
+structural, not a tuning problem).
 
 Performance-conformance tiers (same script enforces the first two; budgets
 ratchet down per the PLAN.md render-perf item):

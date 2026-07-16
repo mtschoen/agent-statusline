@@ -1,13 +1,39 @@
 # schoen-claude-status - Test Report
 
-`2026-07-11`
+`2026-07-16`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
-| **Mode** | maintain (lint AND coverage - both now hard CI gates) |
-| **Tests** | 49 `scripts/verify_*.py`, all passing locally |
-| **Git** | `2d3b77c` (`main`) |
+| **Mode** | maintain (lint AND coverage - both hard CI gates) |
+| **Tests** | 58 `scripts/verify_*.py`, all passing locally |
+| **Git** | `e4320e5` (`main`, plus this change at time of writing) |
+| **Coverage** | 2089/2089 statements (100%), 0 exclusion annotations |
+| **Lint** | ruff format 0 / ruff check 0; aislop 91/100 Healthy (0 errors, 6 pre-existing file-size warnings, gate failBelow 90); 0 suppressions |
+
+**This run (stale-while-revalidate transcript caches - frozen-statusline
+fix):** the pace hourly walk and the burn-rate spend rescan no longer run
+inline in a render. With `/mnt/chonkers/.claude/projects` (6.6K JSONLs over
+CIFS) in the walker roots, a TTL-miss render cost ~5.5s; Claude Code
+replaces the render subprocess at its ~3s refresh interval, so no render
+finished, the cache could never be rewritten, and the live statusline froze
+at the session's first pre-token render (`0 / 1.00M`). New
+`statusline_lib/refresh.py` (57 statements, 100%) spawns a detached
+recompute child via the vendored `process_safe.spawn_detached`, debounced
+by an inflight marker (claims pruned after 120s, released on spawn
+failure); `pace._pace_hourly_cached` and `burnrate._window_spend_cached`
+serve stale entries while it runs and degrade honestly on a true miss ([] /
+0.0 / the nearest trailing-window grid cell within 60s). Both cache files
+moved to multi-entry v2 formats (v1 abandoned in place); readers drop
+non-dict entries, so torn or mixed-format files read as absent instead of
+crashing (`verify_hide_cost` caught exactly that against a live
+mid-deploy cache). Three new verify scripts (pace_refresh, spend_refresh,
+refresh_spawner - the last runs the real child snippet in a real
+interpreter against a fixture corpus); the superseded inline-contract
+checks were removed from verify_pace_walk and verify_burn_rate. Live smoke
+on llamabox: cold render 5.9s -> 0.18s, warm 0.09s, detached children
+wrote both caches within ~10s and the burn-rate/pace fields returned.
+`statusline_lib` remains at **100%** (2089/2089 statements).
 
 **This run (render-timer port + perf-ratchet steps 1+2, two reviewed
 branches merged):** ported the Pi footer's render-timing instrumentation

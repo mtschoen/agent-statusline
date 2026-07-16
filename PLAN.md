@@ -25,16 +25,34 @@
       accumulates; further shrink install.py below aislop's 400-line
       file-size threshold (473 after the wave-2 extraction).
 
-- [ ] Render-perf ratchet step 3 (conformance test:
-      scripts/verify_render_budget.py, warm-core budget now 100ms — see
-      Done for steps 1+2). Wave-3 async-refresher split: renders NEVER pay a
-      TTL-miss walk inline — the render uses the stale cache and kicks a
-      detached refresher for the next render (kills the p90/max tail).
-      Target: cached-path core < 10ms, which is also the Pi bridge's
+- [ ] Render-perf ratchet step 3, remainder (conformance test:
+      scripts/verify_render_budget.py, warm-core budget still 100ms): the
+      async-refresher split landed 2026-07-16 for the two walk-priced
+      sources (see Done); what remains is ratcheting `_CORE_BUDGET_MS`
+      100 -> 10 once the residual per-render work (git ref, beacons,
+      session count) fits. The <10ms cached path is also the Pi bridge's
       per-keypress budget. Blocking on first/second render (cwd/git basics)
       stays acceptable per the cold budget (8s, realistically ~1s).
 
 ## Done
+
+- Async-refresher split (render-perf step 3, walk-priced sources) CLOSED
+  (2026-07-16, fixing the frozen-statusline incident on llamabox): renders
+  never pay a TTL-miss transcript walk inline. `statusline_lib/refresh.py`
+  spawns a detached recompute child (inflight-marker debounced, claim
+  released on spawn failure); `pace._pace_hourly_cached` and
+  `burnrate._window_spend_cached` serve stale entries while it runs and
+  degrade honestly ([] / 0.0 / nearest trailing-window grid cell) on a
+  true miss. Both caches went multi-entry v2 (v1 files abandoned in
+  place); readers drop non-dict entries so torn/mixed-format files can't
+  crash a render. Measured: cold render 5.9s -> 0.18s, warm 0.09s. New
+  verify scripts: verify_pace_refresh / verify_spend_refresh /
+  verify_refresh_spawner (the last runs the real child snippet in a real
+  interpreter against a fixture corpus). Root cause of the incident: with
+  an SMB extra root the inline walk cost ~5.5s, Claude Code replaces the
+  render at refreshInterval (~3s), a killed render never reaches its cache
+  write, so the cache could never warm and the line froze at the session's
+  first pre-token render (`0 / 1.00M`).
 
 - Render-perf ratchet steps 1+2 CLOSED (2026-07-11, sdd/ratchet-12): TTL disk
   caches (2.5s TTL, atomic tmp+os.replace writes, keyed per-cwd/per-session

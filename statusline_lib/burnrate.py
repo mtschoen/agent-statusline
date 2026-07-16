@@ -32,6 +32,7 @@ from .pace import (
     weekly_sustainable_rate,
 )
 from .prefs import pref
+from .refresh import maybe_spawn_refresh
 from .walker import _walker_root_list
 
 # Neutral grey for the rate number; the needle glyph carries the verdict color.
@@ -51,7 +52,16 @@ def _rate_color(rate, target):
 
 
 _SPEND_CACHE_TTL_SECONDS = 15
-_SPEND_CACHE_PATH = os.path.join(app_dir(), ".statusline-burnrate-cache-v1.json")
+# v2: per-entry computed_at ({win_start: {computed_at_unix, total}}) so a
+# stale entry can be served while a detached child recomputes it; v1 shared
+# one computed_at across all windows and is abandoned in place.
+_SPEND_CACHE_PATH = os.path.join(app_dir(), ".statusline-burnrate-cache-v2.json")
+_SPEND_CACHE_MAX_ENTRIES = 16
+# Trailing windows (now-300, midnight, now-86400) move one TTL grid step per
+# expiry, so an exact-key lookup misses every step; a neighbor within this
+# tolerance is the same window one step ago. Distinct windows sit hours
+# apart and can never fall inside it.
+_SPEND_NEIGHBOR_TOLERANCE_SECONDS = 60
 
 
 def _spend_from_path(path, seen_ids, win_start):
@@ -97,11 +107,46 @@ def _sum_window_spend(win_start):
     return total
 
 
-def _window_spend_cached(win_start):
-    """15s-TTL scalar cache around _sum_window_spend, multi-keyed by win_start.
+def _read_spend_entries():
+    """The v2 cache's entry dict ({win_start: {computed_at_unix, total}});
+    {} when absent, unreadable, or not the expected shape (a torn write must
+    read as "no data", never crash the render)."""
+    try:
+        with open(_SPEND_CACHE_PATH, encoding="utf-8") as f:
+            sums = json.load(f)["sums"]
+    except (OSError, ValueError, TypeError, KeyError):
+        return {}
+    if not isinstance(sums, dict):
+        return {}
+    # Non-dict values (a torn write, or a stray v1-format scalar) read as
+    # absent rather than crashing the render.
+    return {key: entry for key, entry in sums.items() if isinstance(entry, dict)}
 
-    A render asks for up to three windows (5-min, 24h, midnight); one cache file
-    holds all of them so they don't evict each other.
+
+def _nearest_spend(entries, win_start):
+    """The closest entry's total within _SPEND_NEIGHBOR_TOLERANCE_SECONDS of
+    `win_start` - the same trailing window one grid step ago - or 0.0 when
+    nothing usable is cached yet (honest no-data until the child lands)."""
+    best = None
+    for key, entry in entries.items():
+        try:
+            distance = abs(int(key) - win_start)
+        except ValueError:
+            continue
+        in_tolerance = distance <= _SPEND_NEIGHBOR_TOLERANCE_SECONDS
+        if in_tolerance and (best is None or distance < best[0]):
+            best = (distance, entry.get("total", 0.0))
+    return best[1] if best else 0.0
+
+
+def _window_spend_cached(win_start):
+    """Serve the window's spend total from the cache - stale included - and
+    hand recomputation to a detached child when the entry is stale or missing
+    (stale-while-revalidate; the full-fleet rescan never runs on the render
+    path - see refresh.py for why an inline walk freezes the statusline).
+
+    A render asks for up to three windows (5-min, 24h, midnight); one cache
+    file holds all of them so they don't evict each other.
 
     win_start is quantized to the TTL grid first: trailing windows are anchored
     to the moving clock (e.g. now - 300), so the raw value is different on every
@@ -110,25 +155,36 @@ def _window_spend_cached(win_start):
     noise for a 5-minute rate, and makes renders inside one TTL share a key.
     """
     win_start = int(win_start) - int(win_start) % _SPEND_CACHE_TTL_SECONDS
-    win_key = str(win_start)
-    now = _now_unix()
-    sums = {}
-    try:
-        with open(_SPEND_CACHE_PATH, encoding="utf-8") as f:
-            cached = json.load(f)
-        if now - cached.get("computed_at_unix", 0) < _SPEND_CACHE_TTL_SECONDS:
-            sums = cached.get("sums", {}) or {}
-            if win_key in sums:
-                return sums[win_key]
-    except (OSError, ValueError, KeyError):
-        sums = {}
-    total = _sum_window_spend(win_start)
-    sums[win_key] = total
+    entries = _read_spend_entries()
+    entry = entries.get(str(win_start))
+    if entry is not None:
+        if _now_unix() - entry.get("computed_at_unix", 0) < _SPEND_CACHE_TTL_SECONDS:
+            return entry.get("total", 0.0)
+        maybe_spawn_refresh("window-spend", win_start)
+        return entry.get("total", 0.0)
+    maybe_spawn_refresh("window-spend", win_start)
+    return _nearest_spend(entries, win_start)
+
+
+def refresh_window_spend_cache(win_start_unix):
+    """Recompute one window's spend total and persist it for the render's
+    cached read. Runs in the detached refresh child (refresh.run_refresh),
+    never on the render path. `win_start_unix` arrives already quantized (the
+    render quantizes before spawning). Keeps the newest
+    _SPEND_CACHE_MAX_ENTRIES entries so concurrent windows don't evict each
+    other."""
+    total = _sum_window_spend(win_start_unix)
+    entries = _read_spend_entries()
+    entries[str(int(win_start_unix))] = {
+        "computed_at_unix": _now_unix(),
+        "total": total,
+    }
+    newest = sorted(entries.items(), key=lambda item: item[1]["computed_at_unix"])
     try:
         with open(_SPEND_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump({"computed_at_unix": now, "sums": sums}, f)
+            json.dump({"sums": dict(newest[-_SPEND_CACHE_MAX_ENTRIES:])}, f)
     except OSError:
-        # Best-effort cache write; failure just means we recompute next render.
+        # Best-effort persist; failure just means the next render respawns.
         pass
     return total
 

@@ -1,6 +1,7 @@
-"""Verify _pace_hourly_cached (cache hit/miss/expiry/write-error), _weekly_deltas
-guards, weekly_needle (verbose + exception), and _discover_pace_groups (parent +
-subagent grouping, mtime-OSError skips) in statusline_lib/pace.py.
+"""Verify _weekly_deltas guards, weekly_needle (verbose + exception), and
+_discover_pace_groups (parent + subagent grouping, mtime-OSError skips) in
+statusline_lib/pace.py. The _pace_hourly_cached stale-while-revalidate
+contract lives in verify_pace_refresh.py.
 
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
@@ -33,109 +34,6 @@ def _pin(now, hourly):
 def _restore(real_now, real_cached):
     pace._now_unix = real_now
     pace._pace_hourly_cached = real_cached
-
-
-def _check_cache_miss_then_hit(failures):
-    """Cache miss writes the file; second call within TTL is a cache hit."""
-    with tempfile.TemporaryDirectory() as tmp:
-        cache_path = os.path.join(tmp, "pace-cache.json")
-        real_cache_path = pace._PACE_HOURLY_CACHE_PATH
-        pace._PACE_HOURLY_CACHE_PATH = cache_path
-
-        real_walk = pace._walk_pace_hourly
-        calls = []
-
-        def fake_walk(win_start_unix):
-            calls.append(win_start_unix)
-            return [1.0, 2.0, 3.0]
-
-        pace._walk_pace_hourly = fake_walk
-        real_now = pace._now_unix
-        pace._now_unix = lambda: _WIN_START + 10
-
-        try:
-            result1 = pace._pace_hourly_cached(_WIN_START)
-            if result1 != [1.0, 2.0, 3.0]:
-                failures.append(f"cache miss: expected [1,2,3], got {result1!r}")
-            if len(calls) != 1:
-                failures.append(f"cache miss: expected 1 walk call, got {len(calls)}")
-
-            result2 = pace._pace_hourly_cached(_WIN_START)
-            if result2 != [1.0, 2.0, 3.0]:
-                failures.append(f"cache hit: expected [1,2,3], got {result2!r}")
-            if len(calls) != 1:
-                failures.append(
-                    f"cache hit: should still be 1 walk call, got {len(calls)}"
-                )
-        finally:
-            pace._PACE_HOURLY_CACHE_PATH = real_cache_path
-            pace._walk_pace_hourly = real_walk
-            pace._now_unix = real_now
-
-
-def _check_cache_expired(failures):
-    """Cache miss when the cached entry is older than the TTL."""
-    with tempfile.TemporaryDirectory() as tmp:
-        cache_path = os.path.join(tmp, "pace-cache-expired.json")
-        stale_now = _WIN_START
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "computed_at_unix": stale_now,
-                    "win_start_unix": _WIN_START,
-                    "hourly": [9.0],
-                },
-                f,
-            )
-
-        real_cache_path = pace._PACE_HOURLY_CACHE_PATH
-        pace._PACE_HOURLY_CACHE_PATH = cache_path
-        real_walk = pace._walk_pace_hourly
-        calls = []
-
-        def fake_walk(win_start_unix):
-            calls.append(win_start_unix)
-            return [5.0]
-
-        pace._walk_pace_hourly = fake_walk
-        real_now = pace._now_unix
-        pace._now_unix = lambda: stale_now + 100
-
-        try:
-            result = pace._pace_hourly_cached(_WIN_START)
-            if result != [5.0]:
-                failures.append(f"expired cache: expected [5.0], got {result!r}")
-            if len(calls) != 1:
-                failures.append(
-                    f"expired cache: expected 1 walk call, got {len(calls)}"
-                )
-        finally:
-            pace._PACE_HOURLY_CACHE_PATH = real_cache_path
-            pace._walk_pace_hourly = real_walk
-            pace._now_unix = real_now
-
-
-def _check_cache_write_oserror(failures):
-    """OSError on cache write is swallowed; result still returned (lines 213-215)."""
-    with tempfile.TemporaryDirectory() as tmp:
-        bad_cache = os.path.join(tmp, "is-a-dir")
-        os.makedirs(bad_cache)
-
-        real_cache_path = pace._PACE_HOURLY_CACHE_PATH
-        pace._PACE_HOURLY_CACHE_PATH = bad_cache
-        real_walk = pace._walk_pace_hourly
-        pace._walk_pace_hourly = lambda _ws: [7.0]
-        real_now = pace._now_unix
-        pace._now_unix = lambda: _WIN_START + 5
-
-        try:
-            result = pace._pace_hourly_cached(_WIN_START)
-            if result != [7.0]:
-                failures.append(f"cache write OSError: expected [7.0], got {result!r}")
-        finally:
-            pace._PACE_HOURLY_CACHE_PATH = real_cache_path
-            pace._walk_pace_hourly = real_walk
-            pace._now_unix = real_now
 
 
 def _check_weekly_deltas_none_guards(failures):
@@ -382,9 +280,6 @@ def _check_discover_pace_groups_subagent(failures):
 
 
 def check(failures):
-    _check_cache_miss_then_hit(failures)
-    _check_cache_expired(failures)
-    _check_cache_write_oserror(failures)
     _check_weekly_deltas_none_guards(failures)
     _check_weekly_deltas_cumulative_none(failures)
     _check_weekly_needle_deltas_none(failures)
@@ -403,8 +298,7 @@ def main():
             print(f"FAIL: {failure}")
         sys.exit(1)
     print(
-        "OK: _pace_hourly_cached hit/miss/expiry/write-error; "
-        "_weekly_deltas guards; weekly_needle verbose/exception; "
+        "OK: _weekly_deltas guards; weekly_needle verbose/exception; "
         "_discover_pace_groups parent+subagent grouping and OSError skips"
     )
 

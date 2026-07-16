@@ -1,4 +1,4 @@
-# schoen-claude-status
+# agent-statusline
 
 ## Local pre-commit gate (ruff format + check)
 

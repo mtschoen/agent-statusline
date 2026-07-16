@@ -198,8 +198,15 @@ def _build_fixture_home(root, n_sessions=8, turns_per_session=40):
 def check_cold_render_budget(failures):
     """End-to-end render with cold caches and a fixture corpus must finish
     inside the budget. Every historical incident (11-20s) violates this;
-    healthy renders are ~10x under it."""
-    with tempfile.TemporaryDirectory() as tmp:
+    healthy renders are ~10x under it.
+
+    ignore_cleanup_errors: a render with cold caches spawns a detached
+    refresh child (statusline_lib/refresh.py) that briefly holds the fixture
+    transcripts open; on Windows an open file can't be unlinked, so teardown
+    racing a straggler child raises WinError 32. The leftover tempdir is a
+    few KB and the OS temp cleaner's problem; the check's assertions are
+    unaffected."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         home = os.path.join(tmp, "home")
         _build_fixture_home(home)
         env = dict(os.environ)
@@ -275,8 +282,11 @@ def check_warm_core_median(failures):
     own path function, not a re-derived path, so this can't drift from the
     production layout) makes every one of the 9 in-process renders exercise
     the real warm-read branch.
+
+    ignore_cleanup_errors: same detached-refresh-child teardown race as
+    check_cold_render_budget (WinError 32 on Windows; see that docstring).
     """
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         home = os.path.join(tmp, "home")
         _build_fixture_home(home)
         env = dict(os.environ)

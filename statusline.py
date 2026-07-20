@@ -4,11 +4,19 @@ and prints up to three lines:
   line 2: ctx | cache | ttl | quota | cost | +/-lines  (fields omitted when their data is absent)
   line 3: session wall/api timing  ·  weekly-quota exhaustion clock (>90%)  ·  live turn beacon + calibrated ETA  ·  previous-render duration + session peak
 
+Also the single entry point for every other full-custom-render harness
+(wave-3 canonical-model fold, PLAN.md): `--statusline-platform <name>`
+selects the adapter. Antigravity CLI reuses the Claude-shaped rendering
+path below (its payload is close enough that inline `is_agy`/`agent_state`
+checks suffice); Qwen Code's payload is different enough to need its own
+adapter, so `platform_name() == "qwen"` routes to
+`statusline_lib.qwen.render_qwen_statusline` instead. Do not rename this
+file -- every deployed machine's settings embed the literal path.
+
 See README.md for layout, color thresholds, and install instructions.
 """
 
 import contextlib
-import hashlib
 import json
 import os
 import sys
@@ -49,8 +57,8 @@ try:
         hostname,
         is_local_mode,
         log_traceback,
+        platform_name,
         pref_bool,
-        read_ttl_cache,
         resolve_flags,
         safe_write,
         spinner_frame,
@@ -58,11 +66,10 @@ try:
         visible_width,
         walk_transcript,
         weekly_exhaustion,
-        write_ttl_cache,
     )
-    from statusline_lib import state_dir as _resolve_state_dir
+    from statusline_lib.gitref import _git_ref_raw_cached
     from statusline_lib.nudge import write_ctx_state
-    from statusline_lib.process_safe import ProcessTimeout, run_captured
+    from statusline_lib.qwen import render_qwen_statusline
     from statusline_lib.rendertimer import format_render_suffix, record_render
 except Exception:
     # A broken statusline_lib (mid-edit syntax error, missing module) dies
@@ -87,54 +94,8 @@ _INPUT_LOG = os.path.join(app_dir(), ".statusline-input.log")
 _ERROR_LOG = os.path.join(app_dir(), ".statusline-error.log")
 
 
-def _git_command(cwd, *arguments):
-    # run_captured (not subprocess.run) so a git credential-helper grandchild
-    # that inherits the stdout pipe can't wedge the render past the timeout
-    # (bpo-31935 / process_safe's abandon-reader pattern).
-    try:
-        result = run_captured(["git", "-C", cwd, *arguments], timeout=2)
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (OSError, ProcessTimeout):
-        pass
-    return ""
-
-
 _GIT_HASH_COLOR = "\x1b[38;5;137m"  # muted tan - distinct from the blue session badge
 _HOST_COLOR = "\x1b[38;5;96m"  # muted mauve - distinct from the tan hash and blue badge
-
-# Render-perf ratchet step 1 (PLAN.md): two git subprocess calls cost ~55ms
-# per render, uncached. A stale ref for up to a few seconds is invisible at
-# statusline cadence (~300ms refresh), so TTL-cache the raw branch/hash
-# strings on disk, keyed by cwd so concurrent sessions in different repos
-# never clobber each other's entry. The coloured rendering itself is NOT
-# cached -- colours are stable constants, so caching the plain strings keeps
-# the cache file reusable and keeps this module's ANSI styling in one place.
-#
-# Independent knob from beacon_cache.py's _BEACON_LATEST_CACHE_TTL_SECONDS --
-# the two happen to share the same 2.5s value today, but they cache unrelated
-# things (git refs vs. beacon payloads) and may reasonably diverge later.
-_GIT_REF_CACHE_TTL_SECONDS = 2.5
-
-
-def _git_ref_cache_path(cwd, state_dir=None):
-    normalized = os.path.normcase(os.path.normpath(cwd))
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-    return os.path.join(_resolve_state_dir(state_dir), f"gitref-{digest}.json")
-
-
-def _git_ref_raw_cached(cwd, state_dir=None):
-    """Return (branch, short_hash) for cwd, TTL-cached on disk. A cache miss
-    still pays the git cost inline; a hit skips both subprocess calls."""
-    path = _git_ref_cache_path(cwd, state_dir)
-    cached = read_ttl_cache(path, _GIT_REF_CACHE_TTL_SECONDS)
-    if cached is not None:
-        return cached.get("branch", ""), cached.get("short_hash", "")
-
-    branch = _git_command(cwd, "symbolic-ref", "--short", "HEAD")
-    short_hash = _git_command(cwd, "rev-parse", "--short", "HEAD")
-    write_ttl_cache(path, {"branch": branch, "short_hash": short_hash})
-    return branch, short_hash
 
 
 def _git_ref(cwd, state_dir=None):
@@ -418,10 +379,28 @@ def main():
         d = json.loads(raw)
     except Exception:
         d = {}
+    if not isinstance(d, dict):
+        # Valid JSON that isn't an object (e.g. a bare `null` or `[]`) parses
+        # without raising, so the except above never fires for it.
+        d = {}
 
     workspace = d.get("workspace") or {}
     # current_dir follows shell `cd`; project_dir is the fixed launch dir.
     cwd = workspace.get("current_dir") or d.get("cwd") or ""
+
+    if platform_name() == "qwen":
+        # Wave-3 canonical-model fold (PLAN.md): Qwen Code's payload shape is
+        # different enough from Claude Code's (own line-1 format, no cost/
+        # transcript-walk/rate-limit fields at all) that it renders through
+        # its own adapter rather than reusing the Claude-shaped fields below.
+        # qwen_statusline.py is now a thin shim that injects
+        # --statusline-platform qwen and delegates here.
+        line1, line2 = render_qwen_statusline(d, cwd, spinner_frame())
+        sys.stdout.write(line1)
+        if line2:
+            sys.stdout.write("\n" + line2)
+        return None
+
     cwd_display = _format_cwd(workspace.get("project_dir") or "", cwd)
 
     # --- Context: anchored on token counts (avoids the 1% rounding in the

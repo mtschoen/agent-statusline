@@ -36,6 +36,14 @@ from statusline_lib.claude_family_install import (
 )
 from statusline_lib.codex_install import codex_config_current, merge_codex_config
 from statusline_lib.nudge_install import _nudge_command, _nudge_markers
+from statusline_lib.platform_commands import (
+    STATUSLINE_REFRESH_SECONDS,
+    _commands_for_platform,
+    _pi_loader_contents,
+    _pi_loader_path,
+    _qwen_command_for_platform,
+)
+from statusline_lib.qwen_install import _merge_qwen_statusline, _qwen_settings_current
 from statusline_lib.settings_io import atomic_write_settings, load_settings
 
 
@@ -75,75 +83,6 @@ def _parse_args():
     return parser.parse_args()
 
 
-def _commands_for_platform(repo, platform="claude"):
-    """Return (main_target, subagent_target, main_command, subagent_command)."""
-    # On Windows, bare python/python3 resolve to the Microsoft Store alias shim,
-    # whose ~750ms per-invocation launch overhead dominated every render. Invoke
-    # the python.org build via the `py` launcher directly, skipping BOTH the
-    # Store shim AND the bash wrapper -- ~50-90ms faster and far less jittery
-    # than `bash statusline-command.sh` (Claude Code wraps the command in
-    # `cmd /c` on Windows, so no shell prefix is needed). `py -3` keeps it
-    # robust across Python minor upgrades -- no hard-coded interpreter path.
-    # On other platforms bash + python3 are already fast, so keep the portable
-    # shim (which itself prefers `py` where present -- see statusline-command.sh).
-    if os.name == "nt":
-        main_target = f"{repo}/statusline.py"
-        subagent_target = f"{repo}/subagent_statusline.py"
-        if platform == "antigravity":
-            # Antigravity CLI doesn't set ANTIGRAVITY_AGENT / ANTIGRAVITY_
-            # CONVERSATION_ID for the statusline subprocess, so app_dir()'s
-            # env-based auto-detect never fires and everything (state, error
-            # log, payload log) silently lands in ~/.claude instead of
-            # ~/.gemini/antigravity-cli. Make routing deterministic by
-            # putting the platform in the command string itself.
-            return (
-                main_target,
-                subagent_target,
-                f"py -3 {main_target} --statusline-platform antigravity",
-                f"py -3 {subagent_target} --statusline-platform antigravity",
-            )
-        return (
-            main_target,
-            subagent_target,
-            f'py -3 "{main_target}"',
-            f'py -3 "{subagent_target}"',
-        )
-    main_target = f"{repo}/statusline-command.sh"
-    subagent_target = f"{repo}/subagent-statusline.sh"
-    if platform == "antigravity":
-        return (
-            main_target,
-            subagent_target,
-            f'bash "{main_target}" --statusline-platform antigravity',
-            f'bash "{subagent_target}" --statusline-platform antigravity',
-        )
-    return (
-        main_target,
-        subagent_target,
-        f'bash "{main_target}"',
-        f'bash "{subagent_target}"',
-    )
-
-
-# statusLine only repaints on lead-session events (new prompt, tool call).
-# While the lead is idle waiting on a background Agent Teams teammate, nothing
-# retriggers it, so the teammates: line (and any other time-based segment)
-# freezes mid-run and readers never see it move. Docs: "set refreshInterval to
-# also re-run the command on a fixed timer" -- exactly this idle-wait case.
-STATUSLINE_REFRESH_SECONDS = 3
-
-
-def _qwen_command_for_platform(repo):
-    """Return (target, command) for Qwen Code statusline."""
-    # Qwen Code uses the same platform-aware invocation strategy as Claude Code.
-    target = f"{repo}/qwen_statusline.py"
-    if os.name == "nt":
-        command = f'py -3 "{target}"'
-    else:
-        command = f'bash "{repo}/qwen-statusline-command.sh"'
-    return target, command
-
-
 def _report_walker():
     # Optional native pace-walker (claude-walker). Pure speedup -- the Python
     # fallback runs identically when it isn't found. statusline_lib is already
@@ -162,29 +101,6 @@ def _report_walker():
         print(
             "                      build ~/claude-walker/cpp or set CLAUDE_WALKER_BIN to enable"
         )
-
-
-def _qwen_settings_current(settings, command):
-    """True iff Qwen ui.statusLine already matches `command`."""
-    ui = settings.get("ui") or {}
-    status_line = ui.get("statusLine") or {}
-    return (
-        status_line.get("type") == "command" and status_line.get("command") == command
-    )
-
-
-def _merge_qwen_statusline(settings, command):
-    """Insert or update ui.statusLine, preserving other ui keys."""
-    ui = settings.setdefault("ui", {})
-    ui["statusLine"] = {"type": "command", "command": command}
-
-
-def _pi_loader_path():
-    return os.path.expanduser("~/.pi/agent/extensions/agent-statusline/index.ts")
-
-
-def _pi_loader_contents(repo):
-    return f'export {{ default }} from "{repo}/pi-extension/index.ts";\n'
 
 
 def main():

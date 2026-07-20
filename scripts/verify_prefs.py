@@ -168,6 +168,13 @@ def _check_app_dir(failures):
         if not res.endswith(".claude"):
             failures.append(f"app_dir with platform=claude failed: {res}")
 
+        # 2b. STATUSLINE_PLATFORM = "qwen"
+        os.environ.clear()
+        os.environ["STATUSLINE_PLATFORM"] = "qwen"
+        res = app_dir()
+        if not res.endswith(".qwen"):
+            failures.append(f"app_dir with platform=qwen failed: {res}")
+
         # 3. No env variables
         os.environ.clear()
         res = app_dir()

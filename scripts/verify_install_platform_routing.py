@@ -1,5 +1,6 @@
-"""Verify install.py's `_commands_for_platform` deterministically routes the
-Antigravity CLI statusline to ~/.gemini/antigravity-cli.
+"""Verify statusline_lib.platform_commands's `_commands_for_platform`
+deterministically routes the Antigravity CLI statusline to
+~/.gemini/antigravity-cli.
 
 Root cause of the "Antigravity statusline throws tons of errors" report: the
 configured command relied on Antigravity CLI setting ANTIGRAVITY_AGENT /
@@ -24,7 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from install import _commands_for_platform
+from statusline_lib.platform_commands import _commands_for_platform
 
 
 def _check_antigravity_windows_command_has_platform_flag(failures):
@@ -86,10 +87,32 @@ def _check_claude_command_unaffected(failures):
         )
 
 
+def _check_posix_claude_command_uses_bash_wrapper(failures):
+    real_name = os.name
+    try:
+        os.name = "posix"
+        main_t, sub_t, main_cmd, sub_cmd = _commands_for_platform(
+            "/repo", platform="claude"
+        )
+    finally:
+        os.name = real_name
+
+    if (
+        main_t != "/repo/statusline-command.sh"
+        or sub_t != "/repo/subagent-statusline.sh"
+    ):
+        failures.append(f"posix claude targets unexpected: {main_t!r} / {sub_t!r}")
+    if main_cmd != 'bash "/repo/statusline-command.sh"':
+        failures.append(f"posix claude main command unexpected: {main_cmd!r}")
+    if sub_cmd != 'bash "/repo/subagent-statusline.sh"':
+        failures.append(f"posix claude subagent command unexpected: {sub_cmd!r}")
+
+
 def check(failures):
     _check_antigravity_windows_command_has_platform_flag(failures)
     _check_antigravity_posix_command_has_platform_flag(failures)
     _check_claude_command_unaffected(failures)
+    _check_posix_claude_command_uses_bash_wrapper(failures)
 
 
 def main():

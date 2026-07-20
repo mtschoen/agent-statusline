@@ -22,27 +22,56 @@
 - [ ] Parked from the 2026-07-11 final whole-branch review (cosmetic, no
       urgency): split base.py's entry-script glue (hostname/spinner_frame/
       safe_write/log_traceback/is_local_mode) into entryglue.py IF more glue
-      accumulates; further shrink install.py below aislop's 400-line
-      file-size threshold (473 after the wave-2 extraction).
-
-- [ ] Render-perf ratchet step 3, remainder (conformance test:
-      scripts/verify_render_budget.py, warm-core budget still 100ms): the
-      async-refresher split landed 2026-07-16 for the two walk-priced
-      sources (see Done); what remains is ratcheting `_CORE_BUDGET_MS`
-      100 -> 10 once the residual per-render work (git ref, beacons,
-      session count) fits. The <10ms cached path is also the Pi bridge's
-      per-keypress budget. Blocking on first/second render (cwd/git basics)
-      stays acceptable per the cold budget (8s, realistically ~1s).
-- [ ] install.py dedup bug: `_find_nudge_hook` returns only the FIRST
-  `UserPromptSubmit` entry whose command contains `wrap_nudge.py`. If two ever
-  coexist (e.g. an old plain-format entry plus the current logging+`exit 0`
-  one), `_upsert_nudge_hook` updates one and leaves the duplicate, so the nudge
-  fires twice per prompt. Fix: scan ALL `UserPromptSubmit` groups, keep/update a
-  single matching hook, and remove the extras. Found in schoen's live
-  settings.json on 2026-06-08 (manually deduped there).
+      accumulates.
 
 ## Done
 
+- Render-perf ratchet step 3, remainder CLOSED (2026-07-19, claude/budget-
+  ratchet): the async-refresher split covered pace/spend in 2026-07-16; the
+  residual per-render work it left inline -- git ref, beacons-latest,
+  session count -- moved onto the identical stale-while-revalidate +
+  detached-refresher pattern. New `statusline_lib/gitref.py` (moved out of
+  statusline.py, which is coverage-exempt entry glue, so the 100%-coverage
+  gate now actually holds `_git_command`/`_git_ref_raw_cached` to account);
+  `beacon_cache._beacons_latest_cached` and `sessions.count_active_sessions`
+  converted the same way (`refresh_beacon_latest_cache`,
+  `refresh_session_count_cache`). `statusline_lib/refresh.py` generalized
+  to accept string cache keys (cwd, session id) alongside the existing
+  numeric window timestamps, dispatch table (`_REFRESHER_MODULES`) replacing
+  the growing if/elif chain aislop flagged as repetitive dispatch.
+  `ttlcache.read_raw_cache` added alongside `read_ttl_cache` so single-value
+  callers can serve a stale entry instead of discarding it. Motivating
+  measurement: an uncached psutil process-tree scan (session count) cost
+  ~120ms on this machine (~600 processes) -- far past the target and the
+  actual class of problem the pattern exists to prevent, just at a shorter
+  timescale than the 2026-07-16 incident. `_CORE_BUDGET_MS` ratcheted
+  100 -> 10 (the Pi bridge's per-keypress budget): measured median across
+  30 repeated runs of the real conformance check on this machine is ~1-6ms
+  (25-sample batch: min 1.09ms, median 2.02ms, p90 4.60ms, max 5.95ms),
+  30/30 repeated runs passing at the 10ms budget with 2-5x margin. 100%
+  statusline_lib coverage held (new gitref.py fully covered, including the
+  real `_git_command` success/failure/timeout branches); aislop/ruff clean.
+
+
+- install.py nudge-hook dedup bug RECONCILED (2026-07-19, no code change):
+  the inbox item described a singular `_find_nudge_hook`/`_upsert_nudge_hook`
+  pair that returned only the first `UserPromptSubmit` match; the live code
+  had already moved to a plural, dedup-aware `_find_nudge_hooks` /
+  `_merge_nudge_hook` (statusline_lib/nudge_install.py) back in the wave-2
+  extraction (bdb7dc5), which updates one match in place, removes any
+  further matches, and prunes emptied matcher groups --
+  scripts/verify_install_nudge_merge.py's `_check_stale_duplicate_removed`
+  already covers exactly this duplicate scenario and was reconfirmed green.
+  This entry was stale; closing it without a code change.
+- install.py shrunk below aislop's 400-line file-size threshold CLOSED
+  (2026-07-19): 473 -> 389 lines by extracting pure, no-I/O logic into two
+  new statusline_lib modules -- `platform_commands.py`
+  (`_commands_for_platform`, `_qwen_command_for_platform`, the Pi loader
+  path/contents, `STATUSLINE_REFRESH_SECONDS`) and `qwen_install.py` (the
+  Qwen `ui.statusLine` merge) -- following the existing nudge_install.py /
+  claude_family_install.py / codex_install.py pattern. New 100%-covered
+  tests in scripts/verify_install_qwen_pi.py, plus an added
+  posix-claude-branch check in scripts/verify_install_platform_routing.py.
 - Async-refresher split (render-perf step 3, walk-priced sources) CLOSED
   (2026-07-16, fixing the frozen-statusline incident on llamabox): renders
   never pay a TTL-miss transcript walk inline. `statusline_lib/refresh.py`

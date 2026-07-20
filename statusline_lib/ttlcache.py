@@ -40,6 +40,24 @@ def read_ttl_cache(path, ttl_seconds):
     return cached
 
 
+def read_raw_cache(path):
+    """Return the cached payload dict at `path` regardless of its TTL age, or
+    None if the file is missing, corrupt/partial JSON, or not a dict.
+
+    Pairs with write_ttl_cache for stale-while-revalidate callers (git-ref,
+    beacons-latest) that need to serve a stale entry immediately while
+    handing recomputation to a detached refresher, rather than blocking the
+    render on a synchronous recompute -- read_ttl_cache's fresh-or-None
+    contract discards exactly the stale value those callers need to serve.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            cached = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return cached if isinstance(cached, dict) else None
+
+
 def write_ttl_cache(path, payload):
     """Atomically write `payload` (stamped with the current time) to `path`
     via a pid-scoped tmp file + os.replace, so concurrent writers to the same

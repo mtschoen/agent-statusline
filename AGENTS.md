@@ -91,13 +91,21 @@ debounced by an inflight marker. The pace hourly walk and the burn-rate
 spend rescan both go through it; a new walk-priced data source should too,
 not grow its own inline TTL cache (an inline recompute above the ~3s kill
 window can never complete, so its cache can never warm — the death spiral is
-structural, not a tuning problem).
+structural, not a tuning problem). The same pattern now also covers cheaper
+but still non-trivial per-render work that isn't walk-priced: git ref
+(`statusline_lib/gitref.py`), the beacons-latest walker lookup
+(`statusline_lib/beacon_cache.py`), and the session-count psutil scan
+(`statusline_lib/sessions.py`, measured ~120ms uncached on a machine with a
+few hundred processes) all serve their TTL cache stale-or-absent and hand
+recomputation to a detached child rather than recomputing inline on a miss.
 
 Performance-conformance tiers (same script enforces the first two; budgets
 ratchet down per the PLAN.md render-perf item):
-- warm core (payload -> string, in-process, caches warm): <= 350ms today,
-  targeting <50ms after git/beacon caching, <10ms after the async-refresher
-  split. The <10ms cached path is also the Pi bridge's per-keypress budget.
+- warm core (payload -> string, in-process, caches warm): <= 10ms as of
+  2026-07-19 (started at 350ms; git/beacon TTL caching got it to <50ms; the
+  stale-while-revalidate + detached-refresher pattern covering git ref,
+  beacons-latest, and session count got it to <10ms). The <10ms cached path
+  is also the Pi bridge's per-keypress budget.
 - cold end-to-end (fixture corpus, empty caches): <= 8s (realistically ~1s;
   first/second render may block on basics like cwd/git).
 - spawn-per-render harnesses (Claude/Qwen/agy) additionally pay ~100ms of

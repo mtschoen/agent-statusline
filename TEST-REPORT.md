@@ -1,15 +1,45 @@
 # schoen-claude-status - Test Report
 
-`2026-07-16`
+`2026-07-19`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both hard CI gates) |
 | **Tests** | 58 `scripts/verify_*.py`, all passing locally |
-| **Git** | `e4320e5` (`main`, plus this change at time of writing) |
-| **Coverage** | 2089/2089 statements (100%), 0 exclusion annotations |
+| **Git** | `c297eff` (`main`, plus this change at time of writing) |
+| **Coverage** | 2178/2178 statements (100%), 0 exclusion annotations |
 | **Lint** | ruff format 0 / ruff check 0; aislop 91/100 Healthy (0 errors, 6 pre-existing file-size warnings, gate failBelow 90); 0 suppressions |
+
+**This run (render-perf ratchet step 3, remainder - warm-core budget
+100ms -> 10ms):** the residual per-render work the 2026-07-16 async-refresher
+split left inline -- git ref, the beacons-latest walker lookup, and the
+session-count psutil scan -- moved onto the same stale-while-revalidate +
+detached-refresher pattern (`statusline_lib/refresh.py`) as the pace/spend
+walks: a render always serves whatever the cache holds, and a stale/missing
+entry spawns a detached child rather than blocking. Motivating measurement:
+an uncached session-count scan cost ~120ms on this machine (~600 processes),
+git ref ~9ms, beacons-latest ~15ms -- all past the target, uncached. New
+`statusline_lib/gitref.py` (41 statements, 100%) replaces statusline.py's
+`_git_command`/`_git_ref_raw_cached`/`refresh_git_ref_cache` (statusline.py
+is coverage-exempt entry glue, so this move puts real coverage teeth on
+those functions for the first time); `beacon_cache.py` and `sessions.py`
+gained `refresh_beacon_latest_cache`/`refresh_session_count_cache` alongside
+their now-stale-serving cached readers. `refresh.py` generalized its
+inflight-key/child-snippet argument handling to accept string cache keys
+(cwd, session id) alongside the existing numeric window timestamps, and its
+kind-dispatch became a table (`_REFRESHER_MODULES`) rather than a growing
+if/elif chain (aislop's repetitive-dispatch finding). `ttlcache.py` gained
+`read_raw_cache` (serves a cache entry regardless of TTL age) alongside
+`read_ttl_cache` (fresh-or-None) for the single-value SWR callers.
+`_CORE_BUDGET_MS` ratcheted 100 -> 10 (the Pi bridge's per-keypress budget):
+measured median across 30 repeated runs of the real conformance check is
+~1-6ms (25-sample batch: min 1.09ms, median 2.02ms, p90 4.60ms, max 5.95ms),
+30/30 runs passing at 10ms with 2-5x margin. Test files rewritten to match
+the new stale-serve/spawn contract (`verify_git_ref_cache.py`,
+`verify_active_session_count.py`, `verify_beacon_walker.py`'s beacons-latest
+section), mirroring `verify_pace_refresh.py`'s existing pattern.
+`statusline_lib` remains at **100%** (2178/2178 statements).
 
 **This run (stale-while-revalidate transcript caches - frozen-statusline
 fix):** the pace hourly walk and the burn-rate spend rescan no longer run

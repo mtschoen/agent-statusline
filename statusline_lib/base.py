@@ -112,13 +112,25 @@ def _platform_from_argv():
     return None
 
 
+def platform_name():
+    """Return the resolved `--statusline-platform` value ("qwen", "antigravity",
+    "claude", ...), or None when neither the STATUSLINE_PLATFORM env var nor the
+    argv flag is present. Same precedence app_dir() uses (env wins over argv),
+    exposed as its own function so callers that need the platform value itself
+    (not just app_dir()'s directory choice) -- e.g. statusline.py's Qwen render
+    branch -- don't reach into the private _platform_from_argv helper."""
+    return os.environ.get("STATUSLINE_PLATFORM") or _platform_from_argv()
+
+
 def app_dir():
     """Return the absolute path to the app's configuration/data directory.
     Defaults to ~/.claude, but switches to ~/.gemini/antigravity-cli
-    if running under Antigravity CLI."""
-    platform = os.environ.get("STATUSLINE_PLATFORM") or _platform_from_argv()
+    if running under Antigravity CLI, or ~/.qwen under Qwen Code."""
+    platform = platform_name()
     if platform == "antigravity":
         return os.path.join(os.path.expanduser("~"), ".gemini", "antigravity-cli")
+    if platform == "qwen":
+        return os.path.join(os.path.expanduser("~"), ".qwen")
     if platform == "claude":
         return os.path.join(os.path.expanduser("~"), ".claude")
 

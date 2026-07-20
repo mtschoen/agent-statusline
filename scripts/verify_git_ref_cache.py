@@ -1,21 +1,15 @@
-"""Verify statusline.py's TTL disk-cache for _git_ref: a cache hit skips the
-git subprocess calls entirely, entries expire after the TTL, and a corrupt or
-unwritable cache file degrades to a fresh computation rather than crashing
-the render.
-
-Render-perf ratchet step 1 (PLAN.md): _git_ref costs ~55ms/render (two git
-subprocess calls) uncached. Caching branch+hash on disk per cwd with a short
-TTL makes that cost invisible at statusline cadence; the coloured rendering
-itself is intentionally NOT cached (colours are stable constants, so caching
-raw strings keeps the cache file plain and reusable by any caller).
+"""Verify statusline_lib/gitref.py's stale-while-revalidate disk-cache for
+_git_ref_raw_cached: the render never runs git inline. A fresh entry is
+served, a stale/missing entry is served too (blank on a true miss) while a
+detached refresh is requested via refresh.maybe_spawn_refresh, and
+refresh_git_ref_cache (the detached child's entry point) actually runs git
+and persists the result -- mirrors verify_pace_refresh.py's contract for the
+walk-priced caches, applied to git-ref (render-perf ratchet step 3, PLAN.md).
 
 The cache dir is not a module-level constant -- it is resolved fresh on every
 call via statusline_lib.base.state_dir(), so isolation here uses the same
 explicit `state_dir=` seam scripts/verify_render_timer.py uses for
 rendertimer.py, rather than monkeypatching a baked-in path.
-
-statusline.py is entry-point glue (outside the 100%-coverage gate), but this
-still runs it directly since importing is side-effect-free until main().
 
 Run from anywhere; imports from schoen-claude-status by path.
 """
@@ -30,6 +24,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import statusline
+import statusline_lib.gitref as gitref_mod
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -38,37 +33,37 @@ def _strip(text):
     return _ANSI.sub("", text) if text else text
 
 
-def _check_cache_miss_computes_and_writes(failures, tmpdir):
-    calls = []
+class _SpawnRecorder:
+    def __init__(self):
+        self.calls = []
 
-    def fake_git(cwd, *args):
-        calls.append(args)
-        return "main" if args[0] == "symbolic-ref" else "abc123"
+    def __call__(self, kind, argument):
+        self.calls.append((kind, argument))
+        return True
 
-    original = statusline._git_command
-    statusline._git_command = fake_git
+
+def _check_cache_miss_serves_blank_and_spawns(failures, tmpdir):
+    spawn = _SpawnRecorder()
+    original = gitref_mod.maybe_spawn_refresh
+    gitref_mod.maybe_spawn_refresh = spawn
     try:
-        branch, short_hash = statusline._git_ref_raw_cached(
+        branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/some/repo", state_dir=tmpdir
         )
     finally:
-        statusline._git_command = original
+        gitref_mod.maybe_spawn_refresh = original
 
-    if (branch, short_hash) != ("main", "abc123"):
+    if (branch, short_hash) != ("", ""):
         failures.append(
-            f"cache miss must compute fresh values; got {(branch, short_hash)!r}"
+            f"cache miss must serve a blank ref, never block on git;"
+            f" got {(branch, short_hash)!r}"
         )
-    if len(calls) != 2:
-        failures.append(
-            f"cache miss must call git twice (branch+hash); got {len(calls)} calls"
-        )
-    cache_path = statusline._git_ref_cache_path("/some/repo", state_dir=tmpdir)
-    if not os.path.exists(cache_path):
-        failures.append("cache miss must write a cache file")
+    if spawn.calls != [("git-ref", "/some/repo")]:
+        failures.append(f"cache miss must spawn a refresh; got {spawn.calls!r}")
 
 
-def _check_cache_hit_skips_git(failures, tmpdir):
-    cache_path = statusline._git_ref_cache_path("/cached/repo", state_dir=tmpdir)
+def _check_cache_hit_skips_spawn(failures, tmpdir):
+    cache_path = gitref_mod._git_ref_cache_path("/cached/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(
@@ -80,113 +75,80 @@ def _check_cache_hit_skips_git(failures, tmpdir):
             f,
         )
 
-    calls = []
-
-    def fake_git(cwd, *args):
-        calls.append(args)
-        return "must-not-be-called"
-
-    original = statusline._git_command
-    statusline._git_command = fake_git
+    spawn = _SpawnRecorder()
+    original = gitref_mod.maybe_spawn_refresh
+    gitref_mod.maybe_spawn_refresh = spawn
     try:
-        branch, short_hash = statusline._git_ref_raw_cached(
+        branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/cached/repo", state_dir=tmpdir
         )
     finally:
-        statusline._git_command = original
+        gitref_mod.maybe_spawn_refresh = original
 
     if (branch, short_hash) != ("feature", "def456"):
         failures.append(
             f"cache hit must return cached values; got {(branch, short_hash)!r}"
         )
-    if calls:
-        failures.append(f"cache hit must not call git; got {len(calls)} calls")
+    if spawn.calls:
+        failures.append(f"cache hit must not spawn a refresh; got {spawn.calls!r}")
 
 
-def _check_cache_expiry_recomputes(failures, tmpdir):
-    cache_path = statusline._git_ref_cache_path("/expired/repo", state_dir=tmpdir)
+def _check_cache_expiry_serves_stale_and_spawns(failures, tmpdir):
+    cache_path = gitref_mod._git_ref_cache_path("/expired/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    stale_ts = time.time() - statusline._GIT_REF_CACHE_TTL_SECONDS - 1
+    stale_ts = time.time() - gitref_mod._GIT_REF_CACHE_TTL_SECONDS - 1
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(
             {"cached_at_unix": stale_ts, "branch": "old", "short_hash": "old123"}, f
         )
 
-    calls = []
-
-    def fake_git(cwd, *args):
-        calls.append(args)
-        return "new" if args[0] == "symbolic-ref" else "new456"
-
-    original = statusline._git_command
-    statusline._git_command = fake_git
+    spawn = _SpawnRecorder()
+    original = gitref_mod.maybe_spawn_refresh
+    gitref_mod.maybe_spawn_refresh = spawn
     try:
-        branch, short_hash = statusline._git_ref_raw_cached(
+        branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/expired/repo", state_dir=tmpdir
         )
     finally:
-        statusline._git_command = original
+        gitref_mod.maybe_spawn_refresh = original
 
-    if (branch, short_hash) != ("new", "new456"):
-        failures.append(f"expired cache must recompute; got {(branch, short_hash)!r}")
-    if len(calls) != 2:
-        failures.append(f"expired cache must call git twice; got {len(calls)} calls")
+    if (branch, short_hash) != ("old", "old123"):
+        failures.append(
+            f"expired cache must still serve the stale value;"
+            f" got {(branch, short_hash)!r}"
+        )
+    if spawn.calls != [("git-ref", "/expired/repo")]:
+        failures.append(f"expired cache must spawn a refresh; got {spawn.calls!r}")
 
 
 def _check_corrupt_cache_degrades(failures, tmpdir):
-    cache_path = statusline._git_ref_cache_path("/corrupt/repo", state_dir=tmpdir)
+    cache_path = gitref_mod._git_ref_cache_path("/corrupt/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         f.write("not-json")
 
-    original = statusline._git_command
-    statusline._git_command = lambda cwd, *args: (
-        "recovered" if args[0] == "symbolic-ref" else "rec789"
-    )
+    spawn = _SpawnRecorder()
+    original = gitref_mod.maybe_spawn_refresh
+    gitref_mod.maybe_spawn_refresh = spawn
     try:
-        branch, short_hash = statusline._git_ref_raw_cached(
+        branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/corrupt/repo", state_dir=tmpdir
         )
     finally:
-        statusline._git_command = original
+        gitref_mod.maybe_spawn_refresh = original
 
-    if (branch, short_hash) != ("recovered", "rec789"):
+    if (branch, short_hash) != ("", ""):
         failures.append(
-            f"corrupt cache must degrade to a fresh computation; got {(branch, short_hash)!r}"
+            f"corrupt cache must degrade to a blank serve, not crash;"
+            f" got {(branch, short_hash)!r}"
         )
-
-
-def _check_unwritable_cache_dir_still_returns_value(failures):
-    with tempfile.TemporaryDirectory() as tmp:
-        blocker_file = os.path.join(tmp, "not-a-dir")
-        with open(blocker_file, "w", encoding="utf-8") as f:
-            f.write("x")
-        # A path component that is a file makes os.makedirs fail with an
-        # OSError subclass on every platform -- simulates an unwritable
-        # cache dir without relying on chmod semantics that differ on Windows.
-        unwritable_state_dir = os.path.join(blocker_file, "state")
-
-        original = statusline._git_command
-        statusline._git_command = lambda cwd, *args: (
-            "ok" if args[0] == "symbolic-ref" else "okhash"
-        )
-        try:
-            branch, short_hash = statusline._git_ref_raw_cached(
-                "/unwritable/repo", state_dir=unwritable_state_dir
-            )
-        finally:
-            statusline._git_command = original
-
-    if (branch, short_hash) != ("ok", "okhash"):
-        failures.append(
-            f"unwritable cache dir must still return the computed value; "
-            f"got {(branch, short_hash)!r}"
-        )
+    if spawn.calls != [("git-ref", "/corrupt/repo")]:
+        failures.append(f"corrupt cache must spawn a refresh; got {spawn.calls!r}")
 
 
 def _check_distinct_cwds_get_distinct_cache_entries(failures, tmpdir):
-    path_a = statusline._git_ref_cache_path("/repo/a", state_dir=tmpdir)
-    path_b = statusline._git_ref_cache_path("/repo/b", state_dir=tmpdir)
+    path_a = gitref_mod._git_ref_cache_path("/repo/a", state_dir=tmpdir)
+    path_b = gitref_mod._git_ref_cache_path("/repo/b", state_dir=tmpdir)
     if path_a == path_b:
         failures.append(
             "distinct cwds must map to distinct cache files (concurrent-safe keying)"
@@ -211,28 +173,110 @@ def _check_git_ref_empty_cwd(failures):
         failures.append("_git_ref with empty cwd must return ''")
 
 
+def _check_git_command(failures):
+    """_git_command's three branches: a real successful call (against this
+    checkout, which is a real git repo), a non-zero returncode, and an
+    OSError/ProcessTimeout -- all degrade to ''."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    branch = gitref_mod._git_command(repo_root, "rev-parse", "--short", "HEAD")
+    if not branch:
+        failures.append("_git_command against a real repo must return a non-empty hash")
+
+    original_run = gitref_mod.run_captured
+
+    class _FakeResult:
+        def __init__(self, returncode, stdout):
+            self.returncode = returncode
+            self.stdout = stdout
+
+    gitref_mod.run_captured = lambda *a, **kw: _FakeResult(1, "irrelevant")
+    try:
+        result = gitref_mod._git_command("/some/repo", "status")
+    finally:
+        gitref_mod.run_captured = original_run
+    if result != "":
+        failures.append(
+            f"_git_command with non-zero returncode must return ''; got {result!r}"
+        )
+
+    def raising_run(*a, **kw):
+        raise gitref_mod.ProcessTimeout("timed out", 2)
+
+    gitref_mod.run_captured = raising_run
+    try:
+        result = gitref_mod._git_command("/some/repo", "status")
+    finally:
+        gitref_mod.run_captured = original_run
+    if result != "":
+        failures.append(
+            f"_git_command on ProcessTimeout must return ''; got {result!r}"
+        )
+
+
+def _check_refresh_writes_cache(failures, tmpdir):
+    """refresh_git_ref_cache runs git and persists the result where the
+    render's cached read can serve it."""
+    original = gitref_mod._git_command
+    calls = []
+
+    def fake_git(cwd, *args):
+        calls.append(args)
+        return "main" if args[0] == "symbolic-ref" else "abc123"
+
+    gitref_mod._git_command = fake_git
+    try:
+        branch, short_hash = gitref_mod.refresh_git_ref_cache("/refreshed/repo")
+    finally:
+        gitref_mod._git_command = original
+
+    if (branch, short_hash) != ("main", "abc123"):
+        failures.append(
+            f"refresh_git_ref_cache must return the fresh values;"
+            f" got {(branch, short_hash)!r}"
+        )
+    if len(calls) != 2:
+        failures.append(
+            f"refresh_git_ref_cache must call git twice; got {len(calls)} calls"
+        )
+
+
 def main():
     failures = []
     with tempfile.TemporaryDirectory() as tmpdir:
-        _check_cache_miss_computes_and_writes(failures, tmpdir)
+        _check_cache_miss_serves_blank_and_spawns(failures, tmpdir)
     with tempfile.TemporaryDirectory() as tmpdir:
-        _check_cache_hit_skips_git(failures, tmpdir)
+        _check_cache_hit_skips_spawn(failures, tmpdir)
     with tempfile.TemporaryDirectory() as tmpdir:
-        _check_cache_expiry_recomputes(failures, tmpdir)
+        _check_cache_expiry_serves_stale_and_spawns(failures, tmpdir)
     with tempfile.TemporaryDirectory() as tmpdir:
         _check_corrupt_cache_degrades(failures, tmpdir)
-    _check_unwritable_cache_dir_still_returns_value(failures)
     with tempfile.TemporaryDirectory() as tmpdir:
         _check_distinct_cwds_get_distinct_cache_entries(failures, tmpdir)
     with tempfile.TemporaryDirectory() as tmpdir:
         _check_git_ref_uses_cache(failures, tmpdir)
     _check_git_ref_empty_cwd(failures)
+    _check_git_command(failures)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # refresh_git_ref_cache resolves state_dir via base.state_dir(), so
+        # isolate it the same way beacon_cache's refresher test does: env var.
+        original_env = os.environ.get("CLAUDE_STATE_DIR")
+        os.environ["CLAUDE_STATE_DIR"] = tmpdir
+        try:
+            _check_refresh_writes_cache(failures, tmpdir)
+        finally:
+            if original_env is None:
+                os.environ.pop("CLAUDE_STATE_DIR", None)
+            else:
+                os.environ["CLAUDE_STATE_DIR"] = original_env
 
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}")
         sys.exit(1)
-    print("OK: _git_ref TTL cache hits/misses/expiry/corruption all verified")
+    print(
+        "OK: _git_ref_raw_cached is stale-while-revalidate (hits/stale/miss/"
+        "corruption) and refresh_git_ref_cache persists correctly"
+    )
 
 
 if __name__ == "__main__":

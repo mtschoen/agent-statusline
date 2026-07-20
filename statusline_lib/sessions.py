@@ -25,6 +25,7 @@ import os
 import time
 
 from .base import app_dir
+from .refresh import maybe_spawn_refresh
 
 _psutil = None  # cached module handle within a process; None if unavailable.
 
@@ -76,11 +77,17 @@ def _save_session_count_cache(path, cache, now):
 def count_active_sessions(
     cwd, *, now=None, cache_path=None, ttl=_SESSION_COUNT_CACHE_TTL_SECONDS
 ):
-    """Return how many interactive Claude sessions are running in `cwd`.
+    """Return how many interactive Claude sessions are running in `cwd` --
+    the cache's raw value, stale included, never a synchronous psutil scan.
 
-    Memoized on disk for `ttl` seconds keyed by cwd. Returns 0 when psutil is
-    unavailable, `cwd` is empty, or any error occurs -- never raises (statusline
-    rendering must not crash).
+    Render-perf ratchet step 3 (PLAN.md): a cold psutil process-tree walk
+    measured ~120ms on a machine with a few hundred processes, well past the
+    <10ms warm-core budget, uncached. A fresh entry is served as-is; a stale
+    or missing entry is served too (0 on a true miss, same as the old
+    psutil-unavailable degrade) and hands recomputation to a detached child
+    via maybe_spawn_refresh (statusline_lib/refresh.py), debounced there.
+    Returns 0 immediately when `cwd` is empty -- no key to cache or refresh
+    by. Never raises -- statusline rendering must not crash.
     """
     if not cwd:
         return 0
@@ -90,19 +97,37 @@ def count_active_sessions(
 
     cache = _load_session_count_cache(path)
     entry = cache.get(key)
-    # Clock-skew guard: a future-stamped entry (now - ts < 0) is treated as a
-    # miss so a backwards clock jump can't pin a stale count indefinitely.
-    if isinstance(entry, dict) and 0 <= (now - entry.get("ts", 0)) < ttl:
+    if isinstance(entry, dict):
+        # Clock-skew guard: a future-stamped entry (now - ts < 0) reads as
+        # stale (not fresh) so a backwards clock jump can't pin a stale
+        # count indefinitely, but the value is still served -- stale beats
+        # blocked.
+        age = now - entry.get("ts", 0)
+        if 0 <= age < ttl:
+            return int(entry.get("count", 0))
+        maybe_spawn_refresh("session-count", cwd)
         return int(entry.get("count", 0))
+    maybe_spawn_refresh("session-count", cwd)
+    return 0
 
+
+def refresh_session_count_cache(cwd):
+    """Recompute `cwd`'s active-session count and persist it for the
+    render's cached read. Runs in the detached refresh child
+    (refresh.run_refresh), never on the render path. Returns 0 (and still
+    writes the cache) when psutil is unavailable."""
+    now = time.time()
+    path = _SESSION_COUNT_CACHE_PATH
     psutil = _resolve_psutil()
     if psutil is None:
-        return 0
-    try:
-        count = _count_via_psutil(cwd, psutil)
-    except Exception:
-        return 0
-    cache[key] = {"count": count, "ts": now}
+        count = 0
+    else:
+        try:
+            count = _count_via_psutil(cwd, psutil)
+        except Exception:
+            count = 0
+    cache = _load_session_count_cache(path)
+    cache[os.path.normcase(cwd)] = {"count": count, "ts": now}
     _save_session_count_cache(path, cache, now)
     return count
 

@@ -15,6 +15,7 @@ Imports:
 """
 
 import contextlib
+import importlib
 import json
 import os
 import sys
@@ -54,7 +55,12 @@ def _write_inflight(marks):
 
 
 def _inflight_key(kind, argument):
-    return f"{kind}:{int(argument)}"
+    # Numeric arguments (win_start_unix timestamps) are truncated to int so
+    # near-identical float representations of "the same window" collapse to
+    # one claim; string arguments (a cwd, a session id) are stable as-is.
+    if isinstance(argument, (int, float)):
+        return f"{kind}:{int(argument)}"
+    return f"{kind}:{argument}"
 
 
 def _claim_inflight(kind, argument):
@@ -82,11 +88,16 @@ def _clear_inflight(kind, argument):
 
 def _child_snippet(kind, argument):
     """The -c program the detached child runs: import this package by path
-    (the child inherits no cwd guarantee) and execute the named refresh."""
+    (the child inherits no cwd guarantee) and execute the named refresh.
+
+    Numeric arguments are coerced to float (matches every existing caller,
+    window timestamps); string arguments (a cwd, a session id) pass through
+    unchanged -- repr() quotes either shape safely for the -c source."""
+    arg = float(argument) if isinstance(argument, (int, float)) else argument
     return (
         f"import sys; sys.path.insert(0, {_REPO_ROOT!r}); "
         f"from statusline_lib.refresh import run_refresh; "
-        f"run_refresh({kind!r}, {float(argument)!r})"
+        f"run_refresh({kind!r}, {arg!r})"
     )
 
 
@@ -105,17 +116,28 @@ def maybe_spawn_refresh(kind, argument):
     return True
 
 
+# kind -> (module name within this package, refresher attribute). Modules are
+# imported lazily inside run_refresh -- pace/burnrate/gitref/beacon_cache/
+# sessions all import this module for maybe_spawn_refresh, so a top-level
+# import here would be circular.
+_REFRESHER_MODULES = {
+    "pace-hourly": ("pace", "refresh_pace_hourly_cache"),
+    "window-spend": ("burnrate", "refresh_window_spend_cache"),
+    "git-ref": ("gitref", "refresh_git_ref_cache"),
+    "beacon-latest": ("beacon_cache", "refresh_beacon_latest_cache"),
+    "session-count": ("sessions", "refresh_session_count_cache"),
+}
+
+
 def run_refresh(kind, argument):
     """Detached-child entry point: recompute cache `kind`, then clear the
-    inflight marker so the next stale render may spawn again. Refreshers are
-    imported lazily - pace and burnrate import this module for
-    maybe_spawn_refresh, so top-level imports here would be circular."""
-    if kind == "pace-hourly":
-        from .pace import refresh_pace_hourly_cache as refresher
-    elif kind == "window-spend":
-        from .burnrate import refresh_window_spend_cache as refresher
-    else:
+    inflight marker so the next stale render may spawn again."""
+    target = _REFRESHER_MODULES.get(kind)
+    if target is None:
         raise ValueError(f"unknown refresh kind: {kind!r}")
+    module_name, attr = target
+    module = importlib.import_module(f".{module_name}", package=__package__)
+    refresher = getattr(module, attr)
     try:
         refresher(argument)
     finally:

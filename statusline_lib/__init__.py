@@ -26,15 +26,23 @@ Package layout (dependency order, no cycles):
   base     -- _json_loads (orjson fallback), color constants, fmt, color helpers,
               state_dir/sanitize_state_key, entry-script glue (hostname,
               is_local_mode, spinner_frame, safe_write, log_traceback)
-  ttlcache -- generic single-value TTL disk-cache mechanics (read/write),
+  ttlcache -- generic single-value TTL disk-cache mechanics (read/write,
+              plus read_raw_cache for stale-while-revalidate callers),
               shared by the git-ref and beacons-latest caches
-  beacon_cache -- TTL cache around the beacons-latest walker call
+  refresh  -- stale-while-revalidate detached-refresher spawner
+              (maybe_spawn_refresh / run_refresh) shared by every cache that
+              can't afford a synchronous recompute in the render path
+  gitref   -- stale-while-revalidate cache around the two git subprocess
+              calls behind _git_ref (branch + short hash)
+  beacon_cache -- stale-while-revalidate cache around the beacons-latest
+              walker call
   rendertimer  -- previous-render duration + session-peak state (ui Xms suffix)
   settings_io / claude_family_install -- install.py's settings-JSON merge
               helpers (pure dict-in/dict-out; not re-exported here)
   cachefmt -- shared cache count/hit formatting across harness adapters
   prefs    -- live ~/.claude/.statusline-prefs.json resolver (pref/pref_bool)
-  sessions -- session counting (psutil lazy), debounce state
+  sessions -- session counting (psutil lazy, stale-while-revalidate),
+              debounce state
   walker   -- binary discovery, root resolution, native pace bridge
   cost     -- cost calc, transcript walking, context/cache/model-badge formatting
   beacon   -- beacon scanning, format_beacon, format_calibrated_eta, session timing
@@ -97,6 +105,7 @@ from .base import (
     hostname,
     is_local_mode,
     log_traceback,
+    platform_name,
     ramp_color,
     ramp_color_for,
     safe_write,
@@ -214,11 +223,15 @@ from .prefs import (
     prefs_path,
 )
 from .qwen import (
+    _model_summaries,
+    _safe_int,
+    _safe_str,
     format_qwen_api_stats,
     format_qwen_cache,
     format_qwen_files,
     format_qwen_thinking,
     format_qwen_tokens,
+    render_qwen_statusline,
 )
 from .sessions import (
     _SESSION_DEBOUNCE_DWELL_SECONDS,
@@ -307,12 +320,14 @@ __all__ = [
     "is_local_mode",
     "load_prefs",
     "log_traceback",
+    "platform_name",
     "pref",
     "pref_bool",
     "prefs_path",
     "ramp_color",
     "ramp_color_for",
     "read_ttl_cache",
+    "render_qwen_statusline",
     "resolve_flags",
     "safe_write",
     "sanitize_state_key",

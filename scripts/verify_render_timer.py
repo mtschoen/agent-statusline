@@ -9,6 +9,9 @@ shared-key fallback, corrupt/absent state, and end-to-end renders of
 ``statusline.py`` and ``qwen_statusline.py`` via subprocess with
 ``CLAUDE_STATE_DIR`` pointed at a temp dir.
 
+PhaseTimer (a separate, much cheaper concern also living in rendertimer.py)
+has its own verify_phase_timer.py.
+
 Run from anywhere; imports from schoen-claude-status by path.
 """
 

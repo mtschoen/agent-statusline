@@ -70,7 +70,14 @@ try:
     from statusline_lib.gitref import _git_ref_raw_cached
     from statusline_lib.nudge import write_ctx_state
     from statusline_lib.qwen import render_qwen_statusline
-    from statusline_lib.rendertimer import format_render_suffix, record_render
+    from statusline_lib.refresh import spawn_timings
+    from statusline_lib.rendertimer import (
+        current_phase_timer,
+        format_render_suffix,
+        record_render,
+        start_phase_timer,
+        summarize_spawns,
+    )
 except Exception:
     # A broken statusline_lib (mid-edit syntax error, missing module) dies
     # before the __main__ try/except exists, so it would leave no trace in
@@ -370,6 +377,7 @@ def _render_line2(flags, inputs):
 
 
 def main():
+    _phase_timer = start_phase_timer()
     raw = sys.stdin.read()
     # Truncate-on-write dump of the latest payload. Useful when Claude Code
     # adds new fields we could read directly. Bounded size; cheap.
@@ -429,6 +437,7 @@ def main():
 
         transcript_path = _find_session_jsonl(session_id)
     walk = walk_transcript(transcript_path or "", include_subagents=True)
+    _phase_timer.mark("walk")
 
     # Payload total_cost_usd is parent-only (Claude Code issue #48040: subagents
     # are isolated sessions). Pair it with our subagent estimate; walk["parent_cost"]
@@ -457,6 +466,7 @@ def main():
 
     spinner = spinner_frame()
     line1 = _line1(d, cwd, cwd_display, spinner, terminal_width_hint)
+    _phase_timer.mark("gitref")
 
     # Resolve compact verbosity (STATUSLINE_COMPACT + $COLUMNS): re-render the
     # already-walked data at each flag set until it fits, then render once more.
@@ -497,6 +507,7 @@ def main():
         )
         if part
     )
+    summarize_spawns(_phase_timer, spawn_timings())
     if line3:
         sys.stdout.write("\n" + line3)
 
@@ -514,13 +525,21 @@ def _log_error():
 _SLOW_RENDER_SECONDS = 5.0
 
 
-def _log_slow_render(elapsed):
+def _log_slow_render(elapsed, breakdown=""):
+    """`breakdown` is PhaseTimer.breakdown() from the render just measured --
+    a per-phase timing string (e.g. "walk=0.10s, gitref=0.05s,
+    beacon=0.06s[bias-refresh-spawned], spawns=1.80s[3x]") added 2026-07-26
+    after a 5.8s spike had to be root-caused from scratch across five
+    separate state/cache files with no per-phase evidence in the log itself.
+    "" when no timer was available (e.g. main() raised before PhaseTimer()
+    was even constructed)."""
     try:
         with open(_ERROR_LOG, "a", encoding="utf-8") as f:
+            suffix = f" [{breakdown}]" if breakdown else ""
             f.write(
                 f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n"
                 f"slow render: {elapsed:.1f}s "
-                f"(threshold {_SLOW_RENDER_SECONDS:.0f}s)\n"
+                f"(threshold {_SLOW_RENDER_SECONDS:.0f}s){suffix}\n"
             )
     except OSError:
         # Same contract as _log_error: the logger itself must never raise.
@@ -542,7 +561,8 @@ if __name__ == "__main__":
             sys.stdout.write(f"{RED}STATUSLINE ERROR{RESET} — see {readable_log_path}")
     _elapsed = time.monotonic() - _started
     if _elapsed >= _SLOW_RENDER_SECONDS:
-        _log_slow_render(_elapsed)
+        _timer = current_phase_timer()
+        _log_slow_render(_elapsed, _timer.breakdown() if _timer else "")
     # Reuses the same _elapsed measured above for slow-render logging -- one
     # clock, two consumers. Excludes interpreter+import startup (the "warm
     # core" scope verify_render_budget.py's check_warm_core_median enforces).

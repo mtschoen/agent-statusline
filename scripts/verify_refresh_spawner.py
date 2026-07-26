@@ -14,6 +14,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import statusline_lib.beacon as beacon
 import statusline_lib.burnrate as burnrate
 import statusline_lib.pace as pace
 import statusline_lib.refresh as refresh
@@ -156,6 +157,64 @@ def _check_run_refresh_spend_dispatch(failures):
         failures.append(f"spend dispatch calls: {calls!r}")
 
 
+def _check_run_refresh_bias_factor_dispatch(failures):
+    """run_refresh routes bias-factor to beacon.refresh_bias_factor_cache --
+    the last inline walker call left on the render path (2026-07-26 render-
+    perf ratchet) was migrated onto this same detached-refresher pattern."""
+    calls = []
+    saved_refresher = beacon.refresh_bias_factor_cache
+    beacon.refresh_bias_factor_cache = lambda period: calls.append(period)
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = _pin_refresh(tmp, _NOW)
+        try:
+            refresh.run_refresh("bias-factor", 604800)
+        finally:
+            _restore_refresh(saved)
+            beacon.refresh_bias_factor_cache = saved_refresher
+    if calls != [604800]:
+        failures.append(f"bias-factor dispatch calls: {calls!r}")
+
+
+def _check_spawn_timings_instrumentation(failures):
+    """Every maybe_spawn_refresh call (success or failure) is timed into
+    refresh.spawn_timings(), reset by reset_spawn_timings() -- the source
+    statusline.py's slow-render breakdown (PhaseTimer) reads to report
+    "N spawns, T seconds total" without threading a timer through every
+    caller's signature."""
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = _pin_refresh(tmp, _NOW)
+        refresh.spawn_detached = lambda command: None
+        try:
+            refresh.reset_spawn_timings()
+            if refresh.spawn_timings():
+                failures.append("reset_spawn_timings must clear prior entries")
+            refresh.maybe_spawn_refresh("pace-hourly", _WIN_START)
+            refresh.maybe_spawn_refresh("git-ref", "/some/repo")
+
+            def failing_spawn(_command):
+                raise OSError("no interpreter")
+
+            refresh.spawn_detached = failing_spawn
+            refresh.maybe_spawn_refresh("bias-factor", 604800)
+
+            timings = refresh.spawn_timings()
+        finally:
+            _restore_refresh(saved)
+    kinds = [kind for kind, _elapsed in timings]
+    if kinds != ["pace-hourly", "git-ref", "bias-factor"]:
+        failures.append(f"spawn_timings kinds/order: {kinds!r}")
+    if any(elapsed < 0 for _kind, elapsed in timings):
+        failures.append(
+            f"spawn_timings must never record a negative elapsed: {timings!r}"
+        )
+    if refresh.spawn_timings() is timings:
+        failures.append("spawn_timings() must return a copy, not the live list")
+
+    refresh.reset_spawn_timings()
+    if refresh.spawn_timings():
+        failures.append("reset_spawn_timings must clear entries from a prior render")
+
+
 def _check_child_snippet_end_to_end(failures):
     """The exact snippet maybe_spawn_refresh hands the detached child must,
     in a real interpreter with HOME pointed at a fixture corpus, walk the
@@ -213,6 +272,8 @@ def main():
     _check_spawn_failure_clears_claim(failures)
     _check_run_refresh_dispatch(failures)
     _check_run_refresh_spend_dispatch(failures)
+    _check_run_refresh_bias_factor_dispatch(failures)
+    _check_spawn_timings_instrumentation(failures)
     _check_child_snippet_end_to_end(failures)
 
     if failures:
@@ -221,8 +282,8 @@ def main():
         sys.exit(1)
     print(
         "OK: refresh spawner debounces and releases claims, run_refresh"
-        " dispatches and always clears its marker, child snippet works end"
-        " to end"
+        " dispatches and always clears its marker, spawn timings are"
+        " recorded and resettable, child snippet works end to end"
     )
 
 

@@ -5,6 +5,7 @@ Imports:
   walker       -- for _walker_subcommand (beacons-history)
   beacon_cache -- for _beacons_latest_cached (the beacons-latest TTL cache;
                   split out to stay under the file-size complexity gate)
+  refresh      -- for maybe_spawn_refresh (detached cache recompute)
 """
 
 import glob
@@ -15,6 +16,7 @@ from datetime import UTC, datetime
 
 from .base import GREEN, RED, RESET, YELLOW, _json_loads, app_dir
 from .beacon_cache import _beacons_latest_cached
+from .refresh import maybe_spawn_refresh
 from .walker import _walker_subcommand
 
 _BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
@@ -283,14 +285,33 @@ _BIAS_FAILURE_TTL_SECONDS = 300
 _CALIBRATION_MIN_PAIRS = 20
 
 
-def _bias_factor_cached(period_seconds):
-    """Return (n_pairs, bias_factor) from beacons-history, file-cached.
+def _read_bias_cache():
+    """The full per-period bias-cache dict; {} when absent, unreadable, or
+    not a dict (a torn write must read as "no data", never crash the
+    render)."""
+    try:
+        with open(_BIAS_CACHE_PATH, encoding="utf-8") as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return cache if isinstance(cache, dict) else {}
 
-    Beacons-history walks the full fleet, so per-render calls are wasteful.
-    Cache TTL is short enough that fresh end-beacons influence the next
-    render without a manual flush. Failures are negative-cached under the
-    longer _BIAS_FAILURE_TTL_SECONDS so a slow walker degrades the calibrated
-    ETA (which is optional) instead of stalling every render.
+
+def _bias_entry_fresh(entry):
+    ttl = _BIAS_FAILURE_TTL_SECONDS if entry.get("failed") else _BIAS_CACHE_TTL_SECONDS
+    return datetime.now(UTC).timestamp() - entry.get("computed_at_unix", 0) < ttl
+
+
+def _bias_factor_cached(period_seconds):
+    """Return (n_pairs, bias_factor) for `period_seconds` -- the cache's raw
+    value, stale included, never a synchronous walker call. A fresh entry is
+    served as-is; a stale or missing entry is served too ((0, None) on a true
+    miss, which format_calibrated_eta already treats as "not enough data yet
+    -- hide the field") and hands recomputation to a detached child via
+    maybe_spawn_refresh, same as every other walker/git lookup in this
+    package (render-perf ratchet, PLAN.md: this inline walker call was the
+    last one left on the render path). See refresh_bias_factor_cache for the
+    actual walk.
 
     The cache file holds one entry PER PERIOD (keyed by the string period, so
     the 5h and weekly windows -- or any other caller -- each keep their own
@@ -299,28 +320,33 @@ def _bias_factor_cached(period_seconds):
     every call whenever callers alternate between periods.
     """
     key = str(int(period_seconds))
-    cache = {}
-    try:
-        with open(_BIAS_CACHE_PATH, encoding="utf-8") as f:
-            loaded = json.load(f)
-        if isinstance(loaded, dict):
-            cache = loaded
-    except (OSError, ValueError):
-        pass
+    entry = _read_bias_cache().get(key)
+    if isinstance(entry, dict):
+        n_pairs, bias = entry.get("n_pairs", 0), entry.get("bias_factor")
+        if _bias_entry_fresh(entry):
+            return n_pairs, bias
+        maybe_spawn_refresh("bias-factor", period_seconds)
+        return n_pairs, bias
+    maybe_spawn_refresh("bias-factor", period_seconds)
+    return 0, None
 
-    c = cache.get(key)
-    if isinstance(c, dict):
-        age = datetime.now(UTC).timestamp() - c.get("computed_at_unix", 0)
-        ttl = _BIAS_FAILURE_TTL_SECONDS if c.get("failed") else _BIAS_CACHE_TTL_SECONDS
-        if age < ttl:
-            return c.get("n_pairs", 0), c.get("bias_factor")
 
-    # --no-config keeps this walk off the walker-roots.json extra roots: the
-    # SMB mount measured 8-38s against this call's 5s timeout, so every cache
-    # miss stalled a render and then failed anyway. Bias calibration is
-    # local-machine semantics (it corrects THIS machine's ETA behavior), so
-    # local-only is also the more correct population. Cross-machine roots
-    # still serve the burn-rate/pace spend walks, which have their own caches.
+def refresh_bias_factor_cache(period_seconds):
+    """Recompute one period's bias factor and persist it for the render's
+    cached read. Runs in the detached refresh child (refresh.run_refresh),
+    never on the render path. Failures are negative-cached under the longer
+    _BIAS_FAILURE_TTL_SECONDS so a slow/unreachable walker degrades the
+    calibrated ETA (which is optional) instead of respawning a refresh child
+    on every single render.
+
+    --no-config keeps this walk off the walker-roots.json extra roots: the
+    SMB mount measured 8-38s against this call's 5s timeout, so every cache
+    miss stalled a render and then failed anyway. Bias calibration is
+    local-machine semantics (it corrects THIS machine's ETA behavior), so
+    local-only is also the more correct population. Cross-machine roots
+    still serve the burn-rate/pace spend walks, which have their own caches.
+    """
+    key = str(int(period_seconds))
     data = _walker_subcommand(
         "beacons-history",
         "--period",
@@ -328,8 +354,9 @@ def _bias_factor_cached(period_seconds):
         "--win-start",
         "0",
         "--no-config",
-        # 2s cap per the render-budget invariant (verify_render_budget.py);
-        # the local-only walk measures ~0.5s, so this is 4x headroom.
+        # 2s cap per the render-budget invariant (verify_render_budget.py).
+        # Only the detached refresh child ever waits on this now -- the
+        # render itself never blocks on it.
         timeout=2,
     )
     entry = {
@@ -340,12 +367,13 @@ def _bias_factor_cached(period_seconds):
     }
     if not data:
         entry["failed"] = True
+    cache = _read_bias_cache()
     cache[key] = entry
     try:
         with open(_BIAS_CACHE_PATH, "w", encoding="utf-8") as f:
             json.dump(cache, f)
     except OSError:
-        # Best-effort cache write; failure just means we recompute next time.
+        # Best-effort cache write; failure just means the next render respawns.
         pass
     return entry["n_pairs"], entry["bias_factor"]
 

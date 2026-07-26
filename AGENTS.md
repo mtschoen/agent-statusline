@@ -94,10 +94,25 @@ window can never complete, so its cache can never warm — the death spiral is
 structural, not a tuning problem). The same pattern now also covers cheaper
 but still non-trivial per-render work that isn't walk-priced: git ref
 (`statusline_lib/gitref.py`), the beacons-latest walker lookup
-(`statusline_lib/beacon_cache.py`), and the session-count psutil scan
+(`statusline_lib/beacon_cache.py`), the session-count psutil scan
 (`statusline_lib/sessions.py`, measured ~120ms uncached on a machine with a
-few hundred processes) all serve their TTL cache stale-or-absent and hand
+few hundred processes), and the calibrated-ETA bias-factor lookup
+(`statusline_lib/beacon.py`'s `_bias_factor_cached` /
+`refresh_bias_factor_cache`, migrated 2026-07-26 after a 5.8s slow-render
+spike traced to it — the last inline `_walker_subcommand` call left on the
+render path) all serve their TTL cache stale-or-absent and hand
 recomputation to a detached child rather than recomputing inline on a miss.
+
+`statusline.py`'s `main()` also carries a lightweight per-phase timer
+(`statusline_lib.rendertimer.PhaseTimer`) since the same 2026-07-26 spike: on
+a render crossing `_SLOW_RENDER_SECONDS`, `_log_slow_render` appends a
+breakdown like `[walk=0.10s, gitref=0.04s, beacon=0.05s, spawns=0.06s[4x]]`
+to the log line, so the next slow-render spike is diagnosable from the log
+alone instead of a multi-file forensic reconstruction across cache/state
+files. `refresh.spawn_timings()` (reset per render via
+`refresh.reset_spawn_timings()`) is the source for the `spawns=` figure —
+every `maybe_spawn_refresh` call, across every cache kind, funnels through
+that one choke point.
 
 Performance-conformance tiers (same script enforces the first two; budgets
 ratchet down per the PLAN.md render-perf item):

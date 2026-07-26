@@ -1,5 +1,14 @@
 """Verify beacon.py walker-dependent paths (format_beacon, _bias_factor_cached,
-format_calibrated_eta) and beacon_cache.py's TTL disk-cache for beacons-latest.
+refresh_bias_factor_cache, format_calibrated_eta) and beacon_cache.py's TTL
+disk-cache for beacons-latest.
+
+_bias_factor_cached follows the same stale-while-revalidate contract as
+_git_ref_raw_cached (gitref.py) and _beacons_latest_cached (beacon_cache.py,
+below): the render never walks the fleet inline. A fresh entry is served, a
+stale/missing entry is served too (neutral (0, None) on a true miss) while a
+detached refresh is requested via refresh.maybe_spawn_refresh, and
+refresh_bias_factor_cache (the detached child's entry point) actually runs
+the walker and persists the result.
 
 Patches _walker_subcommand and _find_beacon_anchors in-process so no real
 walker binary is required.
@@ -131,160 +140,12 @@ def _check_format_beacon(failures):
         _beacon_mod._find_beacon_anchors = original_anchors
 
 
-def _check_bias_cache_read(failures, tmpdir):
-    """Walker miss, first write, and fresh-cache hit."""
-    cache_path = os.path.join(tmpdir, "bias-cache.json")
-    _beacon_mod._BIAS_CACHE_PATH = cache_path
-
-    _beacon_mod._walker_subcommand = lambda *args, **kw: None
-    n, bias = _beacon_mod._bias_factor_cached(604800)
-    if (n, bias) != (0, None):
-        failures.append(
-            f"_bias_factor_cached with no walker data must return (0,None), got ({n!r},{bias!r})"
-        )
-
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
-        "n_pairs": 25,
-        "bias_factor": 1.4,
-    }
-    # The miss above is negative-cached (failed=True, longer TTL): a healthy
-    # walker must NOT be consulted while the failure entry is fresh.
-    n, bias = _beacon_mod._bias_factor_cached(604800)
-    if (n, bias) != (0, None):
-        failures.append(f"walker failure must be negative-cached, got ({n!r},{bias!r})")
-    os.remove(cache_path)
-    n, bias = _beacon_mod._bias_factor_cached(604800)
-    if n != 25 or abs(bias - 1.4) > 0.001:
-        failures.append(
-            f"_bias_factor_cached with walker data: expected (25,1.4), got ({n!r},{bias!r})"
-        )
-    if not os.path.exists(cache_path):
-        failures.append("_bias_factor_cached must write cache file")
-
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
-        "n_pairs": 99,
-        "bias_factor": 9.9,
-    }
-    n2, bias2 = _beacon_mod._bias_factor_cached(604800)
-    if n2 != 25 or abs(bias2 - 1.4) > 0.001:
-        failures.append(
-            f"_bias_factor_cached must return cached value on second call; got ({n2!r},{bias2!r})"
-        )
-
-
-def _check_bias_cache_invalidation(failures, tmpdir):
-    """Stale TTL, wrong period, corrupt JSON, and unwritable path all recompute."""
-    cache_path = os.path.join(tmpdir, "bias-cache2.json")
-    _beacon_mod._BIAS_CACHE_PATH = cache_path
-
-    stale_data = {
-        "computed_at_unix": datetime.now(UTC).timestamp() - 120,
-        "period_seconds": 604800,
-        "n_pairs": 5,
-        "bias_factor": 0.5,
-    }
-    with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(stale_data, f)
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
-        "n_pairs": 30,
-        "bias_factor": 1.6,
-    }
-    n3, bias3 = _beacon_mod._bias_factor_cached(604800)
-    if n3 != 30 or abs(bias3 - 1.6) > 0.001:
-        failures.append(
-            f"_bias_factor_cached with stale cache must recompute; got ({n3!r},{bias3!r})"
-        )
-
-    fresh_wrong_period = {
-        "computed_at_unix": datetime.now(UTC).timestamp() - 1,
-        "period_seconds": 999,
-        "n_pairs": 7,
-        "bias_factor": 0.7,
-    }
-    with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(fresh_wrong_period, f)
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
-        "n_pairs": 40,
-        "bias_factor": 1.8,
-    }
-    n4, bias4 = _beacon_mod._bias_factor_cached(604800)
-    if n4 != 40 or abs(bias4 - 1.8) > 0.001:
-        failures.append(
-            f"_bias_factor_cached with wrong period must recompute; got ({n4!r},{bias4!r})"
-        )
-
-    with open(cache_path, "w", encoding="utf-8") as f:
-        f.write("not-json")
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
-        "n_pairs": 22,
-        "bias_factor": 1.1,
-    }
-    n5, bias5 = _beacon_mod._bias_factor_cached(604800)
-    if n5 != 22 or abs(bias5 - 1.1) > 0.001:
-        failures.append(
-            f"_bias_factor_cached with corrupt cache must recompute; got ({n5!r},{bias5!r})"
-        )
-
-    _beacon_mod._BIAS_CACHE_PATH = os.path.join(tmpdir, "no_such_dir", "cache.json")
-    _beacon_mod._walker_subcommand = lambda *args, **kw: {
-        "n_pairs": 15,
-        "bias_factor": 1.2,
-    }
-    n6, bias6 = _beacon_mod._bias_factor_cached(604800)
-    if n6 != 15 or abs(bias6 - 1.2) > 0.001:
-        failures.append(
-            f"_bias_factor_cached with unwritable cache must still return values; got ({n6!r},{bias6!r})"
-        )
-
-
-def _check_bias_cache_valid_key_ttl_expiry(failures, tmpdir):
-    """A VALIDLY-KEYED entry (new per-period cache shape) whose TTL has
-    expired must still trigger a recompute, and a validly-keyed fresh entry
-    must NOT.
-
-    _check_bias_cache_invalidation's "stale cache" case seeds a flat,
-    LEGACY-shaped file (no period key at all) -- under the new per-period
-    format that's a key-miss (cache.get(key) is None), which also forces a
-    recompute but never exercises the `age < ttl` comparison on an entry
-    that actually matched its key. This closes that gap directly.
-    """
-    cache_path = os.path.join(tmpdir, "bias-cache-valid-key-ttl.json")
+def _check_bias_cache_fresh_hit_skips_spawn(failures, tmpdir):
+    """A fresh cache entry is served with no spawn and no walker call."""
+    cache_path = os.path.join(tmpdir, "bias-cache-fresh.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path
     period = 604800
     key = str(period)
-
-    calls = []
-    _beacon_mod._walker_subcommand = lambda *_a, **_kw: (
-        calls.append(1) or {"n_pairs": 50, "bias_factor": 3.0}
-    )
-
-    # Expired: computed_at_unix is older than the (non-failure) TTL.
-    expired = {
-        key: {
-            "computed_at_unix": datetime.now(UTC).timestamp()
-            - _beacon_mod._BIAS_CACHE_TTL_SECONDS
-            - 1,
-            "period_seconds": period,
-            "n_pairs": 5,
-            "bias_factor": 0.5,
-        }
-    }
-    with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(expired, f)
-    n, bias = _beacon_mod._bias_factor_cached(period)
-    if len(calls) != 1:
-        failures.append(
-            f"expired validly-keyed entry must recompute (1 walker call); "
-            f"got {len(calls)} calls"
-        )
-    if (n, bias) != (50, 3.0):
-        failures.append(
-            f"expired validly-keyed entry must return the fresh walk result; "
-            f"got ({n!r},{bias!r})"
-        )
-
-    # Fresh: computed_at_unix is well within TTL -- must be a cache hit, no
-    # new walker call, and must return the OLD (still-cached) values.
     fresh = {
         key: {
             "computed_at_unix": datetime.now(UTC).timestamp() - 1,
@@ -295,17 +156,177 @@ def _check_bias_cache_valid_key_ttl_expiry(failures, tmpdir):
     }
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(fresh, f)
-    calls.clear()
-    n2, bias2 = _beacon_mod._bias_factor_cached(period)
-    if len(calls) != 0:
+
+    calls = []
+    _beacon_mod._walker_subcommand = lambda *_a, **_kw: calls.append(1)
+    spawn = _SpawnRecorder()
+    original_spawn = _beacon_mod.maybe_spawn_refresh
+    _beacon_mod.maybe_spawn_refresh = spawn
+    try:
+        n, bias = _beacon_mod._bias_factor_cached(period)
+    finally:
+        _beacon_mod.maybe_spawn_refresh = original_spawn
+    if (n, bias) != (8, 0.8):
+        failures.append(f"fresh hit: expected (8, 0.8), got ({n!r}, {bias!r})")
+    if calls:
+        failures.append(f"fresh hit must not call the walker; got {len(calls)} calls")
+    if spawn.calls:
+        failures.append(f"fresh hit must not spawn a refresh; got {spawn.calls!r}")
+
+
+def _check_bias_cache_stale_serves_and_spawns(failures, tmpdir):
+    """A stale entry (validly keyed, TTL expired) is still served, and a
+    detached refresh is requested -- the render must never recompute inline."""
+    cache_path = os.path.join(tmpdir, "bias-cache-stale.json")
+    _beacon_mod._BIAS_CACHE_PATH = cache_path
+    period = 604800
+    key = str(period)
+    stale = {
+        key: {
+            "computed_at_unix": datetime.now(UTC).timestamp()
+            - _beacon_mod._BIAS_CACHE_TTL_SECONDS
+            - 1,
+            "period_seconds": period,
+            "n_pairs": 5,
+            "bias_factor": 0.5,
+        }
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(stale, f)
+
+    calls = []
+    _beacon_mod._walker_subcommand = lambda *_a, **_kw: calls.append(1)
+    spawn = _SpawnRecorder()
+    original_spawn = _beacon_mod.maybe_spawn_refresh
+    _beacon_mod.maybe_spawn_refresh = spawn
+    try:
+        n, bias = _beacon_mod._bias_factor_cached(period)
+    finally:
+        _beacon_mod.maybe_spawn_refresh = original_spawn
+    if (n, bias) != (5, 0.5):
+        failures.append(f"stale serve: expected (5, 0.5), got ({n!r}, {bias!r})")
+    if calls:
         failures.append(
-            f"fresh validly-keyed entry must be a cache hit (0 walker calls); "
-            f"got {len(calls)} calls"
+            f"stale entry must not walk inline -- got {len(calls)} walker calls"
         )
-    if (n2, bias2) != (8, 0.8):
+    if spawn.calls != [("bias-factor", period)]:
+        failures.append(f"stale entry must spawn a refresh; got {spawn.calls!r}")
+
+
+def _check_bias_cache_miss_and_wrong_period_serve_neutral_and_spawn(failures, tmpdir):
+    """No entry at all, and a validly-keyed entry for a DIFFERENT period, both
+    read as "no data yet" -- (0, None), which format_calibrated_eta already
+    treats as "hide the field" -- while requesting a refresh, never walking
+    inline. Covers absent-file, corrupt-JSON, and wrong-period-key cases."""
+    period = 604800
+    for label, seed in (
+        ("absent", None),
+        ("corrupt", "not-json"),
+        (
+            "wrong-period",
+            json.dumps(
+                {
+                    "999": {
+                        "computed_at_unix": datetime.now(UTC).timestamp() - 1,
+                        "period_seconds": 999,
+                        "n_pairs": 7,
+                        "bias_factor": 0.7,
+                    }
+                }
+            ),
+        ),
+    ):
+        cache_path = os.path.join(tmpdir, f"bias-cache-{label}.json")
+        _beacon_mod._BIAS_CACHE_PATH = cache_path
+        if seed is not None:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                f.write(seed)
+
+        calls = []
+        _beacon_mod._walker_subcommand = lambda *_a, _calls=calls, **_kw: _calls.append(
+            1
+        )
+        spawn = _SpawnRecorder()
+        original_spawn = _beacon_mod.maybe_spawn_refresh
+        _beacon_mod.maybe_spawn_refresh = spawn
+        try:
+            n, bias = _beacon_mod._bias_factor_cached(period)
+        finally:
+            _beacon_mod.maybe_spawn_refresh = original_spawn
+        if (n, bias) != (0, None):
+            failures.append(f"{label}: expected (0, None), got ({n!r}, {bias!r})")
+        if calls:
+            failures.append(f"{label} must not walk inline; got {len(calls)} calls")
+        if spawn.calls != [("bias-factor", period)]:
+            failures.append(f"{label} must spawn a refresh; got {spawn.calls!r}")
+
+
+def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
+    """refresh_bias_factor_cache (the detached child's entry point) runs the
+    walker and persists the result where the render's cached read can serve
+    it, merging into (not clobbering) other periods' entries. A walker
+    failure is negative-cached (failed=True) under the longer TTL so a
+    slow/unreachable walker doesn't respawn a refresh child every render."""
+    cache_path = os.path.join(tmpdir, "bias-cache-refresh.json")
+    _beacon_mod._BIAS_CACHE_PATH = cache_path
+    # Seed an unrelated period's entry that must survive the write.
+    other_period_entry = {
+        "300": {
+            "computed_at_unix": datetime.now(UTC).timestamp(),
+            "period_seconds": 300,
+            "n_pairs": 42,
+            "bias_factor": 2.2,
+        }
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(other_period_entry, f)
+
+    _beacon_mod._walker_subcommand = lambda *_a, **_kw: {
+        "n_pairs": 25,
+        "bias_factor": 1.4,
+    }
+    n, bias = _beacon_mod.refresh_bias_factor_cache(604800)
+    if n != 25 or abs(bias - 1.4) > 0.001:
         failures.append(
-            f"fresh validly-keyed entry must return the cached values; "
-            f"got ({n2!r},{bias2!r})"
+            f"refresh_bias_factor_cache must return the fresh values; got ({n!r},{bias!r})"
+        )
+    with open(cache_path, encoding="utf-8") as f:
+        cache = json.load(f)
+    if "300" not in cache:
+        failures.append("refresh_bias_factor_cache must not clobber other periods")
+    written_entry = cache.get("604800") or {}
+    if written_entry.get("n_pairs") != 25:
+        failures.append(
+            f"refresh_bias_factor_cache did not persist its write: {cache!r}"
+        )
+
+    # A walker failure (None) must be negative-cached with failed=True.
+    _beacon_mod._walker_subcommand = lambda *_a, **_kw: None
+    n2, bias2 = _beacon_mod.refresh_bias_factor_cache(604800)
+    if (n2, bias2) != (0, None):
+        failures.append(
+            f"refresh_bias_factor_cache walker failure: expected (0, None), got ({n2!r},{bias2!r})"
+        )
+    with open(cache_path, encoding="utf-8") as f:
+        cache = json.load(f)
+    failure_entry = cache.get("604800") or {}
+    if not failure_entry.get("failed"):
+        failures.append("a walker failure must be negative-cached (failed=True)")
+
+
+def _check_refresh_bias_factor_cache_unwritable_path(failures, tmpdir):
+    """An unwritable cache path must not raise out of the refresher (same
+    best-effort contract as every other refresher's cache write)."""
+    _beacon_mod._BIAS_CACHE_PATH = os.path.join(tmpdir, "no_such_dir", "cache.json")
+    _beacon_mod._walker_subcommand = lambda *_a, **_kw: {
+        "n_pairs": 15,
+        "bias_factor": 1.2,
+    }
+    n, bias = _beacon_mod.refresh_bias_factor_cache(604800)
+    if n != 15 or abs(bias - 1.2) > 0.001:
+        failures.append(
+            f"refresh_bias_factor_cache with unwritable cache must still return"
+            f" values; got ({n!r},{bias!r})"
         )
 
 
@@ -343,55 +364,105 @@ def _check_format_beacon_bad_eta_seconds(failures):
 
 
 def _check_bias_cache_alternating_periods(failures, tmpdir):
-    """Two periods interleaved within TTL must each stay cached, not thrash.
-
-    Before the cache was keyed by period, a fresh entry for period B would
-    overwrite period A's fresh entry outright (a single-entry cache file), so
-    alternating calls (A, B, A, B, ...) recomputed on every single call even
-    though each period's own entry was still well within TTL.
-    """
+    """Two periods interleaved must each keep their own cache entry, not
+    thrash each other -- a single-entry (non-keyed) cache would have a fresh
+    write for period B evict period A's still-fresh entry outright, forcing
+    a respawn on every alternating call even though each period's own entry
+    was well within TTL. Neither period is stale here, so no spawn at all is
+    expected."""
     cache_path = os.path.join(tmpdir, "bias-cache-alternating.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path
-
-    calls = []
-
-    def fake_walker(*_args, **kw):
-        calls.append(kw.get("timeout"))
-        period = _args[2] if len(_args) > 2 else None
-        return {"n_pairs": 30, "bias_factor": 1.0 if period == "604800" else 2.0}
-
-    _beacon_mod._walker_subcommand = fake_walker
-
     period_a, period_b = 604800, 300
-    n_a1, bias_a1 = _beacon_mod._bias_factor_cached(period_a)
-    n_b1, bias_b1 = _beacon_mod._bias_factor_cached(period_b)
-    if len(calls) != 2:
+    now = datetime.now(UTC).timestamp()
+    seeded = {
+        str(period_a): {
+            "computed_at_unix": now - 1,
+            "period_seconds": period_a,
+            "n_pairs": 30,
+            "bias_factor": 1.0,
+        },
+        str(period_b): {
+            "computed_at_unix": now - 1,
+            "period_seconds": period_b,
+            "n_pairs": 30,
+            "bias_factor": 2.0,
+        },
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(seeded, f)
+
+    spawn = _SpawnRecorder()
+    original_spawn = _beacon_mod.maybe_spawn_refresh
+    _beacon_mod.maybe_spawn_refresh = spawn
+    try:
+        n_a1, bias_a1 = _beacon_mod._bias_factor_cached(period_a)
+        n_b1, bias_b1 = _beacon_mod._bias_factor_cached(period_b)
+        # Re-querying A right after B must hit A's own cached entry, not
+        # recompute/re-spawn just because B was queried in between.
+        n_a2, bias_a2 = _beacon_mod._bias_factor_cached(period_a)
+        n_b2, bias_b2 = _beacon_mod._bias_factor_cached(period_b)
+    finally:
+        _beacon_mod.maybe_spawn_refresh = original_spawn
+
+    if spawn.calls:
         failures.append(
-            f"alternating periods: both first calls should walk; got {len(calls)} calls"
+            f"alternating fresh periods must never spawn a refresh; got {spawn.calls!r}"
         )
-    # Re-querying period A right after B must hit A's own cached entry, not
-    # recompute just because B's entry is now the most recent write.
-    n_a2, bias_a2 = _beacon_mod._bias_factor_cached(period_a)
-    if len(calls) != 2:
+    if (n_a1, bias_a1) != (30, 1.0) or (n_a2, bias_a2) != (30, 1.0):
         failures.append(
-            f"alternating periods: re-querying period A must be a cache hit "
-            f"(no new walker call); got {len(calls)} total calls"
+            f"period A's cached value must be stable; got ({n_a1!r},{bias_a1!r})"
+            f" then ({n_a2!r},{bias_a2!r})"
         )
-    if (n_a2, bias_a2) != (n_a1, bias_a1):
+    if (n_b1, bias_b1) != (30, 2.0) or (n_b2, bias_b2) != (30, 2.0):
         failures.append(
-            f"alternating periods: period A's cached value must be stable; "
-            f"got ({n_a1!r},{bias_a1!r}) then ({n_a2!r},{bias_a2!r})"
+            f"period B's cached value must be stable; got ({n_b1!r},{bias_b1!r})"
+            f" then ({n_b2!r},{bias_b2!r})"
         )
-    n_b2, bias_b2 = _beacon_mod._bias_factor_cached(period_b)
-    if len(calls) != 2:
+
+
+def _check_bias_cache_stale_period_spawns_only_its_own_key(failures, tmpdir):
+    """A stale period A alongside a still-fresh period B must spawn a refresh
+    keyed to A specifically, and must not disturb or re-trigger a spawn for
+    B's entry."""
+    cache_path = os.path.join(tmpdir, "bias-cache-mixed-freshness.json")
+    _beacon_mod._BIAS_CACHE_PATH = cache_path
+    period_a, period_b = 604800, 300
+    now = datetime.now(UTC).timestamp()
+    seeded = {
+        str(period_a): {
+            "computed_at_unix": now - _beacon_mod._BIAS_CACHE_TTL_SECONDS - 1,
+            "period_seconds": period_a,
+            "n_pairs": 5,
+            "bias_factor": 0.5,
+        },
+        str(period_b): {
+            "computed_at_unix": now - 1,
+            "period_seconds": period_b,
+            "n_pairs": 30,
+            "bias_factor": 2.0,
+        },
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(seeded, f)
+
+    spawn = _SpawnRecorder()
+    original_spawn = _beacon_mod.maybe_spawn_refresh
+    _beacon_mod.maybe_spawn_refresh = spawn
+    try:
+        n_a, bias_a = _beacon_mod._bias_factor_cached(period_a)
+        n_b, bias_b = _beacon_mod._bias_factor_cached(period_b)
+    finally:
+        _beacon_mod.maybe_spawn_refresh = original_spawn
+
+    if (n_a, bias_a) != (5, 0.5):
         failures.append(
-            f"alternating periods: re-querying period B must also be a cache "
-            f"hit; got {len(calls)} total calls"
+            f"stale period A must still be served stale; got ({n_a!r},{bias_a!r})"
         )
-    if (n_b2, bias_b2) != (n_b1, bias_b1):
+    if (n_b, bias_b) != (30, 2.0):
+        failures.append(f"fresh period B must be unaffected; got ({n_b!r},{bias_b!r})")
+    if spawn.calls != [("bias-factor", period_a)]:
         failures.append(
-            f"alternating periods: period B's cached value must be stable; "
-            f"got ({n_b1!r},{bias_b1!r}) then ({n_b2!r},{bias_b2!r})"
+            f"only the stale period must spawn, keyed to itself; got {spawn.calls!r}"
         )
 
 
@@ -400,10 +471,15 @@ def _check_bias_factor_cached(failures):
     original_cache_path = _beacon_mod._BIAS_CACHE_PATH
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
-            _check_bias_cache_read(failures, tmpdir)
-            _check_bias_cache_invalidation(failures, tmpdir)
-            _check_bias_cache_valid_key_ttl_expiry(failures, tmpdir)
+            _check_bias_cache_fresh_hit_skips_spawn(failures, tmpdir)
+            _check_bias_cache_stale_serves_and_spawns(failures, tmpdir)
+            _check_bias_cache_miss_and_wrong_period_serve_neutral_and_spawn(
+                failures, tmpdir
+            )
+            _check_refresh_bias_factor_cache_writes(failures, tmpdir)
+            _check_refresh_bias_factor_cache_unwritable_path(failures, tmpdir)
             _check_bias_cache_alternating_periods(failures, tmpdir)
+            _check_bias_cache_stale_period_spawns_only_its_own_key(failures, tmpdir)
         finally:
             _beacon_mod._walker_subcommand = original_walker
             _beacon_mod._BIAS_CACHE_PATH = original_cache_path
@@ -455,11 +531,14 @@ def _check_format_calibrated_eta(failures):
 
 
 def _check_bias_history_walk_is_local_only(failures):
-    """The beacons-history walk must pass --no-config so it never touches the
-    SMB extra roots from walker-roots.json: measured 8-38s over the network
-    mount vs 0.5s local, against a 5s subprocess timeout -- every cache miss
-    stalled a render for the full timeout and then failed. Bias calibration
-    is local-machine semantics, so local-only is also more correct."""
+    """The beacons-history walk -- now only reachable via
+    refresh_bias_factor_cache, the detached child's entry point; the render
+    path itself (_bias_factor_cached) never calls the walker at all -- must
+    pass --no-config so it never touches the SMB extra roots from
+    walker-roots.json: measured 8-38s over the network mount vs 0.5s local,
+    against a 5s subprocess timeout -- every cache miss stalled a render for
+    the full timeout and then failed. Bias calibration is local-machine
+    semantics, so local-only is also more correct."""
     captured = []
 
     def fake_walker(*args, **kw):
@@ -472,13 +551,13 @@ def _check_bias_history_walk_is_local_only(failures):
     try:
         with tempfile.TemporaryDirectory() as tmp:
             _beacon_mod._BIAS_CACHE_PATH = os.path.join(tmp, "bias.json")
-            _beacon_mod._bias_factor_cached(604800)
+            _beacon_mod.refresh_bias_factor_cache(604800)
     finally:
         _beacon_mod._walker_subcommand = original_walker
         _beacon_mod._BIAS_CACHE_PATH = original_path
 
     if not captured:
-        failures.append("bias walk should invoke the walker on a cold cache")
+        failures.append("bias refresh should invoke the walker")
     elif "--no-config" not in captured[0]:
         failures.append(
             f"beacons-history must pass --no-config (local roots only); got {captured[0]!r}"

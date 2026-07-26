@@ -20,13 +20,21 @@ file.
 State lives under ``~/.claude/state`` (override with ``CLAUDE_STATE_DIR``),
 the same directory ``nudge.py`` uses for the wrap-nudge state -- the resolver
 is shared (``base.state_dir``) rather than re-implemented.
+
+Also home to ``PhaseTimer``, a separate and much cheaper concern: a
+per-render sequence of named checkpoint durations that ``statusline.py``
+feeds into ``_log_slow_render``'s breakdown when a render crosses the
+slow-render threshold. Unlike the previous-render/peak state above, it never
+touches disk -- it lives and dies within one render's process.
 """
 
 import json
 import os
+import time
 
 from .base import RESET, sanitize_state_key
 from .base import state_dir as _resolve_state_dir
+from .refresh import reset_spawn_timings
 
 # Same env var name and default-on/"0"-disables semantics as the Pi footer.
 RENDER_TIMING_ENV_VAR = "STATUSLINE_RENDER_TIMING"
@@ -107,3 +115,99 @@ def format_render_suffix(session_id=None, state_dir=None):
         return ""
     last_ms, peak_ms = previous
     return f"{_DIM}ui {last_ms:.2f}ms peak {peak_ms:.2f}ms{RESET}"
+
+
+class PhaseTimer:
+    """Zero-config phase-checkpoint accumulator for one render's diagnostic
+    breakdown (statusline.py's slow-render log line, added after the
+    2026-07-26 5.8s spike investigation -- see PLAN.md).
+
+    Two ways to add an entry:
+      mark(name, detail=None)      -- times the interval since the previous
+                                       mark() (or construction): use for
+                                       sequential phases in main()'s body.
+      record(name, elapsed_seconds, detail=None)
+                                    -- adds an already-known duration for work
+                                       that doesn't fit the sequential shape,
+                                       e.g. detached-refresh spawns scattered
+                                       across the render and summed
+                                       independently (statusline_lib.refresh's
+                                       spawn_timings()).
+
+    Near-zero cost on the fast path: one monotonic() read and a list append
+    per call, no I/O or string formatting until breakdown() is actually
+    rendered -- which only happens once a render crosses the slow-render
+    threshold.
+    """
+
+    def __init__(self):
+        self._last = time.monotonic()
+        self._entries = []  # [(name, elapsed_seconds, detail|None)]
+
+    def mark(self, name, detail=None):
+        now = time.monotonic()
+        self._entries.append((name, now - self._last, detail))
+        self._last = now
+
+    def record(self, name, elapsed_seconds, detail=None):
+        self._entries.append((name, elapsed_seconds, detail))
+
+    def breakdown(self):
+        """`name=1.23s[detail]` entries joined with ', ', or '' when no
+        entries were ever recorded."""
+        parts = []
+        for name, elapsed, detail in self._entries:
+            label = f"{name}={elapsed:.2f}s"
+            if detail:
+                label += f"[{detail}]"
+            parts.append(label)
+        return ", ".join(parts)
+
+
+_CURRENT_PHASE_TIMER = None
+
+
+def start_phase_timer():
+    """Begin a new render's instrumentation: resets refresh.py's per-render
+    spawn log (statusline_lib.refresh.reset_spawn_timings) and starts a
+    fresh PhaseTimer, replacing any prior one -- one call at the top of
+    statusline.py's main() instead of three. Returns the new PhaseTimer;
+    current_phase_timer() is how the __main__ block reaches it later
+    (after main() returns or raises), since it doesn't hold the return
+    value itself."""
+    reset_spawn_timings()
+    global _CURRENT_PHASE_TIMER
+    _CURRENT_PHASE_TIMER = PhaseTimer()
+    return _CURRENT_PHASE_TIMER
+
+
+def current_phase_timer():
+    """The active render's PhaseTimer, or None before start_phase_timer()
+    has ever run (e.g. main() raised before reaching it)."""
+    return _CURRENT_PHASE_TIMER
+
+
+def summarize_spawns(phase_timer, spawns, phase_name="beacon", bias_kind="bias-factor"):
+    """Fold this render's refresh.spawn_timings() into `phase_timer`: marks
+    `phase_name` (the section of main() that can trigger a `bias_kind`
+    respawn -- _beacon_line's calibrated ETA, by default) with a
+    "bias-refresh-spawned" detail when that specific kind fired during this
+    render, and records an aggregate "spawns" entry (count + total elapsed)
+    when any spawn happened at all, of any kind.
+
+    Kept here rather than inlined in statusline.py's main() -- glue that
+    threads two module-level reads into a PhaseTimer call is worth a name,
+    and main() is long enough already (statusline.py is coverage-exempt
+    entry glue, so this move also puts real 100%-covered-suite teeth on the
+    logic for the first time).
+    """
+    bias_spawned = any(kind == bias_kind for kind, _elapsed in spawns)
+    phase_timer.mark(
+        phase_name, detail="bias-refresh-spawned" if bias_spawned else None
+    )
+    if spawns:
+        phase_timer.record(
+            "spawns",
+            sum(elapsed for _kind, elapsed in spawns),
+            detail=f"{len(spawns)}x",
+        )

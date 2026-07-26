@@ -1,17 +1,58 @@
 # schoen-claude-status - Test Report
 
-`2026-07-19`
+`2026-07-26`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both hard CI gates) |
-| **Tests** | 58 `scripts/verify_*.py`, all passing locally |
-| **Git** | `c297eff` (`main`, plus this change at time of writing) |
-| **Coverage** | 2178/2178 statements (100%), 0 exclusion annotations |
-| **Lint** | ruff format 0 / ruff check 0; aislop 91/100 Healthy (0 errors, 6 pre-existing file-size warnings, gate failBelow 90); 0 suppressions |
+| **Tests** | 61 `scripts/verify_*.py`, all passing locally |
+| **Git** | `d5955f8` (`main`, plus this change at time of writing) |
+| **Coverage** | 2343/2343 statements (100%), 0 exclusion annotations |
+| **Lint** | ruff format 0 / ruff check 0; aislop 93/100 Healthy (0 errors, 5 pre-existing file-size warnings, gate failBelow 90); 0 new suppressions |
 
-**This run (render-perf ratchet step 3, remainder - warm-core budget
+**This run (bias-factor async-refresher migration + slow-render phase
+breakdown):** root-caused from a real production incident -- a 5.8s
+slow-render log entry (`~/.claude/.statusline-error.log`) with no per-phase
+evidence, requiring a multi-file forensic reconstruction across cache/state
+timestamps to diagnose. Root cause: `beacon.py`'s `_bias_factor_cached` (the
+calibrated-ETA lookup) was the last inline `_walker_subcommand` call left on
+the render path -- every sibling lookup (git ref, beacons-latest,
+session-count, pace/spend) had already migrated to the stale-while-revalidate
++ detached-refresher pattern, but this one still paid a real
+`beacons-history` subprocess call (2s cap) inline on a 60s TTL miss. Migrated
+onto the same pattern: `_bias_factor_cached` now only reads the cache
+(serving stale or a neutral `(0, None)` on a true miss) and hands
+recomputation to `refresh_bias_factor_cache` via `maybe_spawn_refresh`;
+confirmed by sweeping every `run_captured`/`_walker_subcommand` call site in
+`statusline_lib` -- all now live exclusively inside `refresh_*` functions
+reachable only from the detached child, never the render itself. Also added
+`statusline_lib.rendertimer.PhaseTimer` (a per-render checkpoint accumulator,
+near-zero cost until a slow render actually reads it) and
+`refresh.spawn_timings()` (every `maybe_spawn_refresh` call's kind + elapsed,
+reset per render): a render crossing `_SLOW_RENDER_SECONDS` now gets a
+breakdown appended to the log line, e.g. `slow render: 5.8s (threshold 5s)
+[walk=0.10s, gitref=0.04s, beacon=0.05s[bias-refresh-spawned],
+spawns=0.06s[4x]]`, instead of a bare total -- the next spike is diagnosable
+from the log alone. Test files rewritten/extended to match:
+`verify_beacon_walker.py`'s bias-cache suite (fresh-hit/stale-serve/miss/
+alternating-periods, all re-shaped around spawn semantics instead of inline
+recompute), `verify_refresh_spawner.py` (new `bias-factor` dispatch entry +
+`spawn_timings`/`reset_spawn_timings` instrumentation), and a new
+`verify_phase_timer.py` (`PhaseTimer.mark`/`.record`/`.breakdown`,
+`start_phase_timer`/`current_phase_timer` -- split out of
+`verify_render_timer.py` once this suite's own growth crossed the file-size
+gate; that file keeps its separate previous-render/peak-tracking tests).
+Also caught and fixed two aislop regressions the change itself introduced
+before this run's clean 93/100 (matching the pre-change baseline exactly):
+`main()` growing past the function-length gate (fixed by extracting the
+spawn-summary glue into `rendertimer.summarize_spawns`/`start_phase_timer`)
+and two chained-`.get(..., {})` findings in a new test (split into explicit
+steps). Smoke-tested against a real captured production payload
+(`~/.claude/.statusline-input.log`): sane 3-line render, exit 0, error log
+unchanged.
+
+**Previous run (render-perf ratchet step 3, remainder - warm-core budget
 100ms -> 10ms):** the residual per-render work the 2026-07-16 async-refresher
 split left inline -- git ref, the beacons-latest walker lookup, and the
 session-count psutil scan -- moved onto the same stale-while-revalidate +

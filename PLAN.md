@@ -26,6 +26,33 @@
 
 ## Done
 
+- Bias-factor async-refresher migration + slow-render phase breakdown CLOSED
+  (2026-07-26, root-caused from a real 5.8s slow-render log entry): beacon.py's
+  `_bias_factor_cached` (the calibrated-ETA lookup) was the last inline
+  `_walker_subcommand` call left on the render path -- every sibling lookup
+  (git ref, beacons-latest, session-count, pace/spend) had already been
+  migrated to the stale-while-revalidate + detached-refresher pattern, but
+  this one still blocked on a real `beacons-history` subprocess (2s cap) on a
+  60s TTL miss. Migrated onto the same pattern: `_bias_factor_cached` now only
+  reads the cache (serving stale/neutral on a miss) and spawns
+  `refresh_bias_factor_cache` via `maybe_spawn_refresh`; confirmed by sweeping
+  every `run_captured`/`_walker_subcommand` call site in statusline_lib --
+  all now live exclusively inside `refresh_*` functions reachable only from
+  the detached child. Also added `statusline_lib.rendertimer.PhaseTimer`
+  (per-render checkpoint accumulator) and `refresh.spawn_timings()`
+  (per-spawn-call-site timing, reset per render): a render crossing
+  `_SLOW_RENDER_SECONDS` now gets a breakdown appended to the log line
+  (`walk=`, `gitref=`, `beacon=[bias-refresh-spawned]`, `spawns=NxTs`)
+  instead of a bare total, so the next spike is diagnosable from the log
+  alone. New/extended verify coverage: verify_beacon_walker.py's bias-cache
+  suite rewritten for the SWR contract, verify_refresh_spawner.py covers the
+  new dispatch entry + spawn-timing instrumentation, and a new
+  verify_phase_timer.py covers PhaseTimer/start_phase_timer/
+  current_phase_timer directly (split out of verify_render_timer.py once
+  the combined file crossed aislop's file-size gate). 100% statusline_lib
+  coverage held; aislop stayed at the pre-change 93/100 baseline after
+  fixing two self-introduced regressions along the way (main() function
+  length, a chained-dict-get pattern in a new test).
 - Render-perf ratchet step 3, remainder CLOSED (2026-07-19, claude/budget-
   ratchet): the async-refresher split covered pace/spend in 2026-07-16; the
   residual per-render work it left inline -- git ref, beacons-latest,

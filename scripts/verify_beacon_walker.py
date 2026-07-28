@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -314,6 +315,54 @@ def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
         failures.append("a walker failure must be negative-cached (failed=True)")
 
 
+def _check_bias_cache_never_waits_on_slow_walker(failures, tmpdir):
+    """The decisive regression proof for the 2026-07-26 fix: with an
+    artificially slow walker (simulating the real incident -- a
+    beacons-history call stuck near its 2s timeout under contention) and a
+    completely cold/absent bias cache, _bias_factor_cached must still return
+    in well under a second. Before the fix this call inlined the walker and
+    would have taken >= the sleep below; proving that decisively (rather
+    than relying on this machine's real claude-walker.exe happening to be
+    fast, which would pass even against the old, buggy code) is the point of
+    this check specifically -- see also
+    scripts/verify_render_budget.py's check_bias_factor_cold_cache_stays_fast
+    for the real-subprocess end-to-end version of this same scenario."""
+    cache_path = os.path.join(tmpdir, "bias-cache-slow-walker.json")
+    _beacon_mod._BIAS_CACHE_PATH = cache_path
+
+    def slow_walker(*_a, **_kw):
+        time.sleep(1.5)
+        return {"n_pairs": 25, "bias_factor": 1.4}
+
+    _beacon_mod._walker_subcommand = slow_walker
+    spawn = _SpawnRecorder()
+    original_spawn = _beacon_mod.maybe_spawn_refresh
+    _beacon_mod.maybe_spawn_refresh = spawn
+    try:
+        started = time.monotonic()
+        n, bias = _beacon_mod._bias_factor_cached(604800)
+        elapsed = time.monotonic() - started
+    finally:
+        _beacon_mod.maybe_spawn_refresh = original_spawn
+    if (n, bias) != (0, None):
+        failures.append(
+            f"cold cache with a slow walker must still serve neutral (0, None)"
+            f" immediately, not wait on it; got ({n!r}, {bias!r})"
+        )
+    if elapsed >= 1.0:
+        failures.append(
+            f"_bias_factor_cached took {elapsed:.2f}s despite a cold cache --"
+            f" it must never wait on the walker inline (regression to the"
+            f" 2026-07-26 bug); the 1.5s sleep in the fake walker should"
+            f" never be observed by the caller"
+        )
+    if spawn.calls != [("bias-factor", 604800)]:
+        failures.append(
+            f"the slow walker must be handed to a detached refresh, not"
+            f" called synchronously; spawn calls: {spawn.calls!r}"
+        )
+
+
 def _check_refresh_bias_factor_cache_unwritable_path(failures, tmpdir):
     """An unwritable cache path must not raise out of the refresher (same
     best-effort contract as every other refresher's cache write)."""
@@ -480,6 +529,7 @@ def _check_bias_factor_cached(failures):
             _check_refresh_bias_factor_cache_unwritable_path(failures, tmpdir)
             _check_bias_cache_alternating_periods(failures, tmpdir)
             _check_bias_cache_stale_period_spawns_only_its_own_key(failures, tmpdir)
+            _check_bias_cache_never_waits_on_slow_walker(failures, tmpdir)
         finally:
             _beacon_mod._walker_subcommand = original_walker
             _beacon_mod._BIAS_CACHE_PATH = original_cache_path

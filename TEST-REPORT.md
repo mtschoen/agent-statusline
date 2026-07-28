@@ -1,17 +1,39 @@
 # schoen-claude-status - Test Report
 
-`2026-07-26`
+`2026-07-28`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both hard CI gates) |
-| **Tests** | 61 `scripts/verify_*.py`, all passing locally |
-| **Git** | `d5955f8` (`main`, plus this change at time of writing) |
-| **Coverage** | 2343/2343 statements (100%), 0 exclusion annotations |
-| **Lint** | ruff format 0 / ruff check 0; aislop 93/100 Healthy (0 errors, 5 pre-existing file-size warnings, gate failBelow 90); 0 new suppressions |
+| **Tests** | 65 `scripts/verify_*.py`, all passing locally |
+| **Git** | `682b7db` (`main`, plus the uncommitted kimi-platform WIP and this change at time of writing) |
+| **Coverage** | 2442/2442 statements (100%), 0 exclusion annotations |
+| **Lint** | ruff format 0 / ruff check 0; aislop 91/100 Healthy (0 errors, 6 pre-existing file-size warnings, gate failBelow 90); 1 new per-file TID251 ignore (see below) |
 
-**This run (bias-factor async-refresher migration + slow-render phase
+**This run (kimi CLI-version badge + cold-start TID251 ignore):** the kimi
+adapter's single line gains a dim `vX.Y.Z` badge from the payload's
+`version` field (`statusline_lib/kimi.py::_version_badge`, appended after
+the PLAN badge). Scalars only: a wrong-typed container (list/dict) drops
+rather than stringify into the badge, a payload-carried leading `v` is
+stripped so we never render `vv...`, and `bool` is excluded despite being
+an `int` subclass. Also fixed doc drift in the same file and in README:
+`contextUsage` is a float fraction (0.047 == 4.7%), not an integer percent
+(confirmed against a live `~/.kimi-code/.statusline-input.log` payload).
+`verify_kimi_adapter.py` gained `_check_version_badge` (absent / blank /
+container / leading-v cases) plus a full-payload assertion. The one new
+ruff suppression: `scripts/verify_cold_start.py` (untracked WIP file)
+joined `pyproject.toml`'s documented TID251 per-file-ignores list -- it is
+the same outer-harness shape as its 7 listed siblings (spawns a real
+statusline.py subprocess with `input=`/`env=`, a surface
+`process_safe.run_captured` deliberately doesn't expose); without it
+`ruff check .` reported 1 error against an otherwise-clean gate. The 6
+aislop file-size warnings are all pre-existing WIP files (this change adds
+none: kimi.py is 158 lines). Smoke-tested against the live captured kimi
+payload: single line, exit 0, `v0.29.2` rendered in 256-color 245.
+`statusline_lib` remains at **100%** (2442/2442 statements).
+
+**Previous run (bias-factor async-refresher migration + slow-render phase
 breakdown):** root-caused from a real production incident -- a 5.8s
 slow-render log entry (`~/.claude/.statusline-error.log`) with no per-phase
 evidence, requiring a multi-file forensic reconstruction across cache/state

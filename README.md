@@ -418,7 +418,10 @@ command = "bash ~/schoen-claude-status/kimi-statusline-command.sh"
 ```
 
 Requires kimi-code built from source past commit `67dd03149` (the
-"status_line config" feature, #2255) — i.e. a release newer than 0.29.2.
+"status_line config" feature, #2255) — i.e. a release newer than 0.29.2
+(`git describe` puts the feature commit 17 commits past the 0.29.2 tag, so
+it ships in the NEXT upstream release; a 0.29.2 binary install does NOT
+have it).
 The installer manages only the `command` key; the sibling `items` key
 (kimi's built-in footer slots) is left alone.
 

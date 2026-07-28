@@ -304,6 +304,9 @@ platform's JSON or TOML configuration while preserving unrelated settings:
 
 # For Codex CLI (native footer preset):
 ~/schoen-claude-status/install.sh --platform codex
+
+# For Kimi Code CLI:
+~/schoen-claude-status/install.sh --platform kimi
 ```
 
 It's idempotent - re-run any time and it refreshes only the settings it owns
@@ -317,6 +320,7 @@ Options:
 - `--platform both`         Installs to both Claude and Qwen
 - `--platform pi`           Installs Pi extension loader to `~/.pi/agent/extensions/agent-statusline/index.ts`
 - `--platform codex`        Installs a native footer preset to `~/.codex/config.toml`
+- `--platform kimi`         Installs `[status_line] command` to `~/.kimi-code/tui.toml`
 
 If you'd rather edit settings by hand, the equivalent block
 is:
@@ -401,6 +405,61 @@ cached-token data or a command-backed footer item. Until then, the Claude-specif
 cache/TTL/cost/burn-rate, transcript walker, teammate summary, and calibrated
 progress-beacon rows cannot be carried over. Re-run `/statusline` inside Codex
 to interactively adjust the installed field order.
+
+### Kimi Code CLI
+
+Kimi Code CLI runs a command-backed statusline like Claude's and Qwen's
+(install with `--platform kimi`), merged into `~/.kimi-code/tui.toml` while
+preserving unrelated TOML settings and comments:
+
+```toml
+[status_line]
+command = "bash ~/schoen-claude-status/kimi-statusline-command.sh"
+```
+
+Requires kimi-code built from source past commit `67dd03149` (the
+"status_line config" feature, #2255) — i.e. a release newer than 0.29.2.
+The installer manages only the `command` key; the sibling `items` key
+(kimi's built-in footer slots) is left alone.
+
+On Windows the installed command is the UNQUOTED `py -3 <path>` form:
+kimi-code spawns it via Node `spawn(cmd.exe, ["/d", "/s", "/c", command])`
+and libuv/cmd `/s` mangle any quoted command string (verified live — the
+quoted form exits 2 with a garbage path). The checkout path must therefore
+be space-free on Windows; the installer prints a warning when it isn't.
+
+The kimi contract is tighter than the other harnesses in three ways, all
+verified against the kimi-code source:
+
+- **Single line only.** The TUI renders just the FIRST stdout line (it
+  replaces footer line 1); further lines are ignored. The exit code must be
+  0 and the first line non-empty, or the TUI silently falls back to its
+  built-in layout. `statusline_lib/kimi.py` therefore composes one line:
+  `<spinner> [host] cwd (branch) [session-id] | model | context | mode |
+  PLAN | vX.Y.Z`.
+- **300ms kill window.** The command is spawned via `cmd /d/s/c` (Windows)
+  or `sh -c` (POSIX), killed (process tree) after 300ms, and throttled to
+  one run per second. The kimi render path is payload-only plus in-process
+  helpers — no git subprocess (the payload carries `gitBranch`), no
+  transcript walk, no cost rendering.
+- **Sparse payload.** The stdin JSON is camelCase: `model`, `cwd`,
+  `gitBranch` (nullable), `permissionMode`, `planMode`, `contextUsage`
+  (float fraction: 0.047 == 4.7%), `contextTokens`, `maxContextTokens`,
+  `sessionId`, `version`. There is NO cost/cache/transcript/rate-limit data, so none of
+  the Claude-specific columns (cache, TTL, cost, burn rate, quota, beacon)
+  can exist for kimi — same structural limitation as Antigravity's
+  transcript situation, but here even the session-cumulative fields are
+  absent from the payload itself.
+
+What renders, left to right: the `[N sessions]` badge (shared SWR-cached
+session count; note the underlying process classifier only recognizes
+claude/qwen runtimes today), `(branch)` from the payload's `gitBranch`, the
+short `[session-id]` badge, the model badge, context as
+`usedK / windowK (P.P%)` (honest `???` denominator when `maxContextTokens`
+is 0/absent), the permission mode ONLY when it isn't the default `manual`
+(`yolo` in red, any other non-default mode in yellow), a `PLAN` badge
+when `planMode` is true, and a dim `vX.Y.Z` CLI-version badge from the
+payload's `version`.
 
 ### Antigravity CLI
 

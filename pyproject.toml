@@ -49,6 +49,7 @@ select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF", "TID251"]
 # surface (arbitrary cwd/env, CalledProcessError, monkeypatching Popen/run to
 # fake child behavior) that the wrapper deliberately doesn't expose.
 "scripts/verify_install_settings_merge.py" = ["TID251"]
+"scripts/verify_kimi_statusline_entry.py" = ["TID251"]
 "scripts/verify_process_safe.py" = ["TID251"]
 "scripts/verify_qwen_statusline_entry.py" = ["TID251"]
 "scripts/verify_render_budget.py" = ["TID251"]

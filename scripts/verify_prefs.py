@@ -175,6 +175,13 @@ def _check_app_dir(failures):
         if not res.endswith(".qwen"):
             failures.append(f"app_dir with platform=qwen failed: {res}")
 
+        # 2c. STATUSLINE_PLATFORM = "kimi"
+        os.environ.clear()
+        os.environ["STATUSLINE_PLATFORM"] = "kimi"
+        res = app_dir()
+        if not res.endswith(".kimi-code"):
+            failures.append(f"app_dir with platform=kimi failed: {res}")
+
         # 3. No env variables
         os.environ.clear()
         res = app_dir()

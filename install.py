@@ -1,4 +1,4 @@
-"""Wire status-line settings for Claude, Codex, Qwen, Antigravity, and Pi.
+"""Wire status-line settings for Claude, Codex, Qwen, Kimi, Antigravity, and Pi.
 
 Idempotent: re-running just refreshes each target's install strings; every
 other key in settings files is preserved verbatim, and pre-existing extension
@@ -18,9 +18,10 @@ Platform support:
   --platform antigravity  Installs to ~/.gemini/antigravity-cli/settings.json
   --platform pi           Installs Pi extension loader at ~/.pi/agent/extensions/agent-statusline/index.ts
   --platform codex        Installs a native preset to ~/.codex/config.toml
+  --platform kimi         Installs [status_line] command to ~/.kimi-code/tui.toml
 
 Usage (typically via the install.sh / install.bat wrappers):
-    python install.py --repo /abs/path/to/repo [--platform claude|codex|qwen|both|antigravity|pi] [--dry-run]
+    python install.py --repo /abs/path/to/repo [--platform claude|codex|qwen|both|antigravity|pi|kimi] [--dry-run]
 """
 
 import argparse
@@ -35,10 +36,13 @@ from statusline_lib.claude_family_install import (
     statusline_family_already_current,
 )
 from statusline_lib.codex_install import codex_config_current, merge_codex_config
+from statusline_lib.kimi_install import kimi_config_current, merge_kimi_config
 from statusline_lib.nudge_install import _nudge_command, _nudge_markers
 from statusline_lib.platform_commands import (
     STATUSLINE_REFRESH_SECONDS,
     _commands_for_platform,
+    _kimi_command_for_platform,
+    _kimi_space_path_warning,
     _pi_loader_contents,
     _pi_loader_path,
     _qwen_command_for_platform,
@@ -71,7 +75,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--platform",
-        choices=["claude", "codex", "qwen", "both", "antigravity", "pi"],
+        choices=["claude", "codex", "qwen", "both", "antigravity", "pi", "kimi"],
         default="claude",
         help="Which CLI to install for (default: claude)",
     )
@@ -115,7 +119,6 @@ def main():
     install_qwen = platform in ("qwen", "both")
     install_antigravity = platform == "antigravity"
     install_pi = platform == "pi"
-    install_codex = platform == "codex"
 
     if install_claude:
         result = _install_claude(repo, args.dry_run)
@@ -137,59 +140,65 @@ def main():
         if result != 0:
             return result
 
-    if install_codex:
-        result = _install_codex(args.dry_run)
+    if platform in ("codex", "kimi"):
+        result = _install_toml_platform(repo, args.dry_run, platform)
         if result != 0:
             return result
 
     return 0
 
 
-def _install_codex(dry_run):
-    """Install the closest native preset Codex's built-in footer supports."""
-    config_path = os.path.expanduser("~/.codex/config.toml")
+def _install_toml_platform(repo, dry_run, platform):
+    """Shared install flow for the TOML-config platforms: Codex's native
+    footer preset and Kimi Code CLI's [status_line] command."""
+    if platform == "kimi":
+        target, command = _kimi_command_for_platform(repo)
+        config_path = os.path.expanduser("~/.kimi-code/tui.toml")
+        is_current = lambda text: kimi_config_current(text, command)
+        merge = lambda text: merge_kimi_config(text, command)
+        detail = f"  status_line.command: {command}"
+        session_label = "Kimi Code"
+    else:
+        target = None
+        config_path = os.path.expanduser("~/.codex/config.toml")
+        is_current = codex_config_current
+        merge = merge_codex_config
+        detail = "  tui.status_line:    native Codex preset"
+        session_label = "Codex CLI"
+    if platform == "kimi" and (warning := _kimi_space_path_warning(target)):
+        print(warning, file=sys.stderr)
+    if target is not None and not os.path.exists(target):
+        print(f"error: expected file not found: {target}", file=sys.stderr)
+        print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
+        return 1
     try:
         current = _load_text(config_path)
     except OSError as exc:
-        return _codex_read_error(config_path, exc)
-
-    text = current or ""
+        print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
+        return 1
     try:
-        if current is not None and codex_config_current(text):
+        if current is not None and is_current(current):
             if dry_run:
                 print(f"# {config_path} already current -- nothing to write")
             else:
-                print(f"already current: {config_path}")
-                print("Nothing to do.")
+                print(f"already current: {config_path}\n{detail}\nNothing to do.")
             return 0
-        merged = merge_codex_config(text)
+        merged = merge(current or "")
     except ValueError as exc:
-        return _codex_merge_error(config_path, exc)
-
+        print(
+            f"error: could not merge {config_path}: {exc}\n"
+            "  refusing to overwrite the existing config -- fix it first",
+            file=sys.stderr,
+        )
+        return 1
     if dry_run:
         print(f"# would write to {config_path}")
         print(merged, end="")
         return 0
-
     _atomic_write_text(config_path, merged)
-    print(f"updated {config_path}")
-    print("  tui.status_line:    native Codex preset")
-    print("Open a new Codex CLI session to pick it up.")
+    print(f"updated {config_path}\n{detail}")
+    print(f"Open a new {session_label} session to pick it up.")
     return 0
-
-
-def _codex_read_error(config_path, exc):
-    print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
-    return 1
-
-
-def _codex_merge_error(config_path, exc):
-    print(f"error: could not merge {config_path}: {exc}", file=sys.stderr)
-    print(
-        "  refusing to overwrite the existing config -- fix it first",
-        file=sys.stderr,
-    )
-    return 1
 
 
 def _install_pi(repo, dry_run):

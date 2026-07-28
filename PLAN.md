@@ -26,6 +26,44 @@
 
 ## Done
 
+- Kimi Code CLI platform CLOSED (2026-07-28): new "kimi" harness wired the
+  same way as qwen's wave-3 fold. `statusline_lib/kimi.py` renders kimi's
+  SINGLE-line statusline from its camelCase payload (model, cwd, gitBranch,
+  permissionMode, planMode, contextUsage, contextTokens, maxContextTokens,
+  sessionId, version -- contract verified against kimi-code commit
+  67dd03149, "status_line config" #2255): the TUI renders only the first
+  stdout line, kills the command after 300ms, and throttles to 1 run/s, so
+  the render path is payload-only + in-process helpers (no git subprocess --
+  gitBranch comes from the payload -- no transcript walk, no cost columns;
+  the payload carries no cost/cache/rate-limit data at all). Composition:
+  `<spinner> [host] cwd (branch) [sid8] | model | usedK / windowK (P%) |
+  non-default permission mode (red yolo / yellow other) | PLAN`. Same
+  _safe_str/_safe_int type-confusion discipline as the qwen adapter (shared
+  by import). `kimi_statusline.py` thin shim + `kimi-statusline-command.sh`
+  mirror qwen's entry glue (no .bat: qwen's own .bat is unreferenced
+  in-repo); `statusline.py` main() gained the `platform_name() == "kimi"`
+  branch (exactly one line written, sessionId returned for the render
+  timer); base.py app_dir() routes kimi -> ~/.kimi-code;
+  platform_commands._kimi_command_for_platform + kimi_install.py's
+  `[status_line] command` tui.toml merge (codex-style text surgery, reusing
+  codex_install's _table_bounds/_newline/_parse_config, tomllib re-parse
+  integrity guard, items key left alone) + install.py `--platform kimi`.
+  install.py's codex/kimi TOML flows were folded into one shared
+  `_install_toml_platform` to keep install.py under aislop's 400-line
+  file-size gate (395 lines); codex's already-current report now also
+  prints its detail line. Verify coverage: verify_kimi_adapter.py,
+  verify_kimi_statusline_entry.py (TID251-exempt subprocess harness like
+  qwen's), verify_kimi_install.py (both OS arms via os.name patching +
+  install.py wiring against a fake HOME), plus a kimi case in
+  verify_prefs.py's app_dir checks. 100% statusline_lib coverage held.
+  Follow-up (same day): the Windows command form was switched from
+  `py -3 "<path>"` to UNQUOTED `py -3 <path>` after live verification
+  against kimi-code's actual spawn semantics (Node
+  spawn(cmd.exe, ["/d","/s","/c", command]) -- libuv quote-wraps +
+  backslash-escapes, cmd /s strips only the outer pair, py gets a garbage
+  path, exit 2). `_kimi_space_path_warning` flags a space-containing repo
+  path on nt (unquoted form can't survive one), printed by install.py.
+
 - Bias-factor async-refresher migration + slow-render phase breakdown CLOSED
   (2026-07-26, root-caused from a real 5.8s slow-render log entry): beacon.py's
   `_bias_factor_cached` (the calibrated-ETA lookup) was the last inline

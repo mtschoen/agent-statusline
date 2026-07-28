@@ -10,7 +10,9 @@ selects the adapter. Antigravity CLI reuses the Claude-shaped rendering
 path below (its payload is close enough that inline `is_agy`/`agent_state`
 checks suffice); Qwen Code's payload is different enough to need its own
 adapter, so `platform_name() == "qwen"` routes to
-`statusline_lib.qwen.render_qwen_statusline` instead. Do not rename this
+`statusline_lib.qwen.render_qwen_statusline` instead; Kimi Code CLI's
+camelCase payload routes the same way to
+`statusline_lib.kimi.render_kimi_statusline`. Do not rename this
 file -- every deployed machine's settings embed the literal path.
 
 See README.md for layout, color thresholds, and install instructions.
@@ -68,6 +70,7 @@ try:
         weekly_exhaustion,
     )
     from statusline_lib.gitref import _git_ref_raw_cached
+    from statusline_lib.kimi import render_kimi_statusline
     from statusline_lib.nudge import write_ctx_state
     from statusline_lib.qwen import render_qwen_statusline
     from statusline_lib.refresh import spawn_timings
@@ -376,6 +379,31 @@ def _render_line2(flags, inputs):
     return " | ".join(parts)
 
 
+def _render_qwen(d, cwd):
+    """Qwen Code render branch (wave-3 canonical-model fold, PLAN.md): Qwen's
+    payload shape is different enough from Claude Code's (own line-1 format,
+    no cost/transcript-walk/rate-limit fields at all) that it renders through
+    its own adapter rather than reusing the Claude-shaped fields below.
+    qwen_statusline.py is a thin shim that injects --statusline-platform qwen
+    and delegates to main()."""
+    line1, line2 = render_qwen_statusline(d, cwd, spinner_frame())
+    sys.stdout.write(line1)
+    if line2:
+        sys.stdout.write("\n" + line2)
+
+
+def _render_kimi(d, cwd):
+    """Kimi Code CLI render branch: kimi's payload (camelCase, no cost/
+    cache/transcript/rate-limit fields, gitBranch carried in the payload)
+    renders through its own adapter, same fold as Qwen. kimi_statusline.py
+    is the thin shim that injects --statusline-platform kimi and delegates
+    to main(). Kimi's TUI renders only the FIRST stdout line (300ms timeout,
+    exit 0 + non-empty line required), so this writes exactly one line and
+    never touches the transcript walk."""
+    sys.stdout.write(render_kimi_statusline(d, cwd, spinner_frame()))
+    return d.get("sessionId") or None
+
+
 def main():
     _phase_timer = start_phase_timer()
     raw = sys.stdin.read()
@@ -397,17 +425,10 @@ def main():
     cwd = workspace.get("current_dir") or d.get("cwd") or ""
 
     if platform_name() == "qwen":
-        # Wave-3 canonical-model fold (PLAN.md): Qwen Code's payload shape is
-        # different enough from Claude Code's (own line-1 format, no cost/
-        # transcript-walk/rate-limit fields at all) that it renders through
-        # its own adapter rather than reusing the Claude-shaped fields below.
-        # qwen_statusline.py is now a thin shim that injects
-        # --statusline-platform qwen and delegates here.
-        line1, line2 = render_qwen_statusline(d, cwd, spinner_frame())
-        sys.stdout.write(line1)
-        if line2:
-            sys.stdout.write("\n" + line2)
-        return None
+        return _render_qwen(d, cwd)
+
+    if platform_name() == "kimi":
+        return _render_kimi(d, cwd)
 
     cwd_display = _format_cwd(workspace.get("project_dir") or "", cwd)
 

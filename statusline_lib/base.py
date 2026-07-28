@@ -113,26 +113,36 @@ def _platform_from_argv():
 
 
 def platform_name():
-    """Return the resolved `--statusline-platform` value ("qwen", "antigravity",
-    "claude", ...), or None when neither the STATUSLINE_PLATFORM env var nor the
-    argv flag is present. Same precedence app_dir() uses (env wins over argv),
-    exposed as its own function so callers that need the platform value itself
-    (not just app_dir()'s directory choice) -- e.g. statusline.py's Qwen render
-    branch -- don't reach into the private _platform_from_argv helper."""
+    """Return the resolved `--statusline-platform` value ("qwen", "kimi",
+    "antigravity", "claude", ...), or None when neither the
+    STATUSLINE_PLATFORM env var nor the argv flag is present. Same precedence
+    app_dir() uses (env wins over argv), exposed as its own function so
+    callers that need the platform value itself (not just app_dir()'s
+    directory choice) -- e.g. statusline.py's Qwen/Kimi render branches --
+    don't reach into the private _platform_from_argv helper."""
     return os.environ.get("STATUSLINE_PLATFORM") or _platform_from_argv()
+
+
+# Resolved platform name -> app config dir path components under ~. Table
+# form (rather than an if-ladder) so adding a harness is a one-line entry;
+# the ANTIGRAVITY_AGENT env-var fallback in app_dir() below handles the case
+# where no platform was resolved at all.
+_PLATFORM_APP_DIR_PARTS = {
+    "antigravity": (".gemini", "antigravity-cli"),
+    "qwen": (".qwen",),
+    "kimi": (".kimi-code",),
+    "claude": (".claude",),
+}
 
 
 def app_dir():
     """Return the absolute path to the app's configuration/data directory.
     Defaults to ~/.claude, but switches to ~/.gemini/antigravity-cli
-    if running under Antigravity CLI, or ~/.qwen under Qwen Code."""
+    if running under Antigravity CLI, ~/.qwen under Qwen Code, or
+    ~/.kimi-code under Kimi Code CLI."""
     platform = platform_name()
-    if platform == "antigravity":
-        return os.path.join(os.path.expanduser("~"), ".gemini", "antigravity-cli")
-    if platform == "qwen":
-        return os.path.join(os.path.expanduser("~"), ".qwen")
-    if platform == "claude":
-        return os.path.join(os.path.expanduser("~"), ".claude")
+    if platform in _PLATFORM_APP_DIR_PARTS:
+        return os.path.join(os.path.expanduser("~"), *_PLATFORM_APP_DIR_PARTS[platform])
 
     if os.environ.get("ANTIGRAVITY_AGENT") == "1" or os.environ.get(
         "ANTIGRAVITY_CONVERSATION_ID"

@@ -79,6 +79,38 @@ def _qwen_command_for_platform(repo):
     return target, command
 
 
+def _kimi_command_for_platform(repo):
+    """Return (target, command) for Kimi Code CLI statusline."""
+    # Same invocation strategy as Qwen Code, EXCEPT the Windows command is
+    # unquoted: kimi-code spawns the command via Node
+    # spawn(cmd.exe, ["/d", "/s", "/c", command]) (status-line-command.ts) --
+    # libuv wraps the whole command in quotes and backslash-escapes the inner
+    # quotes, cmd /s strips only the outer pair, and py ends up with a
+    # garbage quoted path (exit 2, can't open file '"C:/..."'). Quotes in
+    # the command are the poison, not spaces; the unquoted form therefore
+    # requires a space-free repo path on Windows (install.py warns when that
+    # doesn't hold -- see _kimi_space_path_warning).
+    target = f"{repo}/kimi_statusline.py"
+    if os.name == "nt":
+        command = f"py -3 {target}"
+    else:
+        command = f'bash "{repo}/kimi-statusline-command.sh"'
+    return target, command
+
+
+def _kimi_space_path_warning(target):
+    """Return a warning string when the kimi statusline target path contains
+    a space on Windows (unusable -- see _kimi_command_for_platform for the
+    Node-spawn quoting mangling), else None."""
+    if os.name == "nt" and " " in target:
+        return (
+            f"warning: repo path contains a space ({target}); kimi-code on "
+            "Windows cannot consume a quoted or space-containing statusline "
+            "command path -- move the checkout to a space-free location"
+        )
+    return None
+
+
 def _pi_loader_path():
     return os.path.expanduser("~/.pi/agent/extensions/agent-statusline/index.ts")
 

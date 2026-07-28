@@ -40,15 +40,27 @@ support:
 To refresh the pinned binary after new commits land on the fork branch:
 `pnpm add -g --allow-build=aislop "github:mtschoen/aislop#schoen/main"`
 
+## kimi-code: the source checkout runs ahead of releases
+
+Before declaring a kimi-code capability missing (from public docs, the
+changelog, or strings in the installed binary), check the user's source
+checkout at `~/kimi-code` — it routinely carries merged-but-unreleased
+features. 2026-07-28: `status_line` support (commit 67dd03149, PR #2255)
+was in the checkout but in no release <= 0.29.2, and the public changelog
+showed nothing. The installed binary at `~/.kimi-code/bin/kimi.exe` trails
+the checkout by one or more releases.
+
 ## Coverage gate: 100% on statusline_lib
+
 
 The verify suite (`scripts/verify_*.py`) is held at **100% line coverage of
 `statusline_lib/`** (reached 2026-06-10). CI runs the suite under coverage on
 Linux AND Windows and fails below 100% - treat an uncovered line like a
 failing test. Platform branches must be covered on BOTH OSes: patch `os.name`
 in the test to force the foreign arm. Entry-point glue (statusline.py,
-subagent_statusline.py, qwen_statusline.py, install.py, wrap_nudge.py) is
-outside the measured scope - keep logic in `statusline_lib`, glue thin.
+subagent_statusline.py, qwen_statusline.py, kimi_statusline.py, install.py,
+wrap_nudge.py) is outside the measured scope - keep logic in `statusline_lib`,
+glue thin.
 
 Measure locally (bash):
 

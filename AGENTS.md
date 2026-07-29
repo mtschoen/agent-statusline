@@ -128,6 +128,16 @@ spike traced to it — the last inline `_walker_subcommand` call left on the
 render path) all serve their TTL cache stale-or-absent and hand
 recomputation to a detached child rather than recomputing inline on a miss.
 
+Platform routing pitfall for those refresh children (fixed 2026-07-28): the
+kimi/qwen shims inject `--statusline-platform` into `sys.argv` only, and a
+detached child's own argv (`python -c ...`) carries no such flag — without
+help it resolves `app_dir()` to `~/.claude` and writes its cache where the
+kimi/qwen render never reads it (observed live: kimi's working-tree badge
+stayed cold while gitref entries piled up under `~/.claude/state`).
+`refresh._child_snippet` therefore pins the render's resolved platform into
+the child's `STATUSLINE_PLATFORM` env; any new platform-routed cache kind
+must ride the same pin (covered by verify_refresh_spawner.py).
+
 `statusline.py`'s `main()` also carries a lightweight per-phase timer
 (`statusline_lib.rendertimer.PhaseTimer`) since the same 2026-07-26 spike: on
 a render crossing `_SLOW_RENDER_SECONDS`, `_log_slow_render` appends a

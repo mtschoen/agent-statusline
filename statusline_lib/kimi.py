@@ -17,9 +17,11 @@ Payload shape (camelCase, exact keys):
 redundant with contextTokens/maxContextTokens, which we render instead). The payload
 carries NO cost/cache/transcript/rate-limit data, so this adapter never
 walks transcripts or renders cost. `gitBranch` comes straight from the
-payload, so the kimi render path needs no git subprocess either -- every
-field is payload-only or in-process (hostname, the SWR-cached session
-count), which is what fits the 300ms kill window.
+payload, and the working-tree badge (`+A -B ↑x ↓y`, matching kimi-code's
+built-in footer, which computes it in-process and never puts it in the
+payload) comes from the SWR-cached gitref counters -- a cached read plus
+a detached refresh spawn, never a synchronous git subprocess, which is
+what fits the 300ms kill window.
 
 The `_safe_str`/`_safe_int` type-confusion guards are shared with the Qwen
 adapter (imported from .qwen, where they were introduced for the 2026-07-19
@@ -36,7 +38,8 @@ the cwd, not concurrent kimi sessions.
 """
 
 from .badge import format_context, format_model_badge
-from .base import CTX_DENOM, RED, RESET, YELLOW, hostname
+from .base import CTX_DENOM, GREEN, RED, RESET, YELLOW, fmt, hostname
+from .gitref import git_working_tree_cached
 from .qwen import _safe_int, _safe_str
 from .sessions import count_active_sessions, debounce_session_count
 
@@ -104,6 +107,30 @@ def _version_badge(version):
     return f"{_VERSION_COLOR}v{ver}{RESET}"
 
 
+def _working_tree_badge(cwd):
+    """`+A -B ↑x ↓y` working-tree badge matching kimi-code's built-in footer
+    (`branch [+2 -2 ↑58]` -- diff vs HEAD plus upstream sync), minus the
+    built-in's square brackets: our branch already sits inside parens, so
+    nesting `[...]` there reads as double punctuation. Data comes from the
+    SWR gitref cache (never an inline git call -- the 300ms kill window
+    forbids it), so the badge can lag a change by one refresh cycle and
+    reads as absent on a cold cache, both honest degrades. Green/red mirror
+    diffstat.format_lines; the sync counter is yellow as a "push/pull
+    pending" caution."""
+    added, deleted, ahead, behind = git_working_tree_cached(cwd)
+    parts = []
+    if added or deleted:
+        parts.append(f"{GREEN}+{fmt(added)}{RESET} {RED}-{fmt(deleted)}{RESET}")
+    sync = ""
+    if ahead:
+        sync += f"↑{ahead}"
+    if behind:
+        sync += f"↓{behind}"
+    if sync:
+        parts.append(f"{YELLOW}{sync}{RESET}")
+    return f" {' '.join(parts)}" if parts else ""
+
+
 def _kimi_line_prefix(payload, cwd, spinner):
     """`<spinner> [host] cwd (branch) [sid]`, plus the shared `[N sessions]`
     badge -- the same shape as the Qwen/Claude line-1 prefix, except the
@@ -115,7 +142,7 @@ def _kimi_line_prefix(payload, cwd, spinner):
         prefix = f"{prefix} {RED}[{n_sessions} sessions]{RESET}"
     branch = _safe_str(payload.get("gitBranch")).strip()
     if branch:
-        prefix = f"{prefix} ({branch})"
+        prefix = f"{prefix} ({branch}{_working_tree_badge(cwd)})"
     badge = _session_badge(payload.get("sessionId"))
     if badge:
         prefix = f"{prefix} {badge}"

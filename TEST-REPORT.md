@@ -6,12 +6,38 @@
 |-------|-------|
 | **Status** | PASS |
 | **Mode** | maintain (lint AND coverage - both hard CI gates) |
-| **Tests** | 65 `scripts/verify_*.py`, all passing locally |
+| **Tests** | 66 `scripts/verify_*.py`, all passing locally |
 | **Git** | `682b7db` (`main`, plus the uncommitted kimi-platform WIP and this change at time of writing) |
-| **Coverage** | 2442/2442 statements (100%), 0 exclusion annotations |
-| **Lint** | ruff format 0 / ruff check 0; aislop 91/100 Healthy (0 errors, 6 pre-existing file-size warnings, gate failBelow 90); 1 new per-file TID251 ignore (see below) |
+| **Coverage** | 2492/2492 statements (100%), 0 exclusion annotations |
+| **Lint** | ruff format 0 / ruff check 0; aislop ci exit 0 (6 pre-existing file-size warnings in untracked WIP files, gate failBelow 90); aislop scan --staged 100/100 Healthy (0 issues) |
 
-**This run (kimi CLI-version badge + cold-start TID251 ignore):** the kimi
+**This run (kimi working-tree git badge + refresh-child platform pin):**
+the kimi line gains kimi-code's built-in footer's `+A -B ↑x ↓y` badge
+inside the branch parens (`(main +2 -2 ↑58)`). The status_line payload
+never carries these counters (confirmed against the released 0.29.2 binary
+AND the source checkout's `StatusLinePayload`), so
+`statusline_lib/gitref.py`'s SWR cache now persists `added`/`deleted`
+(`git diff --numstat HEAD`, binary `-` as 0) and `ahead`/`behind`
+(`git rev-list --left-right --count @{upstream}...HEAD`, empty output on
+no-upstream/unborn-HEAD degrading to zeros) alongside branch/short_hash;
+`git_working_tree_cached` serves them stale-or-zero (pre-badge cache
+entries spawn a backfill; wrong-typed counters degrade to 0) and
+`statusline_lib/kimi.py::_working_tree_badge` renders them (green/red diff,
+yellow sync) with zero inline git on the render path. Fixed a real bug the
+smoke test exposed: the detached refresh child resolved app_dir() to
+~/.claude (kimi's platform lives in argv, not env), so refreshes spawned
+by kimi renders wrote caches their render never read --
+`refresh._child_snippet` now pins STATUSLINE_PLATFORM into the child's env
+(fixes the session-count badge on kimi/qwen too, same latent gap). New
+`scripts/verify_git_working_tree_cache.py` (split out when
+verify_git_ref_cache.py outgrew aislop's 400-line gate) plus new cases in
+verify_git_ref_cache.py / verify_kimi_adapter.py /
+verify_refresh_spawner.py. Smoke-tested end to end: cold render spawns the
+refresh, warm render shows `(main +2 -2 ↑58)` against the live schoen-lab
+checkout -- byte-identical numbers to kimi's built-in footer.
+`statusline_lib` remains at **100%** (2492/2492 statements).
+
+**Previous run (kimi CLI-version badge + cold-start TID251 ignore):** the kimi
 adapter's single line gains a dim `vX.Y.Z` badge from the payload's
 `version` field (`statusline_lib/kimi.py::_version_badge`, appended after
 the PLAN badge). Scalars only: a wrong-typed container (list/dict) drops

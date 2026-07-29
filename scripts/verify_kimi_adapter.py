@@ -21,27 +21,34 @@ from statusline_lib.kimi import render_kimi_statusline
 
 class _PatchedKimiSessions:
     """Swap statusline_lib.kimi's imported count_active_sessions /
-    debounce_session_count names for fakes, so render_kimi_statusline's
-    session-badge branch is exercised without touching real state files."""
+    debounce_session_count / git_working_tree_cached names for fakes, so
+    render_kimi_statusline's session-badge and working-tree-badge branches
+    are exercised without touching real state files or the gitref cache."""
 
-    def __init__(self, n_sessions):
+    def __init__(self, n_sessions, git_stats=(0, 0, 0, 0)):
         self._n_sessions = n_sessions
+        self._git_stats = git_stats
         self._originals = {}
 
     def __enter__(self):
         self._originals["count_active_sessions"] = kimi_module.count_active_sessions
         self._originals["debounce_session_count"] = kimi_module.debounce_session_count
+        self._originals["git_working_tree_cached"] = kimi_module.git_working_tree_cached
         kimi_module.count_active_sessions = lambda cwd: self._n_sessions
         kimi_module.debounce_session_count = lambda raw_count, cwd: raw_count
+        kimi_module.git_working_tree_cached = lambda cwd, state_dir=None: (
+            self._git_stats
+        )
         return self
 
     def __exit__(self, *_exc_info):
         kimi_module.count_active_sessions = self._originals["count_active_sessions"]
         kimi_module.debounce_session_count = self._originals["debounce_session_count"]
+        kimi_module.git_working_tree_cached = self._originals["git_working_tree_cached"]
 
 
-def _render(payload, n_sessions=1):
-    with _PatchedKimiSessions(n_sessions):
+def _render(payload, n_sessions=1, git_stats=(0, 0, 0, 0)):
+    with _PatchedKimiSessions(n_sessions, git_stats):
         return render_kimi_statusline(payload, "/tmp", "|")
 
 
@@ -170,6 +177,26 @@ def _check_version_badge(failures):
         failures.append(f"leading-v version should render once, got {line!r}")
 
 
+def _check_working_tree_badge(failures):
+    """The `+A -B ↑x ↓y` badge inside the branch parens: both sections,
+    sync-only, diff-only, and all-zero (no badge, branch renders bare).
+    Counts come from the patched git_working_tree_cached, so this exercises
+    kimi.py's composition only -- the cache itself is verify_git_ref_cache's
+    contract."""
+    line = _render({"gitBranch": "main"}, git_stats=(2, 1, 58, 0))
+    if "+2" not in line or "-1" not in line or "↑58" not in line:
+        failures.append(f"line should show the full working-tree badge, got {line!r}")
+    line = _render({"gitBranch": "main"}, git_stats=(0, 0, 0, 3))
+    if "↓3" not in line or "+" in line:
+        failures.append(f"sync-only stats should badge only the sync, got {line!r}")
+    line = _render({"gitBranch": "main"}, git_stats=(5, 2, 0, 0))
+    if "+5" not in line or "-2" not in line or "↑" in line or "↓" in line:
+        failures.append(f"diff-only stats should badge only the diff, got {line!r}")
+    line = _render({"gitBranch": "main"}, git_stats=(0, 0, 0, 0))
+    if "(main)" not in line or "↑" in line or "+" in line:
+        failures.append(f"zero stats must render the bare branch, got {line!r}")
+
+
 def check(failures):
     _check_full_payload(failures)
     _check_null_git_branch(failures)
@@ -180,6 +207,7 @@ def check(failures):
     _check_zero_max_context_tokens(failures)
     _check_sessions_badge(failures)
     _check_version_badge(failures)
+    _check_working_tree_badge(failures)
 
 
 def main():

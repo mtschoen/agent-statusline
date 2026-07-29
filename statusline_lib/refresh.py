@@ -21,7 +21,7 @@ import os
 import sys
 import time
 
-from .base import app_dir
+from .base import app_dir, platform_name
 from .process_safe import spawn_detached
 
 # A refresher that died without clearing its marker stops suppressing
@@ -114,10 +114,26 @@ def _child_snippet(kind, argument):
 
     Numeric arguments are coerced to float (matches every existing caller,
     window timestamps); string arguments (a cwd, a session id) pass through
-    unchanged -- repr() quotes either shape safely for the -c source."""
+    unchanged -- repr() quotes either shape safely for the -c source.
+
+    The render's resolved platform is pinned into the child's env first:
+    kimi_statusline.py/qwen_statusline.py inject --statusline-platform into
+    sys.argv only, and the child's own argv (python -c) carries no such
+    flag -- without this, a kimi/qwen render's refresh child would resolve
+    app_dir() to ~/.claude and write the cache where its render never
+    reads it (observed 2026-07-28: the kimi working-tree badge stayed cold
+    while gitref entries piled up in ~/.claude/state). platform_name()
+    returning None (plain Claude render) sets nothing; app_dir()'s default
+    is already correct there."""
     arg = float(argument) if isinstance(argument, (int, float)) else argument
+    platform = platform_name()
+    pin = (
+        f"import os; os.environ['STATUSLINE_PLATFORM'] = {platform!r}; "
+        if platform
+        else ""
+    )
     return (
-        f"import sys; sys.path.insert(0, {_REPO_ROOT!r}); "
+        f"{pin}import sys; sys.path.insert(0, {_REPO_ROOT!r}); "
         f"from statusline_lib.refresh import run_refresh; "
         f"run_refresh({kind!r}, {arg!r})"
     )

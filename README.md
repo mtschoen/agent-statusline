@@ -438,12 +438,13 @@ verified against the kimi-code source:
   replaces footer line 1); further lines are ignored. The exit code must be
   0 and the first line non-empty, or the TUI silently falls back to its
   built-in layout. `statusline_lib/kimi.py` therefore composes one line:
-  `<spinner> [host] cwd (branch) [session-id] | model | context | mode |
+  `<spinner> [host] cwd (branch +A -B ↑x ↓y) [session-id] | model | context | mode |
   PLAN | vX.Y.Z`.
 - **300ms kill window.** The command is spawned via `cmd /d/s/c` (Windows)
   or `sh -c` (POSIX), killed (process tree) after 300ms, and throttled to
   one run per second. The kimi render path is payload-only plus in-process
-  helpers — no git subprocess (the payload carries `gitBranch`), no
+  helpers and SWR-cached reads — no inline git subprocess (the payload
+  carries `gitBranch`; the working-tree badge reads the gitref cache), no
   transcript walk, no cost rendering.
 - **Sparse payload.** The stdin JSON is camelCase: `model`, `cwd`,
   `gitBranch` (nullable), `permissionMode`, `planMode`, `contextUsage`
@@ -456,7 +457,12 @@ verified against the kimi-code source:
 
 What renders, left to right: the `[N sessions]` badge (shared SWR-cached
 session count; note the underlying process classifier only recognizes
-claude/qwen runtimes today), `(branch)` from the payload's `gitBranch`, the
+claude/qwen runtimes today), `(branch)` from the payload's `gitBranch` with
+the `+A -B ↑x ↓y` working-tree badge inside the same parens (matching
+kimi-code's built-in footer, which computes diff-vs-HEAD and upstream sync
+in-process and never puts them in the payload — ours reads the same numbers
+from the SWR gitref cache, so the badge can lag a change by one refresh
+cycle and is absent on a cold cache), the
 short `[session-id]` badge, the model badge, context as
 `usedK / windowK (P.P%)` (honest `???` denominator when `maxContextTokens`
 is 0/absent), the permission mode ONLY when it isn't the default `manual`

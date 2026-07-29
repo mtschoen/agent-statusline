@@ -265,6 +265,30 @@ def _check_child_snippet_end_to_end(failures):
         failures.append(f"child snippet cache entry unusable: {entry!r}")
 
 
+def _check_child_snippet_pins_platform(failures):
+    """_child_snippet pins the render's resolved platform into the child's
+    STATUSLINE_PLATFORM env (before the statusline_lib import, whose
+    module-level _INFLIGHT_PATH resolves app_dir() at import time), and
+    pins nothing when no platform is resolved (plain Claude render)."""
+    saved = os.environ.pop("STATUSLINE_PLATFORM", None)
+    try:
+        snippet = refresh._child_snippet("git-ref", "/some/repo")
+        if "STATUSLINE_PLATFORM" in snippet:
+            failures.append(f"no resolved platform must pin no env; got {snippet!r}")
+        os.environ["STATUSLINE_PLATFORM"] = "kimi"
+        snippet = refresh._child_snippet("git-ref", "/some/repo")
+        pin = "os.environ['STATUSLINE_PLATFORM'] = 'kimi';"
+        if pin not in snippet:
+            failures.append(f"resolved platform must be pinned; got {snippet!r}")
+        elif snippet.index(pin) > snippet.index("sys.path.insert"):
+            failures.append(
+                f"the platform pin must precede the statusline_lib import; got {snippet!r}"
+            )
+    finally:
+        if saved is not None:
+            os.environ["STATUSLINE_PLATFORM"] = saved
+
+
 def main():
     failures = []
     _check_now_unix_is_wall_clock(failures)
@@ -275,6 +299,7 @@ def main():
     _check_run_refresh_bias_factor_dispatch(failures)
     _check_spawn_timings_instrumentation(failures)
     _check_child_snippet_end_to_end(failures)
+    _check_child_snippet_pins_platform(failures)
 
     if failures:
         for f in failures:

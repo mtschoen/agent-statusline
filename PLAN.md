@@ -2,6 +2,26 @@
 
 ## Inbox
 
+- [ ] Dedupe the cold-start checks: verify_render_budget.py and
+      verify_cold_start.py BOTH carry and run
+      check_first_render_ever_stays_fast +
+      check_bias_factor_cold_cache_stays_fast (the split was landed
+      mid-flight in e22f841). Remove the render_budget copies (and its
+      private _build_fixture_home, in favor of
+      _render_fixture_helpers.build_fixture_home) so the suite runs them
+      once.
+- [ ] Kimi line 1: optional dim `ui Xms` render-timing suffix. The data is
+      already recorded per render (record_render runs for kimi;
+      ~/.kimi-code/state/render-timer-*.json stays current) -- only the
+      format_render_suffix call is missing (its caller lives in the
+      Claude-only line-3 assembly). Pref-gate like STATUSLINE_BEACON.
+      Declined 2026-07-28, captured for later.
+- [ ] Kimi line 1 context duplicates kimi's built-in footer line 2 (the
+      right-side context status renders even when a custom command owns
+      line 1). Dropping format_context from the kimi adapter reclaims
+      ~15-20 columns at zero info cost -- or keep ours (token counts +
+      threshold colors vs the built-in's coarser format). Declined
+      2026-07-28, captured for later.
 - [ ] Qwen entry-point type-confusion hardening: wrong-TYPED payload fields
       (e.g. context_window_size:"x", model.display_name as int) still crash
       paths shared with the Claude adapter (badge.format_model_badge etc.).

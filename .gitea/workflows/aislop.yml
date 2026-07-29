@@ -1,0 +1,58 @@
+name: aislop
+# Quality gate for AI-generated slop patterns (https://github.com/scanaislop/aislop).
+# `aislop ci` scores the whole repo (0-100) and exits non-zero when the score
+# drops below ci.failBelow (90) in .aislop/config.yml - gating the PR/push.
+#
+# Unlike schoen-lab and git-wizard, which clone + build the aislop CLI from a
+# pinned fork commit, this repo vendors the fork build as a lockfile-pinned
+# devDependency (@schoen/aislop, served from the self-hosted Gitea npm
+# registry - see .npmrc) and installs it via `npm ci --ignore-scripts`. That
+# stays the install method here (it predates this workflow, matching the old
+# in-Lint-job step and the per-edit hook) - bump the devDependency version in
+# package.json/package-lock.json deliberately, do not switch this leg to
+# `npx` or a from-source clone.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install aislop (lockfile-pinned, no install scripts)
+        # package-lock.json carries the integrity hashes and the Gitea
+        # registry URL; npm ci verifies them. --ignore-scripts skips aislop's
+        # postinstall (bundled-ruff download) - aislop resolves ruff from
+        # PATH instead, same as when this step lived in the Lint job.
+        run: npm ci --ignore-scripts
+      - name: aislop quality gate
+        # Sanity-fail if the scan didn't actually walk the repo (avoid a
+        # silent pass on an empty/broken run): require a healthy file count
+        # alongside the score gate, same guard shape as schoen-lab's
+        # aislop.yml. This repo scans ~114 files today.
+        run: |
+          REPORT="$RUNNER_TEMP/aislop-report.json"
+          node_modules/.bin/aislop ci . --json > "$REPORT" || GATE_FAILED=1
+          node -e "const r=require(process.env.REPORT); const f=r.summary?.files??0; console.log('aislop score',r.score,'over',f,'files'); if(f<20){console.error('aislop only scanned '+f+' files - the scan did not run');process.exit(1);}"
+          if [ -n "$GATE_FAILED" ]; then echo "GATE_STATE=failure" >> "$GITHUB_ENV"; echo "aislop score below failBelow"; exit 1; fi
+          echo "GATE_STATE=success" >> "$GITHUB_ENV"
+        env:
+          REPORT: ${{ runner.temp }}/aislop-report.json
+
+      - name: Post aislop score status
+        # Surfaces the score in the PR's checks list (context aislop/score,
+        # e.g. "score 91/100 over 114 files"), the way pr-crew/coverage shows
+        # its percentage. GATE_STATE is unset when the gate step died before
+        # the score check ran - default to failure so the status can never
+        # show green without a gate run.
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 ci/post-aislop-status.py --report "$RUNNER_TEMP/aislop-report.json" --state "${GATE_STATE:-failure}"

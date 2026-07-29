@@ -75,6 +75,15 @@ _RENDER_BUDGET_SECONDS = float(os.environ.get("STATUSLINE_TEST_RENDER_BUDGET", "
 # exact check passing at the 10ms budget -- ~2-5x margin over the observed
 # median. Budget lowered to the Pi bridge's per-keypress target, 10ms.
 _CORE_BUDGET_MS = float(os.environ.get("STATUSLINE_TEST_CORE_BUDGET_MS", "10"))
+# One 9-render child is a single sample, and CI runners share cores with other
+# jobs: runs #113 (2026-07-19) and #115 (2026-07-28) both reported "warm core
+# median 11ms exceeds 10ms" while runs #114/#116 and every local run passed at
+# ~2-5ms. Take the BEST of this many independent child measurements instead of
+# trusting one. A real regression (blocking work back in the render path) is
+# reproducible and misses the budget on every attempt; a scheduler blip spoils
+# one. The loop stops at the first attempt inside budget, so the healthy case
+# still spawns exactly one child.
+_CORE_MEDIAN_ATTEMPTS = 3
 
 
 def _numeric_value(node):
@@ -449,12 +458,40 @@ print(times[len(times) // 2])
 """
 
 
+def _measure_warm_core_median(code, env):
+    """Run one warm-core timing child and return (median_ms, error_message).
+
+    Exactly one of the two is None. Callers retry on a slow-but-valid
+    measurement (see _CORE_MEDIAN_ATTEMPTS) but abort on an error, which
+    signals a broken child rather than a loaded runner.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+            timeout=_RENDER_BUDGET_SECONDS * 6,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "warm-core timing child exceeded its hard kill"
+    if result.returncode != 0:
+        return None, (
+            f"warm-core timing child exited {result.returncode}:"
+            f" {result.stderr[-200:]!r}"
+        )
+    return float(result.stdout.strip()), None
+
+
 def check_warm_core_median(failures):
     """Median warm in-process render (the 'core': payload -> rendered string,
     interpreter+imports excluded) must beat _CORE_BUDGET_MS in the fixture
-    environment. One child interpreter renders 9 times and reports the
+    environment. Each child interpreter renders 9 times and reports the
     median, so spawn/import cost and first-render cache warming are excluded
     from the figure -- this is the number the async-refresher work ratchets.
+    The best of up to _CORE_MEDIAN_ATTEMPTS such children is the verdict; see
+    that constant for why one sample is not enough on a shared CI runner.
 
     The child calls statusline.main() directly (see _CORE_TIMER_SNIPPET), never
     the `if __name__ == "__main__":` block -- so record_render() (which WRITES
@@ -511,28 +548,20 @@ def check_warm_core_median(failures):
             }
         )
         code = _CORE_TIMER_SNIPPET.format(repo=_REPO, payload=payload)
-        try:
-            result = subprocess.run(
-                [sys.executable, "-c", code],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                env=env,
-                timeout=_RENDER_BUDGET_SECONDS * 6,
-            )
-        except subprocess.TimeoutExpired:
-            failures.append("warm-core timing child exceeded its hard kill")
-            return
-        if result.returncode != 0:
+        best_ms = None
+        for _ in range(_CORE_MEDIAN_ATTEMPTS):
+            median_ms, error = _measure_warm_core_median(code, env)
+            if error is not None:
+                failures.append(error)
+                return
+            if best_ms is None or median_ms < best_ms:
+                best_ms = median_ms
+            if best_ms <= _CORE_BUDGET_MS:
+                break
+        if best_ms > _CORE_BUDGET_MS:
             failures.append(
-                f"warm-core timing child exited {result.returncode}:"
-                f" {result.stderr[-200:]!r}"
-            )
-            return
-        median_ms = float(result.stdout.strip())
-        if median_ms > _CORE_BUDGET_MS:
-            failures.append(
-                f"warm core median {median_ms:.0f}ms exceeds"
+                f"warm core median {best_ms:.0f}ms (best of"
+                f" {_CORE_MEDIAN_ATTEMPTS} attempts) exceeds"
                 f" {_CORE_BUDGET_MS:.0f}ms -- blocking work crept into the"
                 " happy-path render"
             )

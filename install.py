@@ -174,6 +174,7 @@ def _install_toml_platform(repo, dry_run, platform):
     try:
         current = _load_text(config_path)
     except OSError as exc:
+        # Unreadable config file: report the cause and abort rather than clobber it.
         print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
         return 1
     try:
@@ -185,6 +186,7 @@ def _install_toml_platform(repo, dry_run, platform):
             return 0
         merged = merge(current or "")
     except ValueError as exc:
+        # Unmergeable config file: report the cause and abort rather than clobber it.
         print(
             f"error: could not merge {config_path}: {exc}\n"
             "  refusing to overwrite the existing config -- fix it first",

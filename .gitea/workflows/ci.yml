@@ -30,26 +30,6 @@ jobs:
           pip install ruff
           ruff check .
           ruff format --check .
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install aislop (lockfile-pinned, no install scripts)
-        # aislop (@schoen/aislop, the fork build) is vendored as a devDependency;
-        # package-lock.json carries the integrity hashes and the Gitea registry
-        # URL. `npm ci` installs exactly the locked tree and verifies those
-        # hashes; --ignore-scripts blocks dependency lifecycle scripts. This
-        # replaces `npx --yes aislop@x`, which fetched from the live registry
-        # without integrity verification on every run.
-        #
-        # --ignore-scripts skips aislop's postinstall, so the bundled ruff is not
-        # downloaded; aislop resolves ruff from PATH instead, which the earlier
-        # "Lint (ruff)" step already installed (src/utils/tooling.ts).
-        run: npm ci --ignore-scripts
-      - name: AI-slop gate (aislop)
-        # Whole-repo AI-slop score gate. failBelow + exclusions in
-        # .aislop/config.yml. The repo currently scores 100/100. Runs the
-        # `lint:aislop` script (-> local node_modules/.bin/aislop ci .).
-        run: npm run lint:aislop
       - name: Type check (pyright, non-blocking)
         # Informational for now. Drop the `|| true` to hard-fail once the
         # codebase is clean against pyright.

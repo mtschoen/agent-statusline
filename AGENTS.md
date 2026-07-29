@@ -36,6 +36,19 @@ support:
   code); `aislop fix --claude` hands the rest back with full context.
 - `aislop ci .` is the gate - exits non-zero if the score drops below the
   threshold in `.aislop/config.yml`. Treat a failing gate like a failing test.
+- **Restructure first; suppress only a proven false positive.** When a finding
+  is real, fix the code. When the rule is provably wrong about this repo (read
+  the rule in `node_modules/@schoen/aislop/dist/` before deciding), use the
+  narrowest mechanism that exists: an inline
+  `# aislop-ignore-next-line <rule> -- <one-line reason>` directive on the one
+  offending line, never a repo-wide `rules:` entry and never a lowered
+  `failBelow`. Every such site must state why. The tree currently has exactly
+  two, both `hallucinated-import` on `import statusline` (see
+  `.aislop/config.yml` and issue #23); `aislop scan .` prints the suppression
+  count, so a third one showing up is visible.
+- Headroom is thin: the gate scores 91 against a floor of 90, because six files
+  are over the 400-line limit. Check `aislop ci .` before pushing anything that
+  adds a file or grows one past 400 lines.
 
 To refresh the pinned binary after new commits land on the fork branch:
 `pnpm add -g --allow-build=aislop "github:mtschoen/aislop#schoen/main"`

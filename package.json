@@ -9,5 +9,14 @@
   },
   "devDependencies": {
     "@schoen/aislop": "0.12.3"
+  },
+  "overridesComment": "Patched floors for vulnerable TRANSITIVE dependencies of @schoen/aislop (the lint tool itself). This repo ships no runtime JavaScript, so none of these reach a user; they were failing aislop's own security engine and with it the CI gate. Each entry is the lowest published version outside the advisory range (npm audit 2026-07-28, see issue #23): tar GHSA <=7.5.20 critical, fast-uri 3.0.0-3.1.3 high, adm-zip <0.6.0 high, hono 4.0.0-4.12.26 moderate, @hono/node-server <2.0.5 moderate, body-parser 2.0.0-2.2.2 low. Drop an entry once the mtschoen/aislop fork bumps past it; npm warns on overrides that no longer apply.",
+  "overrides": {
+    "tar": "^7.5.22",
+    "fast-uri": "^3.1.4",
+    "adm-zip": "^0.6.0",
+    "hono": "^4.12.27",
+    "@hono/node-server": "^2.0.5",
+    "body-parser": "^2.2.3"
   }
 }

@@ -21,6 +21,10 @@ import time
 if not any(arg.startswith("--statusline-platform") for arg in sys.argv):
     sys.argv += ["--statusline-platform", "qwen"]
 
+# aislop's hallucinated-import rule resolves local *packages* (directories with
+# __init__.py) but not root-level top-level modules, so it reads this as a
+# missing pip dependency. statusline.py is a real sibling file. See issue #23.
+# aislop-ignore-next-line hallucinated-import -- real root-level sibling module
 import statusline
 from statusline_lib import RED, RESET
 from statusline_lib.rendertimer import record_render

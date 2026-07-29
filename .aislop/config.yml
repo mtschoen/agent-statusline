@@ -5,9 +5,21 @@
 # toggles, and ci.failBelow -- but overrides are repo-wide, not per-file, so
 # house policy is restructure-first (see AGENTS.md); none are set here.
 #
-# After the cleanup pass the repo scores 100/100. failBelow is set to 90 as a
-# "stay healthy" floor with a little headroom (one stray finding won't break
-# CI, but a real regression cluster will). `aislop ci .` runs in CI and exits
-# non-zero below this score.
+# The two exceptions in the tree are inline `aislop-ignore-next-line` directives
+# (0.12.3's own per-line suppression, narrower than a repo-wide rules: entry) on
+# `import statusline` in kimi_statusline.py and qwen_statusline.py. The rule
+# resolves local *packages* (directories with __init__.py) but not root-level
+# top-level modules, so it reads a real sibling file as a missing pip package.
+# There is no restructure short of turning the entry point into a package. Each
+# site carries its rationale; see issue #23.
+#
+# failBelow is 90, `aislop ci .` runs in CI and exits non-zero below it.
+# STANDING MARGIN WARNING (2026-07-28, issue #23): the repo scores 90-91, not
+# the 100/100 this comment used to claim. Six files now exceed the 400-line
+# code-quality limit (pi-extension/renderer.ts, statusline.py,
+# statusline_lib/pace.py, scripts/verify_badge.py, verify_beacon_walker.py,
+# verify_render_budget.py) and those warnings alone cost ~9 points. There is
+# roughly one finding of headroom left. Split those files (or make a deliberate
+# call on the limit) before the next feature pushes the gate red again.
 ci:
   failBelow: 90

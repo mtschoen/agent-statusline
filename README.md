@@ -51,9 +51,10 @@ for matching a statusline to its transcript file), and the session title.
 The spinner advances on every render, so a frozen glyph means the statusline
 subprocess has stopped being invoked. An orange `LOCAL` tag appears before the
 hostname when `CLAUDE_LOCAL_MODE=1` is set or `~/.claude/.local-mode` exists.
-Multi-session detection enumerates `claude` processes whose cwd matches,
+Multi-session detection enumerates supported `claude`, `qwen`, and `kimi`
+runtime processes whose cwd matches,
 excluding `-p` headless subagents plus anything that fails a process-tree
-test: descendants of another claude/qwen process (helpers, update checks,
+test: descendants of another agent runtime (helpers, update checks,
 spawned agent runtimes) and orphans whose launching shell is dead are never
 counted, so only shell-launched interactive sessions trigger the warning,
 and it clears the moment the other session exits. Requires `psutil`; without
@@ -456,8 +457,8 @@ verified against the kimi-code source:
   absent from the payload itself.
 
 What renders, left to right: the `[N sessions]` badge (shared SWR-cached
-session count; note the underlying process classifier only recognizes
-claude/qwen runtimes today), `(branch)` from the payload's `gitBranch` with
+session count, including concurrent Kimi TUI sessions), `(branch)` from the
+payload's `gitBranch` with
 the `+A -B ↑x ↓y` working-tree badge inside the same parens (matching
 kimi-code's built-in footer, which computes diff-vs-HEAD and upstream sync
 in-process and never puts them in the payload — ours reads the same numbers

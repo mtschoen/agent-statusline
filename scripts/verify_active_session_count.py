@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import tempfile
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.sessions as sessions_mod
@@ -73,6 +74,32 @@ def check_classifier(failures):
         "node", ["node", "/path/to/claude/cli.js"], "/home/user/proj", target
     ):
         failures.append("node-wrapped claude should match")
+
+    with patch.object(sessions_mod.os, "name", "nt"):
+        if not _process_matches("kimi.exe", ["kimi.exe"], "/home/user/proj", target):
+            failures.append("kimi.exe should match on Windows")
+        if _process_matches("kimi", ["kimi"], "/home/user/proj", target):
+            failures.append("POSIX kimi binary should not match on Windows")
+
+    with patch.object(sessions_mod.os, "name", "posix"):
+        if not _process_matches("kimi", ["kimi"], "/home/user/proj", target):
+            failures.append("kimi binary should match on POSIX")
+        if not _process_matches(
+            "node",
+            ["node", "/opt/@moonshot-ai/kimi-code/dist/cli.js"],
+            "/home/user/proj",
+            target,
+        ):
+            failures.append("node-wrapped kimi should match on POSIX")
+        if _process_matches("kimi.exe", ["kimi.exe"], "/home/user/proj", target):
+            failures.append("Windows kimi.exe should not match on POSIX")
+
+    for render_name, render_command in (
+        ("py.exe", ["py", "-3", "C:/repo/kimi_statusline.py"]),
+        ("python3", ["python3", "/repo/kimi_statusline.py"]),
+    ):
+        if _process_matches(render_name, render_command, "/home/user/proj", target):
+            failures.append(f"Kimi statusline renderer {render_name} should not match")
 
     # Negative: -p / --print headless mode (Task subagents, scripted)
     if _process_matches(

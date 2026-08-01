@@ -14,6 +14,7 @@ Run from anywhere; imports from `schoen-claude-status` by path.
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts._session_helpers import (
@@ -244,6 +245,66 @@ def check_count_excludes_agent_descendants(failures):
         )
 
 
+def check_count_includes_kimi_sessions(failures):
+    import statusline_lib.sessions as sessions_mod
+
+    target_cwd = os.path.normcase("/home/user/proj")
+    shell_processes = [
+        _FakeSnapProc(40, 1, "explorer.exe", 100.0),
+        _FakeSnapProc(50, 40, "cmd.exe", 200.0),
+    ]
+
+    windows_processes = [
+        *shell_processes,
+        _FakeSnapProc(100, 50, "kimi.exe", 300.0, ["kimi.exe"], target_cwd),
+        _FakeSnapProc(
+            110,
+            50,
+            "py.exe",
+            310.0,
+            ["py", "-3", "C:/repo/kimi_statusline.py"],
+            target_cwd,
+        ),
+    ]
+    with patch.object(sessions_mod.os, "name", "nt"):
+        count = sessions_mod._count_via_psutil(
+            target_cwd, _make_fake_psutil(windows_processes)
+        )
+    if count != 1:
+        failures.append(
+            f"Windows should count kimi.exe but not its statusline renderer; got {count}"
+        )
+
+    posix_processes = [
+        *shell_processes,
+        _FakeSnapProc(200, 50, "kimi", 300.0, ["kimi"], target_cwd),
+        _FakeSnapProc(
+            210,
+            50,
+            "node",
+            310.0,
+            ["node", "/opt/@moonshot-ai/kimi-code/dist/cli.js"],
+            target_cwd,
+        ),
+        _FakeSnapProc(
+            220,
+            50,
+            "python3",
+            320.0,
+            ["python3", "/repo/kimi_statusline.py"],
+            target_cwd,
+        ),
+    ]
+    with patch.object(sessions_mod.os, "name", "posix"):
+        count = sessions_mod._count_via_psutil(
+            target_cwd, _make_fake_psutil(posix_processes)
+        )
+    if count != 2:
+        failures.append(
+            f"POSIX should count binary and node Kimi sessions, not renderer; got {count}"
+        )
+
+
 def check_count_via_psutil_access_denied(failures):
     # NoSuchProcess and AccessDenied from p.cmdline()/p.cwd() are caught and
     # the process is skipped, while a readable matching session still counts.
@@ -270,6 +331,7 @@ def main():
     check_is_agent_runtime(failures)
     check_excluded_by_tree(failures)
     check_count_excludes_agent_descendants(failures)
+    check_count_includes_kimi_sessions(failures)
     check_process_iter_uses_cheap_attrs(failures)
     check_lazy_snapshot(failures)
     check_access_denied_parent_still_counts(failures)

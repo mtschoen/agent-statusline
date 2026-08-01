@@ -31,10 +31,9 @@ crashing a path that must exit 0.
 
 The `[N sessions]` badge reuses the same SWR-cached count_active_sessions /
 debounce_session_count pair the Claude and Qwen line-1s use -- cached reads
-only, never a synchronous psutil scan on the render path. Caveat: the
-underlying process classifier (statusline_lib/sessions.py) only recognizes
-claude/qwen runtimes today, so the badge reflects those neighbors sharing
-the cwd, not concurrent kimi sessions.
+only, never a synchronous psutil scan on the render path. The detached
+classifier recognizes Kimi's platform-specific TUI processes while excluding
+the short-lived Python statusline renderer.
 """
 
 from .badge import format_context, format_model_badge

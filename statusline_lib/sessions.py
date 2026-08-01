@@ -1,16 +1,17 @@
 """Session counting and debounce helpers.
 
-Detects other Claude Code sessions running in the same cwd so the
+Detects supported agent sessions running in the same cwd so the
 statusline can warn that a second interactive instance is active here.
 
-Enumerates `claude` processes whose own cwd matches, which are not in
+Enumerates Claude, Qwen, and Kimi runtime processes whose own cwd matches,
+which are not in
 `-p` headless mode (scripted runs), which don't carry Claude Code's own
 child-session environment marker (`_is_child_session_env` -- a subagent's
 tool-execution process, ground truth straight from the harness, no
 ancestry needed), and which pass the process-tree test in
 `_is_excluded_by_tree`: a real session is launched by a live shell, so a
-claude descendant of a claude (update check, helper, spawned agent
-runtime) or a claude whose launching parent is dead (disowned helper,
+an agent descendant of another agent runtime (update check, helper, spawned
+agent runtime) or an agent whose launching parent is dead (disowned helper,
 dead-terminal zombie) is never an independent session no matter how long
 it lives -- structural truth where a time-based dwell can't work. Ground
 truth -- catches idle sessions, ignores ones that cleanly /exit'd a
@@ -77,7 +78,7 @@ def _save_session_count_cache(path, cache, now):
 def count_active_sessions(
     cwd, *, now=None, cache_path=None, ttl=_SESSION_COUNT_CACHE_TTL_SECONDS
 ):
-    """Return how many interactive Claude sessions are running in `cwd` --
+    """Return how many supported interactive agent sessions run in `cwd` --
     the cache's raw value, stale included, never a synchronous psutil scan.
 
     Render-perf ratchet step 3 (PLAN.md): a cold psutil process-tree walk
@@ -132,18 +133,33 @@ def refresh_session_count_cache(cwd):
     return count
 
 
-def _is_agent_runtime(name, cmdline):
-    """Pure classifier: does (name, cmdline) look like a claude/qwen runtime
-    process at all -- a bare binary, or node wrapping the CLI? Cwd and headless
-    flags are deliberately out of scope: this is also applied to *ancestors*,
-    where those don't matter."""
+_AGENT_PROCESS_NAMES = ("claude", "claude.exe", "qwen", "qwen.exe")
+_NODE_PROCESS_NAMES = ("node", "node.exe")
+
+
+def _is_direct_agent_runtime(name):
     n = (name or "").lower()
-    if n in ("claude", "claude.exe", "qwen", "qwen.exe"):
+    if n in _AGENT_PROCESS_NAMES:
+        return True
+    kimi_name = "kimi.exe" if os.name == "nt" else "kimi"
+    return n == kimi_name
+
+
+def _is_agent_runtime(name, cmdline):
+    """Pure classifier: does (name, cmdline) look like a supported agent
+    runtime process at all, either a bare binary or node wrapping a CLI?
+    Cwd and headless flags are deliberately out of scope: this is also applied
+    to ancestors, where those don't matter."""
+    n = (name or "").lower()
+    if _is_direct_agent_runtime(n):
         return True
     if n in ("node", "node.exe"):
+        runtime_markers = ("claude", "qwen")
+        if os.name != "nt":
+            runtime_markers += ("kimi",)
         return any(
-            "claude" in (arg or "").lower() or "qwen" in (arg or "").lower()
-            for arg in (cmdline or ())
+            any(marker in (argument or "").lower() for marker in runtime_markers)
+            for argument in (cmdline or ())
         )
     return False
 
@@ -152,9 +168,6 @@ def _is_agent_runtime(name, cmdline):
 # guards against pathological/cyclic ppid data.
 _ANCESTOR_WALK_LIMIT = 15
 
-_AGENT_PROCESS_NAMES = ("claude", "claude.exe", "qwen", "qwen.exe")
-_NODE_PROCESS_NAMES = ("node", "node.exe")
-
 
 def _is_excluded_by_tree(pid, snap, cmdline_of):
     """Pure classifier: is candidate `pid` structurally NOT an interactive
@@ -162,8 +175,8 @@ def _is_excluded_by_tree(pid, snap, cmdline_of):
     process-table snapshot)?
 
     Two structural rules, no clocks:
-      - Agent-descendant: anything whose ancestor chain contains a claude/qwen
-        runtime was spawned BY a session (update check, helper, agent runtime)
+      - Agent-descendant: anything whose ancestor chain contains a supported
+        agent runtime was spawned BY a session (update check, helper, runtime)
         and is never an independent session.
       - Orphan: a real session's launching shell stays alive (it's the user's
         terminal). A candidate whose immediate parent is dead, recycled
@@ -197,7 +210,7 @@ def _is_excluded_by_tree(pid, snap, cmdline_of):
         if (pctime or 0) > (child_ctime or 0):
             break  # recycled pid above the first ancestor: chain ends here
         n = (name or "").lower()
-        if n in _AGENT_PROCESS_NAMES:
+        if _is_direct_agent_runtime(n):
             return True
         if n in _NODE_PROCESS_NAMES and _is_agent_runtime(n, cmdline_of(cur)):
             return True
@@ -208,8 +221,8 @@ def _is_excluded_by_tree(pid, snap, cmdline_of):
 
 def _process_matches(name, cmdline, cwd, target_cwd):
     """Pure classifier: does this (name, cmdline, cwd) tuple represent an
-    interactive Claude/Qwen session rooted at `target_cwd`? Extracted so unit
-    tests don't need a live or mocked psutil."""
+    supported interactive agent session rooted at `target_cwd`? Extracted so
+    unit tests don't need a live or mocked psutil."""
     if not _is_agent_runtime(name, cmdline):
         return False
     cl = cmdline or ()
@@ -303,7 +316,7 @@ def _count_via_psutil(target_cwd, psutil):
         name = (p.info.get("name") or "").lower()
         # Cheap name pre-filter -- avoids calling cmdline()/cwd() on every
         # process (hundreds on a typical box).
-        if name in _AGENT_PROCESS_NAMES or name in _NODE_PROCESS_NAMES:
+        if _is_direct_agent_runtime(name) or name in _NODE_PROCESS_NAMES:
             candidates.append((p.pid, name, p))
     snap = _LazySnapshot(psutil, names)
 
@@ -337,7 +350,7 @@ def _count_via_psutil(target_cwd, psutil):
 
 
 # `count_active_sessions` reports live process truth, but a restart produces a
-# brief handoff overlap: the old `claude` process is still winding down when
+# brief handoff overlap: the old agent process is still winding down when
 # the new one spins up, so for a few seconds two processes legitimately match
 # the cwd. Painting `[2 sessions]` for that blip is noise. We suppress the
 # badge until an elevated (>= 2) count has *persisted* for the dwell window.

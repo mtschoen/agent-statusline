@@ -92,6 +92,12 @@ def _check_null_git_branch(failures):
         failures.append(f"null gitBranch must not render a branch, got {line!r}")
 
 
+def _check_prefixed_session_id(failures):
+    line = _render({"sessionId": "SeSsIoN_116bab1c-0b61-42a9-a46a-935024290d7c"})
+    if "[116bab1c]" not in line:
+        failures.append(f"kimi's session_ prefix should be omitted, got {line!r}")
+
+
 def _check_missing_keys(failures):
     """An empty payload still renders the spinner/host/cwd prefix (the TUI's
     non-empty-first-line contract) with no ` | ` field section."""
@@ -200,6 +206,7 @@ def _check_working_tree_badge(failures):
 def check(failures):
     _check_full_payload(failures)
     _check_null_git_branch(failures)
+    _check_prefixed_session_id(failures)
     _check_missing_keys(failures)
     _check_wrong_typed_fields(failures)
     _check_non_default_permission_modes(failures)

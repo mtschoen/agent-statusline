@@ -65,6 +65,7 @@ _DEFAULT_PERMISSION_MODE = "manual"
 def _session_badge(session_id):
     """Short `[<8 chars>]` session-id badge, or "" when absent/blank."""
     sid = _safe_str(session_id).strip()
+    sid = sid[len("session_") :] if sid.lower().startswith("session_") else sid
     if not sid:
         return ""
     return f"{_SESSION_ID_COLOR}[{sid[:_SESSION_ID_LEN]}]{RESET}"

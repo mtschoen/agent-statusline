@@ -280,7 +280,10 @@ def _run_qwen(tmp_home, payload):
 
 
 def check_qwen_end_to_end(failures):
-    with tempfile.TemporaryDirectory() as tmp:
+    # A cold render starts detached refresh children that may still be writing
+    # beneath .qwen after the render process exits. Windows cannot remove that
+    # directory during the race, so let its temp cleaner handle any stragglers.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         payload = {
             "workspace": {"current_dir": REPO},
             "model": {"display_name": "Qwen3-Coder"},

@@ -5,7 +5,8 @@ Covers:
     non-list extra_roots, realpath deduplication, non-existent dirs filtered,
     OSError from os.path.realpath falling back to normpath.
   - _walker_subcommand: binary not found, subprocess success with JSON,
-    non-zero returncode, empty stdout, ProcessTimeout, OSError, JSON parse error.
+    non-zero returncode, empty/None stdout, ProcessTimeout, OSError, JSON parse
+    error.
 
 Run from anywhere; imports from schoen-claude-status by path.
 """
@@ -14,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.walker as walker_module
@@ -202,114 +204,57 @@ def _check_subcommand_no_binary(failures):
         restore_walker_state(state)
 
 
+def _call_subcommand(run_captured):
+    state = save_walker_state()
+    try:
+        os.environ[walker_module._WALKER_BIN_ENV] = "/fake/walker"
+        walker_module.os.path.isfile = lambda p: p == "/fake/walker"
+        walker_module.run_captured = run_captured
+        return _walker_subcommand("list")
+    finally:
+        restore_walker_state(state)
+
+
+def _fake_result(returncode, stdout, stderr=""):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
 def _check_subcommand_success(failures):
-    state = save_walker_state()
-    try:
-        os.environ[walker_module._WALKER_BIN_ENV] = "/fake/walker"
-        walker_module.os.path.isfile = lambda p: p == "/fake/walker"
-
-        class FakeResult:
-            returncode = 0
-            stdout = '{"sessions": [1, 2, 3]}'
-            stderr = ""
-
-        walker_module.run_captured = lambda cmd, **kwargs: FakeResult()
-        result = _walker_subcommand("list")
-        if result != {"sessions": [1, 2, 3]}:
-            failures.append(f"success: expected parsed JSON, got {result!r}")
-    finally:
-        restore_walker_state(state)
+    process_result = _fake_result(0, '{"sessions": [1, 2, 3]}')
+    result = _call_subcommand(lambda *_arguments, **_keyword_arguments: process_result)
+    if result != {"sessions": [1, 2, 3]}:
+        failures.append(f"success: expected parsed JSON, got {result!r}")
 
 
-def _check_subcommand_nonzero_returncode(failures):
-    state = save_walker_state()
-    try:
-        os.environ[walker_module._WALKER_BIN_ENV] = "/fake/walker"
-        walker_module.os.path.isfile = lambda p: p == "/fake/walker"
-
-        class FakeResult:
-            returncode = 1
-            stdout = '{"ok": true}'
-            stderr = "error"
-
-        walker_module.run_captured = lambda cmd, **kwargs: FakeResult()
-        result = _walker_subcommand("list")
+def _check_subcommand_result_failures(failures):
+    cases = (
+        ("nonzero returncode", _fake_result(1, '{"ok": true}', "error")),
+        ("empty stdout", _fake_result(0, "   \n")),
+        ("None stdout", _fake_result(0, None)),
+        ("JSON parse failure", _fake_result(0, "not json at all !!!")),
+    )
+    for label, process_result in cases:
+        result = _call_subcommand(
+            lambda *_arguments, _result=process_result, **_keyword_arguments: _result
+        )
         if result is not None:
-            failures.append(f"nonzero returncode: expected None, got {result!r}")
-    finally:
-        restore_walker_state(state)
+            failures.append(f"{label}: expected None, got {result!r}")
 
 
-def _check_subcommand_empty_stdout(failures):
-    state = save_walker_state()
-    try:
-        os.environ[walker_module._WALKER_BIN_ENV] = "/fake/walker"
-        walker_module.os.path.isfile = lambda p: p == "/fake/walker"
+def _check_subcommand_exceptions(failures):
+    def raise_timeout(command, **_keyword_arguments):
+        raise ProcessTimeout(command, 2)
 
-        class FakeResult:
-            returncode = 0
-            stdout = "   \n"
-            stderr = ""
+    def raise_oserror(*_arguments, **_keyword_arguments):
+        raise OSError("no such file")
 
-        walker_module.run_captured = lambda cmd, **kwargs: FakeResult()
-        result = _walker_subcommand("list")
+    for label, run_captured in (
+        ("ProcessTimeout", raise_timeout),
+        ("OSError", raise_oserror),
+    ):
+        result = _call_subcommand(run_captured)
         if result is not None:
-            failures.append(f"empty stdout: expected None, got {result!r}")
-    finally:
-        restore_walker_state(state)
-
-
-def _check_subcommand_timeout(failures):
-    state = save_walker_state()
-    try:
-        os.environ[walker_module._WALKER_BIN_ENV] = "/fake/walker"
-        walker_module.os.path.isfile = lambda p: p == "/fake/walker"
-
-        def fake_run(cmd, **kwargs):
-            raise ProcessTimeout(cmd, 2)
-
-        walker_module.run_captured = fake_run
-        result = _walker_subcommand("list")
-        if result is not None:
-            failures.append(f"ProcessTimeout: expected None, got {result!r}")
-    finally:
-        restore_walker_state(state)
-
-
-def _check_subcommand_oserror(failures):
-    state = save_walker_state()
-    try:
-        os.environ[walker_module._WALKER_BIN_ENV] = "/fake/walker"
-        walker_module.os.path.isfile = lambda p: p == "/fake/walker"
-
-        def fake_run(cmd, **kwargs):
-            raise OSError("no such file")
-
-        walker_module.run_captured = fake_run
-        result = _walker_subcommand("list")
-        if result is not None:
-            failures.append(f"OSError: expected None, got {result!r}")
-    finally:
-        restore_walker_state(state)
-
-
-def _check_subcommand_json_parse_failure(failures):
-    state = save_walker_state()
-    try:
-        os.environ[walker_module._WALKER_BIN_ENV] = "/fake/walker"
-        walker_module.os.path.isfile = lambda p: p == "/fake/walker"
-
-        class FakeResult:
-            returncode = 0
-            stdout = "not json at all !!!"
-            stderr = ""
-
-        walker_module.run_captured = lambda cmd, **kwargs: FakeResult()
-        result = _walker_subcommand("list")
-        if result is not None:
-            failures.append(f"JSON parse failure: expected None, got {result!r}")
-    finally:
-        restore_walker_state(state)
+            failures.append(f"{label}: expected None, got {result!r}")
 
 
 def _check_root_list_platform_branches(failures):
@@ -416,11 +361,8 @@ def main():
 
     _check_subcommand_no_binary(failures)
     _check_subcommand_success(failures)
-    _check_subcommand_nonzero_returncode(failures)
-    _check_subcommand_empty_stdout(failures)
-    _check_subcommand_timeout(failures)
-    _check_subcommand_oserror(failures)
-    _check_subcommand_json_parse_failure(failures)
+    _check_subcommand_result_failures(failures)
+    _check_subcommand_exceptions(failures)
 
     if failures:
         for failure in failures:

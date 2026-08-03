@@ -114,7 +114,7 @@ def _walker_subcommand(subcommand, *args, timeout=2):
         result = run_captured([bin_path, subcommand, *args], timeout=timeout)
     except (ProcessTimeout, OSError):
         return None
-    if result.returncode != 0 or not result.stdout.strip():
+    if result.returncode != 0 or not (result.stdout or "").strip():
         return None
     try:
         return _json_loads(result.stdout)

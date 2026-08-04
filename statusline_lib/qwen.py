@@ -37,6 +37,7 @@ from .base import (
     hostname,
 )
 from .cachefmt import format_cache_hit, format_cache_read
+from .qwen_quota import format_qwen_quota
 from .rendertimer import format_render_suffix
 from .sessions import count_active_sessions, debounce_session_count
 
@@ -264,12 +265,17 @@ def render_qwen_statusline(payload, cwd, spinner):
     # onto the shared key (see rendertimer.py).
     render_suffix = format_render_suffix(None)
 
+    # Plan-quota utilization counted from the CLI's own usage records (the
+    # payload carries no quota data) -- see qwen_quota.py.
+    quota_summary = format_qwen_quota()
+
     parts = [
         s
         for s in (
             model_summary,
             context_summary,
             cache_summary,
+            quota_summary,
             tokens_summary,
             api_summary,
             thinking_summary,

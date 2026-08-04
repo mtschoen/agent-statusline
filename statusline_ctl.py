@@ -21,6 +21,12 @@ Keys (friendly name -> what it controls):
   daily-budget  <$/day>|off         API-key daily budget (sets the needle)
   verbose-pace  on|off              numeric pace deltas instead of the glyph
   beacon        on|off              render the progress-beacon ETA column
+  qwen-quota-5h    <calls>|off      Qwen 5h rolling plan-quota limit
+  qwen-quota-weekly <calls>|off     Qwen weekly plan-quota limit
+  qwen-quota-anchor <5h_used>,<wk_used>
+                    Qwen quota dashboard anchor (Model Studio console counts,
+                    stamped now on write). Qwen-only keys live in ~/.qwen's
+                    prefs: run with STATUSLINE_PLATFORM=qwen to reach them.
 
 Precedence the status line applies: prefs file (this CLI) > settings.json env >
 built-in default. `reset` removes the prefs entry so the env/default shows again.
@@ -28,7 +34,9 @@ built-in default. `reset` removes the prefs entry so the env/default shows again
 
 import json
 import os
+import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from statusline_lib.prefs import load_prefs, pref, prefs_path
@@ -94,6 +102,31 @@ def _norm_daily_budget(raw):
     return _parse_positive(v, "$/day")
 
 
+def _norm_quota_limit(raw):
+    """A plan-quota call limit: positive integer, or off -> 0 (qwen_quota
+    reads 0 as a hidden horizon)."""
+    v = raw.strip().lower()
+    if v in ("off", "none"):
+        return "0", None
+    try:
+        value = int(v)
+    except ValueError:
+        return None, "expected a positive integer or 'off'"
+    if value <= 0:
+        return None, "must be > 0 (use 'off' to hide)"
+    return str(value), None
+
+
+def _norm_quota_anchor(raw):
+    """`<5h_used>,<wk_used>` read off the Model Studio dashboard; stamped
+    with the current time on write so qwen_quota can decay/layer local deltas
+    against it."""
+    match = re.match(r"^\s*(\d+)\s*,\s*(\d+)\s*$", raw)
+    if not match:
+        return None, "expected '<5h_used>,<wk_used>' (counts from the dashboard)"
+    return f"{match.group(1)},{match.group(2)}@{int(time.time())}", None
+
+
 # cost on = SHOW => HIDE_COST "0"; cost off = HIDE => HIDE_COST "1".
 SETTINGS = {
     "cost": _Setting("STATUSLINE_HIDE_COST", _onoff("0", "1"), "on|off"),
@@ -106,6 +139,15 @@ SETTINGS = {
     ),
     "verbose-pace": _Setting("STATUSLINE_VERBOSE_PACE", _onoff("1", "0"), "on|off"),
     "beacon": _Setting("STATUSLINE_BEACON", _onoff("1", "0"), "on|off"),
+    "qwen-quota-5h": _Setting(
+        "STATUSLINE_QWEN_QUOTA_5H", _norm_quota_limit, "<calls>|off"
+    ),
+    "qwen-quota-weekly": _Setting(
+        "STATUSLINE_QWEN_QUOTA_WEEKLY", _norm_quota_limit, "<calls>|off"
+    ),
+    "qwen-quota-anchor": _Setting(
+        "STATUSLINE_QWEN_QUOTA_ANCHOR", _norm_quota_anchor, "<5h_used>,<wk_used>"
+    ),
 }
 
 

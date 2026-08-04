@@ -189,26 +189,88 @@ def _check_run_inherit_forwards_returncode(failures):
 
 
 def _check_spawn_detached_default_stdio(failures):
+    # Exercise BOTH os arms regardless of host: the nt arm swaps
+    # start_new_session for hidden-window creationflags + startupinfo.
+    for os_name in ("posix", "nt"):
+        calls = []
+        original_popen = process_safe_module.subprocess.Popen
+        original_os_name = process_safe_module.os.name
+        process_safe_module.subprocess.Popen = lambda *a, _calls=calls, **kw: (
+            _calls.append((a, kw)) or "sentinel"
+        )
+        process_safe_module.os.name = os_name
+        try:
+            result = spawn_detached([_PY, "-c", "pass"])
+        finally:
+            process_safe_module.subprocess.Popen = original_popen
+            process_safe_module.os.name = original_os_name
+
+        if result != "sentinel":
+            failures.append(
+                f"spawn_detached[{os_name}] must return Popen's result, got {result!r}"
+            )
+        _, kwargs = calls[0]
+        if (
+            kwargs.get("stdout") is not subprocess.DEVNULL
+            or kwargs.get("stderr") is not subprocess.DEVNULL
+        ):
+            failures.append(
+                f"spawn_detached[{os_name}] default stdio must be DEVNULL, got {kwargs!r}"
+            )
+        if os_name == "posix":
+            if kwargs.get("start_new_session") is not True:
+                failures.append("spawn_detached[posix] must set start_new_session=True")
+            if "creationflags" in kwargs:
+                failures.append("spawn_detached[posix] must not set creationflags")
+        else:
+            if "start_new_session" in kwargs:
+                failures.append("spawn_detached[nt] must not set start_new_session")
+            flags = kwargs.get("creationflags", 0)
+            no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if no_window and not flags & no_window:
+                failures.append(
+                    f"spawn_detached[nt] creationflags missing CREATE_NO_WINDOW: {flags!r}"
+                )
+            if new_group and not flags & new_group:
+                failures.append(
+                    f"spawn_detached[nt] creationflags missing CREATE_NEW_PROCESS_GROUP: {flags!r}"
+                )
+            if (
+                getattr(subprocess, "STARTUPINFO", None) is not None
+                and kwargs.get("startupinfo") is None
+            ):
+                failures.append("spawn_detached[nt] must set a STARTUPINFO (SW_HIDE)")
+
+
+def _check_run_captured_windows_hidden(failures):
+    # On the nt arm run_captured must hide the child window (creationflags
+    # carries CREATE_NO_WINDOW, and a STARTUPINFO rides along where the host
+    # provides one). Mock Popen so no real process is spawned.
     calls = []
     original_popen = process_safe_module.subprocess.Popen
+    original_os_name = process_safe_module.os.name
     process_safe_module.subprocess.Popen = lambda *a, **kw: (
-        calls.append((a, kw)) or "sentinel"
+        calls.append((a, kw)) or _FakeProcess(lambda: ("", ""), lambda: None)
     )
+    process_safe_module.os.name = "nt"
     try:
-        result = spawn_detached([_PY, "-c", "pass"])
+        run_captured(["ignored"], timeout=5)
     finally:
         process_safe_module.subprocess.Popen = original_popen
+        process_safe_module.os.name = original_os_name
 
-    if result != "sentinel":
-        failures.append(f"spawn_detached must return Popen's result, got {result!r}")
     _, kwargs = calls[0]
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if no_window and not kwargs.get("creationflags", 0) & no_window:
+        failures.append(
+            f"run_captured[nt] creationflags missing CREATE_NO_WINDOW: {kwargs!r}"
+        )
     if (
-        kwargs.get("stdout") is not subprocess.DEVNULL
-        or kwargs.get("stderr") is not subprocess.DEVNULL
+        getattr(subprocess, "STARTUPINFO", None) is not None
+        and kwargs.get("startupinfo") is None
     ):
-        failures.append(f"spawn_detached default stdio must be DEVNULL, got {kwargs!r}")
-    if kwargs.get("start_new_session") is not True:
-        failures.append("spawn_detached must set start_new_session=True")
+        failures.append("run_captured[nt] must set a STARTUPINFO (SW_HIDE)")
 
 
 def _check_spawn_detached_explicit_stdio_and_env(failures):
@@ -254,6 +316,7 @@ def main():
     _check_kill_oserror_is_swallowed(failures)
     _check_run_inherit_forwards_returncode(failures)
     _check_spawn_detached_default_stdio(failures)
+    _check_run_captured_windows_hidden(failures)
     _check_spawn_detached_explicit_stdio_and_env(failures)
 
     if failures:

@@ -6,8 +6,8 @@
 # dependency. Port fixes upstream first, then re-vendor with the new SHA --
 # do not diverge the two copies otherwise.
 #
-# Three intentional deviations from the upstream source, all to satisfy this
-# repo's local gates rather than upstream's:
+# Four intentional deviations from the upstream source: three to satisfy this
+# repo's local gates, one feature port, all itemized below.
 # - the two `# pragma: no cover` markers on the defensive except branches are
 #   dropped, since this repo's coverage gate (AGENTS.md) runs with no
 #   exclusions -- scripts/verify_process_safe.py exercises both branches.
@@ -16,6 +16,11 @@
 # - reader()'s bare `except Exception` is narrowed to (OSError, ValueError)
 #   -- the realistic failure modes for a pipe vanishing mid-read or already
 #   being closed -- to satisfy this repo's aislop broad-except gate.
+# - run_captured/spawn_detached layer a STARTUPINFO(SW_HIDE) on top of
+#   CREATE_NO_WINDOW via _windows_hidden_kwargs: Windows 11 / Windows Terminal
+#   ignore CREATE_NO_WINDOW alone, and without the extra layer the statusline's
+#   detached SWR refresh children flash a console on Windows. Upstream
+#   process_safe carries the same fix now -- reconcile on the next re-vendor.
 """Sanctioned subprocess wrapper - THE ONLY module allowed to call subprocess.
 
 This is the `process_safe` package: a tiny, zero-dependency home for the one
@@ -46,9 +51,33 @@ a capture-with-timeout, so it is not exposed to bpo-31935.
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 import threading
 from dataclasses import dataclass
+
+
+def _windows_hidden_kwargs() -> dict[str, object]:
+    """creationflags + startupinfo that keep a child's console window hidden.
+
+    ``CREATE_NO_WINDOW`` alone is not enough on Windows 11 / Windows Terminal,
+    which frequently ignore it and still flash a console for ``python.exe`` /
+    ``git.exe`` children; a ``STARTUPINFO`` carrying ``SW_HIDE`` is layered on
+    top. Mirrors the upstream ``process_safe`` fix - this vendored copy must
+    carry it too because the statusline's detached SWR refresh children are
+    spawned from a console-less context and would otherwise flash on Windows.
+    ``getattr`` guards keep the ``nt`` arm exercisable on any host.
+    """
+    kwargs: dict[str, object] = {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+    startupinfo_type = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_type is not None:
+        startupinfo = startupinfo_type()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        startupinfo.wShowWindow = 0  # SW_HIDE
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
 
 
 @dataclass(frozen=True)
@@ -94,6 +123,9 @@ def run_captured(
     stderr attached) so callers that relied on ``subprocess.run(check=True)``
     can keep their existing ``except CalledProcessError`` handling.
     """
+    hide_kwargs: dict[str, object] = {}
+    if os.name == "nt":
+        hide_kwargs = _windows_hidden_kwargs()
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -103,6 +135,7 @@ def run_captured(
         text=text,
         env=env,
         close_fds=True,
+        **hide_kwargs,
     )
 
     captured: dict[str, str] = {}
@@ -158,19 +191,26 @@ def spawn_detached(
 ) -> subprocess.Popen:
     """Start *command* as a detached background process; return immediately.
 
-    The child runs in its own session so it outlives the spawning request
-    (fire-and-forget). stdio is discarded by default; pass open file handles
-    via *stdout*/*stderr* to redirect (e.g. a per-run log file - the child
-    inherits the fd, so the caller must NOT close it). *env*, when given,
-    replaces the child's environment. Detached spawns capture nothing and never
-    wait, so the bpo-31935 capture+timeout hang does not apply here. Launch
-    failures (``OSError``) propagate.
+    The child runs in its own session (POSIX) or a new hidden process group
+    (Windows) so it outlives the spawning request (fire-and-forget). stdio is
+    discarded by default; pass open file handles via *stdout*/*stderr* to
+    redirect (e.g. a per-run log file - the child inherits the fd, so the
+    caller must NOT close it). *env*, when given, replaces the child's
+    environment. Detached spawns capture nothing and never wait, so the
+    bpo-31935 capture+timeout hang does not apply here. Launch failures
+    (``OSError``) propagate.
     """
+    detach_kwargs: dict[str, object]
+    if os.name == "nt":
+        detach_kwargs = _windows_hidden_kwargs()
+        detach_kwargs["creationflags"] |= subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        detach_kwargs = {"start_new_session": True}
     return subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL if stdout is None else stdout,
         stderr=subprocess.DEVNULL if stderr is None else stderr,
-        start_new_session=True,
         env=env,
+        **detach_kwargs,
     )

@@ -27,8 +27,10 @@ import statusline_lib.qwen_quota as qwen_quota
 from statusline_lib.qwen import render_qwen_statusline
 from statusline_lib.qwen_quota import (
     _anchor,
+    _anchor_exhausted,
     _count_window_calls,
     _five_hour_used,
+    _hold_clearance_unix,
     _limit,
     _plan_gate,
     _qwen_quota_cached,
@@ -259,6 +261,121 @@ def _check_five_hour_used_decay(failures):
     got = _five_hour_used(entry, post_decay, NOW)
     if abs(got - 50) > 1e-6:  # window fully post-anchor -> pure calls_5h
         failures.append(f"post-decay five_hour_used = {got}, expected 50")
+
+
+def _check_five_hour_used_exhausted_hold(failures):
+    # Exhausted anchor (anchor_5h >= limit): held flat at the anchored value
+    # across the 5h after anchoring, regardless of local deltas.
+    entry = {"calls_since_anchor": 300, "calls_5h": 42}
+    exhausted = (12000, 20000, NOW)
+    # At anchor (elapsed=0): held at 12000, delta NOT added.
+    got = _five_hour_used(exhausted, exhausted, NOW, five_hour_limit=12000)
+    if abs(got - 12000) > 1e-6:
+        failures.append(f"exhausted at-anchor five_hour_used = {got}, expected 12000")
+    # 43 minutes in (the observed bug scenario): still 12000, not decayed.
+    got = _five_hour_used(entry, exhausted, NOW - 43 * 60, five_hour_limit=12000)
+    if abs(got - 12000) > 1e-6:
+        failures.append(f"exhausted 43min-in five_hour_used = {got}, expected 12000")
+    # 4 hours in: still held flat.
+    got = _five_hour_used(entry, exhausted, NOW - 4 * 3600, five_hour_limit=12000)
+    if abs(got - 12000) > 1e-6:
+        failures.append(f"exhausted 4h-in five_hour_used = {got}, expected 12000")
+    # Anchor above the limit (over-exhausted): also held flat.
+    over = (15000, 20000, NOW)
+    got = _five_hour_used(entry, over, NOW, five_hour_limit=12000)
+    if abs(got - 15000) > 1e-6:
+        failures.append(f"over-exhausted five_hour_used = {got}, expected 15000")
+    # Predicate and clearance helpers agree with the held behavior.
+    if not _anchor_exhausted(12000, 12000):
+        failures.append("anchor == limit must be exhausted")
+    if not _anchor_exhausted(15000, 12000):
+        failures.append("anchor > limit must be exhausted")
+    if _anchor_exhausted(11999, 12000):
+        failures.append("anchor < limit must NOT be exhausted")
+    if _anchor_exhausted(12000, None):
+        failures.append("hidden limit must NOT be exhausted")
+    clearance = _hold_clearance_unix(exhausted, 12000, NOW - 43 * 60)
+    # Clearance is anchored_at + 5h, and exhausted's anchored_at is NOW.
+    expected_clearance = NOW + FIVE_H
+    if clearance is None or abs(clearance - expected_clearance) > 1e-6:
+        failures.append(f"hold clearance = {clearance}, expected {expected_clearance}")
+    post_window_anchor = (12000, 20000, NOW - 6 * 3600)
+    if _hold_clearance_unix(post_window_anchor, 12000, NOW) is not None:
+        failures.append("post-window clearance must be None")
+    if _hold_clearance_unix((6000, 20000, NOW), 12000, NOW) is not None:
+        failures.append("non-exhausted anchor clearance must be None")
+
+
+def _check_five_hour_used_exhausted_post_window(failures):
+    # Exhausted anchor with elapsed >= 5h: falls through to pure local
+    # calls_5h, no hold.
+    entry = {"calls_since_anchor": 300, "calls_5h": 42}
+    exhausted = (12000, 20000, NOW - 6 * 3600)
+    got = _five_hour_used(entry, exhausted, NOW, five_hour_limit=12000)
+    if abs(got - 42) > 1e-6:
+        failures.append(f"exhausted post-window five_hour_used = {got}, expected 42")
+
+
+def _check_format_exhausted_render(failures):
+    # Exhausted anchor renders the 5h part with ~<clock> instead of the
+    # normal pace suffix; the clock is anchored_at + 5h in local time.
+    anchored_at = NOW - 43 * 60
+    anchor_key = f"12000,20000@{anchored_at}"
+    with _Fixture() as fx, _SpawnRecorder() as spawner:
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key})
+        fx.write_cache(
+            {
+                "anchor_key": anchor_key,
+                "anchored_at_unix": anchored_at,
+                "calls_since_anchor": 50,
+                "calls_5h": 10,
+                "cached_at_unix": NOW - 1,
+            }
+        )
+        rendered = format_qwen_quota()
+        if "5h: " not in rendered:
+            failures.append(f"exhausted render missing 5h: {rendered!r}")
+        if "~" not in rendered:
+            failures.append(f"exhausted render missing ~<clock> suffix: {rendered!r}")
+        # The clock string must match _fmt_local_clock(anchored_at + 5h).
+        expected_clock = pace_module._fmt_local_clock(anchored_at + FIVE_H)
+        expected_suffix = f"~{expected_clock}"
+        if expected_suffix not in rendered:
+            failures.append(
+                f"exhausted render missing {expected_suffix!r}: {rendered!r}"
+            )
+        # The normal +Hh pace suffix must NOT appear while holding.
+        if "+5.0h" in rendered or "-5.0h" in rendered:
+            failures.append(
+                f"exhausted render must not carry the normal pace: {rendered!r}"
+            )
+        # Utilization is 100% (12000/12000).
+        if "100%" not in rendered:
+            failures.append(f"exhausted render must show 100%: {rendered!r}")
+        if spawner.calls:
+            failures.append(
+                f"a fresh exhausted-cache render must not spawn: {spawner.calls!r}"
+            )
+    # Post-window exhausted anchor: normal pace suffix, no ~<clock>.
+    anchor_key_post = f"12000,20000@{NOW - 6 * 3600}"
+    with _Fixture() as fx:
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key_post})
+        fx.write_cache(
+            {
+                "anchor_key": anchor_key_post,
+                "anchored_at_unix": NOW - 6 * 3600,
+                "calls_since_anchor": 0,
+                "calls_5h": 0,
+                "cached_at_unix": NOW - 1,
+            }
+        )
+        rendered = format_qwen_quota()
+        if "~" in rendered:
+            failures.append(
+                f"post-window exhausted render must not carry ~<clock>: {rendered!r}"
+            )
 
 
 def _check_week_used(failures):
@@ -529,6 +646,8 @@ def check(failures):
     _check_count_window_calls(failures)
     _check_count_cross_month_and_unreadable(failures)
     _check_five_hour_used_decay(failures)
+    _check_five_hour_used_exhausted_hold(failures)
+    _check_five_hour_used_exhausted_post_window(failures)
     _check_week_used(failures)
     _check_cache_swr_contract(failures)
     _check_refresh_writes_cache(failures)
@@ -537,6 +656,7 @@ def check(failures):
     _check_format_scenarios(failures)
     _check_format_warm_render(failures)
     _check_format_degraded_cache(failures)
+    _check_format_exhausted_render(failures)
     _check_pace_and_horizon_guards(failures)
     _check_render_integration(failures)
 

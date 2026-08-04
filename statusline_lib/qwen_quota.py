@@ -24,11 +24,21 @@ anchors, locally recorded calls are layered on top:
   anchor sits inside the current window - anchor_wk + local calls since the
   anchor (nothing expires inside a fixed window). Hidden once the week
   resets past the anchor, until re-anchored.
-- five-hour window (rolling): the anchor's contribution decays linearly to
-  zero across the 5h after anchoring (uniform-distribution estimate of the
-  anchor population sliding out of the window) while local calls since the
-  anchor are added; 5h past the anchor the window is fully post-anchor and
-  the count is pure local.
+- five-hour window (rolling): when the anchor is BELOW the limit, the
+  anchor's contribution decays linearly to zero across the 5h after
+  anchoring (uniform-distribution estimate of the anchor population sliding
+  out of the window) while local calls since the anchor are added; 5h past
+  the anchor the window is fully post-anchor and the count is pure local.
+  When the anchor is AT or ABOVE the limit (an exhausted anchor on the
+  shared key), the displayed usage is HELD flat at the anchored value until
+  anchored_at + 5h - the moment the anchored population has certainly
+  expired out of the rolling window. With an exhausted anchor on a shared
+  key, ongoing invisible traffic plausibly replaces every call that expires
+  out of the window, so the conservative honest estimate is "still
+  exhausted until the anchored population is provably gone". After the hold
+  window the count falls through to pure local like the decay path, and
+  while holding the pace suffix is replaced with the local clock time at
+  which the window clears.
 
 With no (or an unparseable) anchor the field renders nothing - a hidden
 field beats a wrong one.
@@ -53,7 +63,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .base import app_dir, color_high_bad, platform_name
-from .pace import _fmt_delta, _project_pace
+from .pace import _fmt_delta, _fmt_local_clock, _project_pace
 from .prefs import load_prefs, pref
 from .refresh import maybe_spawn_refresh
 from .ttlcache import read_raw_cache, write_ttl_cache
@@ -235,15 +245,43 @@ def _plan_gate():
     return any(key in configured for key in watched)
 
 
-def _five_hour_used(entry, anchor, now_unix):
+def _anchor_exhausted(anchor_five_hour, five_hour_limit):
+    """True when the anchored 5h usage is at or above the limit: the shared
+    key's window is pinned at exhaustion, so invisible traffic plausibly
+    replaces every call that expires out of the rolling window."""
+    return five_hour_limit is not None and anchor_five_hour >= five_hour_limit
+
+
+def _hold_clearance_unix(anchor, five_hour_limit, now_unix):
+    """anchored_at + 5h when an exhausted anchor is being held flat (the
+    moment the anchored population has certainly expired out of the rolling
+    window), else None when no hold is in effect (non-exhausted anchor, or
+    elapsed >= 5h so the pure-local path owns it)."""
+    anchor_five_hour, _anchor_week, anchored_at = anchor
+    if not _anchor_exhausted(anchor_five_hour, five_hour_limit):
+        return None
+    if now_unix - anchored_at >= _FIVE_HOUR_SECONDS:
+        return None
+    return anchored_at + _FIVE_HOUR_SECONDS
+
+
+def _five_hour_used(entry, anchor, now_unix, five_hour_limit=None):
     """Anchored 5h usage: linear decay of the anchor population across the 5h
     after anchoring plus every local call since the anchor (all of which sit
     inside the rolling window while the decay runs); pure local once the
-    window is fully post-anchor."""
+    window is fully post-anchor. When the anchor is exhausted (at or above
+    the limit), the value is HELD flat at the anchored value until
+    anchored_at + 5h - shared-key traffic plausibly replaces every expiring
+    call, so the honest estimate is 'still exhausted until the anchored
+    population is provably gone'. Local calls made during the hold are NOT
+    added: they either 429'd or rode the extra-usage pack, neither of which
+    is defensibly counted against the base window."""
     anchor_five_hour, _anchor_week, anchored_at = anchor
     elapsed = now_unix - anchored_at
     if elapsed >= _FIVE_HOUR_SECONDS:
         return float(entry.get("calls_5h") or 0)
+    if _anchor_exhausted(anchor_five_hour, five_hour_limit):
+        return float(anchor_five_hour)
     decay = max(0.0, (_FIVE_HOUR_SECONDS - elapsed) / _FIVE_HOUR_SECONDS)
     delta = entry.get("calls_since_anchor") or 0
     return anchor_five_hour * decay + delta
@@ -306,8 +344,14 @@ def format_qwen_quota():
     entry = _qwen_quota_cached(now_unix, pref(_PREF_ANCHOR))
     if entry is None:
         return ""
-    five_hour_used = _five_hour_used(entry, anchor, now_unix)
+    five_hour_used = _five_hour_used(entry, anchor, now_unix, five_hour_limit)
     week_used = _week_used(entry, anchor, now_unix)
+    clearance = _hold_clearance_unix(anchor, five_hour_limit, now_unix)
+    five_hour_pace = (
+        f" ~{_fmt_local_clock(clearance)}"
+        if clearance is not None
+        else _rolling_pace_part(five_hour_used, five_hour_limit)
+    )
     parts = [
         part
         for part in (
@@ -315,7 +359,7 @@ def format_qwen_quota():
                 "5h",
                 five_hour_used,
                 five_hour_limit,
-                _rolling_pace_part(five_hour_used, five_hour_limit),
+                five_hour_pace,
             ),
             _horizon(
                 "wk",

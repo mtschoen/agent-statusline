@@ -3,7 +3,7 @@ flash/pro get distinct colors, the parenthesized reasoning tier renders as a
 separate suffix tag, and none of the existing Claude/Qwen badge behavior
 (covered by scripts/verify_badge.py) is disturbed.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

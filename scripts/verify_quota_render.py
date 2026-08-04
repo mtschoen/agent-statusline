@@ -2,7 +2,7 @@
 arrow and on-target glyph now come from pace.weekly_needle (relocated to the
 burn-rate field). Pins the clock + hourly walk, mirroring the burn-rate verifier.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

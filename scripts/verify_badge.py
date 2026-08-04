@@ -14,7 +14,7 @@ Covers:
   unknown-family fallback to display_name, raw id strip of "claude-" prefix,
   bare "?" when nothing is available, [1m] suffix propagation, empty-id guard
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

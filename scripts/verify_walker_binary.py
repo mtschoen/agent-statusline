@@ -4,7 +4,7 @@ Covers all discovery paths: CLAUDE_WALKER_BIN override (hit and miss),
 home-directory candidates, shutil.which fallback across all four name
 variants, and the not-found (None) return.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

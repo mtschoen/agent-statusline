@@ -8,7 +8,7 @@ timestamp), never in render counts. State is keyed by cwd in a small JSON file
 and is injectable here via `state_path`/`now` so the tests need no real clock
 or real `~/.claude` file.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

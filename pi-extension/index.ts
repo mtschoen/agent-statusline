@@ -1,4 +1,4 @@
-// Pi port of schoen-claude-status. Loaded by ~/.pi/agent/extensions/agent-statusline.
+// Pi port of agent-statusline. Loaded by ~/.pi/agent/extensions/agent-statusline.
 
 import { installStatuslineFooter, type RenderState } from "./renderer.ts";
 

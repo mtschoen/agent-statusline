@@ -1,4 +1,6 @@
-# schoen-claude-status
+# agent-statusline
+
+https://github.com/mtschoen/agent-statusline
 
 A multi-line [Claude Code](https://claude.com/claude-code) statusline showing
 context, session-wide cache hit %, 5-hour and weekly rate-limit usage with
@@ -284,7 +286,7 @@ constants in the script if your scale differs.
 ## Install
 
 ```sh
-git clone https://github.com/mtschoen/schoen-claude-status.git ~/schoen-claude-status
+git clone https://github.com/mtschoen/agent-statusline.git ~/agent-statusline
 ```
 
 Then configure the statusline for the target CLI. The installer merges the
@@ -292,22 +294,22 @@ platform's JSON or TOML configuration while preserving unrelated settings:
 
 ```sh
 # macOS / Linux / Git Bash (Claude Code by default)
-~/schoen-claude-status/install.sh
+~/agent-statusline/install.sh
 
 # Windows cmd / PowerShell (Claude Code by default)
-%USERPROFILE%\schoen-claude-status\install.bat
+%USERPROFILE%\agent-statusline\install.bat
 
 # For Antigravity CLI:
-~/schoen-claude-status/install.sh --platform antigravity
+~/agent-statusline/install.sh --platform antigravity
 
 # For Pi:
-~/schoen-claude-status/install.sh --platform pi
+~/agent-statusline/install.sh --platform pi
 
 # For Codex CLI (native footer preset):
-~/schoen-claude-status/install.sh --platform codex
+~/agent-statusline/install.sh --platform codex
 
 # For Kimi Code CLI:
-~/schoen-claude-status/install.sh --platform kimi
+~/agent-statusline/install.sh --platform kimi
 ```
 
 It's idempotent - re-run any time and it refreshes only the settings it owns
@@ -330,12 +332,12 @@ is:
 {
   "statusLine": {
     "type": "command",
-    "command": "bash ~/schoen-claude-status/statusline-command.sh",
+    "command": "bash ~/agent-statusline/statusline-command.sh",
     "refreshInterval": 3
   },
   "subagentStatusLine": {
     "type": "command",
-    "command": "bash ~/schoen-claude-status/subagent-statusline.sh"
+    "command": "bash ~/agent-statusline/subagent-statusline.sh"
   }
 }
 ```
@@ -415,7 +417,7 @@ preserving unrelated TOML settings and comments:
 
 ```toml
 [status_line]
-command = "bash ~/schoen-claude-status/kimi-statusline-command.sh"
+command = "bash ~/agent-statusline/kimi-statusline-command.sh"
 ```
 
 Requires kimi-code built from source past commit `67dd03149` (the
@@ -564,14 +566,14 @@ path to your checkout:
 
 ```sh
 # Or run installer:
-~/schoen-claude-status/install.sh --platform pi
+~/agent-statusline/install.sh --platform pi
 ```
 
 to generate this file automatically from the checkout:
 
 ```ts
-export { default } from "/home/you/schoen-claude-status/pi-extension/index.ts";
-// Windows example: export { default } from "C:/Users/you/schoen-claude-status/pi-extension/index.ts";
+export { default } from "/home/you/agent-statusline/pi-extension/index.ts";
+// Windows example: export { default } from "C:/Users/you/agent-statusline/pi-extension/index.ts";
 ```
 
 The current Pi port renders the same core signals from Pi's native session
@@ -814,7 +816,7 @@ wedged prompt. The equivalent manual entry on macOS / Linux is:
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "python3 ~/schoen-claude-status/wrap_nudge.py 2>>\"$HOME/.claude/wrap_nudge_hook.log\" || true" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 ~/agent-statusline/wrap_nudge.py 2>>\"$HOME/.claude/wrap_nudge_hook.log\" || true" } ] }
     ]
   }
 }

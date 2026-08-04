@@ -2,7 +2,7 @@
 and file-change rendering. Asserts exact expected substrings and empty-string
 returns for all guard branches, covering all reachable lines in qwen.py.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

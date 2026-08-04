@@ -17,7 +17,7 @@ per-horizon selection rule end-to-end, since format_agy_quota's own unit tests
 (scripts/verify_agy_quota.py) can't prove statusline.py actually wires the raw
 `quota` payload block through unmodified.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import io

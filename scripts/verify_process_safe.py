@@ -10,7 +10,7 @@ except branches (a reader thread whose communicate() call raises, and a
 kill() that raises because the child is already gone) are exercised with a
 fake Popen instead, since triggering them via a real process is racy.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

@@ -5,7 +5,7 @@ verify_git_ref_cache.py when the branch/short_hash contract plus the
 badge-counter contract together outgrew aislop's 400-line file gate --
 same test shape and state_dir= isolation seam as that script.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import json

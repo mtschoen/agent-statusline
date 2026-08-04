@@ -12,7 +12,7 @@ Covers:
 
 Split out from verify_session_tree.py to keep both files under aislop's
 400-line file-size gate. Run from anywhere; imports from
-`schoen-claude-status` by path.
+`agent-statusline` by path.
 """
 
 import os

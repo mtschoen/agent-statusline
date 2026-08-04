@@ -19,7 +19,7 @@ burnrate.py/pace.py, which consume it -- silently reading Claude Code's own
 Antigravity invocation shape (argv flag, no env vars). Fixed by deleting the
 duplicated chain and deriving the root from app_dir() directly.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

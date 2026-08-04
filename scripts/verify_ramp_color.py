@@ -9,7 +9,7 @@ high-bad (warn < danger) and high-good (warn > danger) orientations.
 Also covers base.py's degenerate warn == danger band and its orjson-absent
 fallback (_json_loads must degrade to stdlib json.loads).
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

@@ -6,7 +6,7 @@ round-trip, corrupt/absent state, concurrent-session keying, and an end-to-end
 run of the actual hook script via a subprocess with ``CLAUDE_STATE_DIR`` pointed
 at a temp dir (so the test never touches the real ``~/.claude/state``).
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import json

@@ -7,7 +7,7 @@ current-rate forecast lands before the window resets. These checks pin
 _now_unix + _pace_hourly_cached (so no transcripts or wall clock are involved)
 and drive each guard plus the happy path.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

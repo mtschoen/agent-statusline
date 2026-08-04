@@ -8,7 +8,7 @@ debounce_session_count are monkeypatched at the statusline_lib.kimi module
 level (the names it imported into its own namespace) so this never touches
 the live ~/.kimi-code or ~/.claude session-count/debounce state files.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

@@ -10,7 +10,7 @@ Split out of verify_render_timer.py (which owns the separate previous-
 render/peak-tracking concern -- see that module's docstring) once this
 suite's growth pushed the combined file over aislop's file-size gate.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

@@ -7,7 +7,7 @@ payload (see statusline_lib/teams.py docstring). `format_teammates` reads
 directly instead, so this exercises that path end to end with synthetic
 fixtures -- never live `~/.claude` data or a live clock.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

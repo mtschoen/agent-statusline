@@ -10,7 +10,7 @@ in several places, which coverage.py doesn't see -- this script calls each
 helper directly, in-process, so every branch (including the error paths) is
 covered regardless of what the entry-point suites happen to exercise.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

@@ -15,7 +15,7 @@ Covers:
   - Pure-function tests of `_process_matches` with synthesized
     (name, cmdline, cwd) inputs -- no live or mocked psutil needed.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

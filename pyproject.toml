@@ -1,4 +1,4 @@
-# Tooling config for schoen-claude-status.
+# Tooling config for agent-statusline.
 #
 # This repo is NOT a distributable Python package (it is installed via
 # install.py / install.sh). pyproject.toml exists only to hold the ruff

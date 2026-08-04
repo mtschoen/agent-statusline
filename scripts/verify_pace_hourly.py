@@ -9,7 +9,7 @@ bad-ts/duplicate-id/too-old), _pace_hourly_for_file OSError path,
 _walk_pace_hourly empty-roots and empty-groups branches, and the parallel path
 (>2 groups). _discover_pace_groups checks live in verify_pace_walk.py.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

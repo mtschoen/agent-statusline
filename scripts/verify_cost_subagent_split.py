@@ -18,7 +18,7 @@ accurate cost without lying about what's measured vs estimated:
     under-estimate is orange -> deep red past 25% (you may pay more). Drift never
     recolors any magnitude.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

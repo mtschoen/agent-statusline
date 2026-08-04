@@ -325,7 +325,7 @@ def _check_bias_cache_never_waits_on_slow_walker(failures, tmpdir):
     than relying on this machine's real claude-walker.exe happening to be
     fast, which would pass even against the old, buggy code) is the point of
     this check specifically -- see also
-    scripts/verify_render_budget.py's check_bias_factor_cold_cache_stays_fast
+    scripts/verify_cold_start.py's check_bias_factor_cold_cache_stays_fast
     for the real-subprocess end-to-end version of this same scenario."""
     cache_path = os.path.join(tmpdir, "bias-cache-slow-walker.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path

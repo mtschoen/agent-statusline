@@ -14,12 +14,12 @@
 # site carries its rationale; see issue #23.
 #
 # failBelow is 90, `aislop ci .` runs in CI and exits non-zero below it.
-# STANDING MARGIN WARNING (2026-07-28, issue #23): the repo scores 90-91, not
-# the 100/100 this comment used to claim. Six files now exceed the 400-line
+# STANDING MARGIN WARNING (2026-08-03, issue #23): the repo scores 93, not
+# the 100/100 this comment used to claim. Five files exceed the 400-line
 # code-quality limit (pi-extension/renderer.ts, statusline.py,
-# statusline_lib/pace.py, scripts/verify_badge.py, verify_beacon_walker.py,
-# verify_render_budget.py) and those warnings alone cost ~9 points. There is
-# roughly one finding of headroom left. Split those files (or make a deliberate
+# statusline_lib/pace.py, scripts/verify_badge.py, and
+# scripts/verify_beacon_walker.py) and those warnings cost seven points. There are
+# three score points above the floor. Split those files (or make a deliberate
 # call on the limit) before the next feature pushes the gate red again.
 ci:
   failBelow: 90

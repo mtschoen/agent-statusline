@@ -205,7 +205,7 @@ def _run_statusline(tmp_home, payload):
 
 
 def check_statusline_end_to_end(failures):
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         payload = {
             "session_id": "e2e-session",
             "cwd": REPO,
@@ -230,7 +230,7 @@ def check_statusline_end_to_end(failures):
 
 
 def check_statusline_timing_disabled_end_to_end(failures):
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         payload = {
             "session_id": "e2e-session-disabled",
             "cwd": REPO,

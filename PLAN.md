@@ -2,14 +2,6 @@
 
 ## Inbox
 
-- [ ] Dedupe the cold-start checks: verify_render_budget.py and
-      verify_cold_start.py BOTH carry and run
-      check_first_render_ever_stays_fast +
-      check_bias_factor_cold_cache_stays_fast (the split was landed
-      mid-flight in e22f841). Remove the render_budget copies (and its
-      private _build_fixture_home, in favor of
-      _render_fixture_helpers.build_fixture_home) so the suite runs them
-      once.
 - [ ] Kimi line 1: optional dim `ui Xms` render-timing suffix. The data is
       already recorded per render (record_render runs for kimi;
       ~/.kimi-code/state/render-timer-*.json stays current) -- only the
@@ -46,6 +38,17 @@
 
 ## Done
 
+- Cold-start check dedupe CLOSED (2026-08-03): the e22f841 split landed
+  mid-flight and left verify_render_budget.py still carrying (and running)
+  the two checks that moved to verify_cold_start.py --
+  check_first_render_ever_stays_fast +
+  check_bias_factor_cold_cache_stays_fast, plus their _run_cold_render /
+  _COLD_START_FAST_BUDGET_SECONDS helpers and a private _build_fixture_home
+  copy. Removed all of it from verify_render_budget.py; it now imports
+  _REPO and build_fixture_home from _render_fixture_helpers (the same way
+  verify_cold_start.py already did), so the suite runs each cold-start
+  check exactly once. verify_beacon_walker.py's cross-reference comment
+  updated to the new home.
 - Kimi Code CLI platform CLOSED (2026-07-28): new "kimi" harness wired the
   same way as qwen's wave-3 fold. `statusline_lib/kimi.py` renders kimi's
   SINGLE-line statusline from its camelCase payload (model, cwd, gitBranch,

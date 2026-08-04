@@ -46,7 +46,7 @@ support:
   two, both `hallucinated-import` on `import statusline` (see
   `.aislop/config.yml` and issue #23); `aislop scan .` prints the suppression
   count, so a third one showing up is visible.
-- Headroom is thin: the gate scores 93 against a floor of 90, because five files
+- Headroom is thin: the gate scores 91 against a floor of 90, because six files
   are over the 400-line limit. Check `aislop ci .` before pushing anything that
   adds a file or grows one past 400 lines.
 

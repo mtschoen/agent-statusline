@@ -53,6 +53,17 @@ support:
 To refresh the pinned binary after new commits land on the fork branch:
 `pnpm add -g --allow-build=aislop "github:mtschoen/aislop#schoen/main"`
 
+**New npm advisories can fail the CI gate even when local aislop passes
+(2026-08-03, PR #29):** the CI container's security engine reads `npm audit`
+against the lockfile, while the local engine may not surface the same
+findings. A fresh advisory on any transitive dep of `@schoen/aislop` then
+drops the CI score below `failBelow` with no local warning (observed: 91 ->
+70). Before pushing, run BOTH `node_modules/.bin/aislop ci .` (the
+lockfile-pinned binary that CI uses, not the global install) and `npm audit`;
+fix new findings via the `overrides` playbook in `package.json` (issue #23):
+bump each entry to the lowest published version outside the advisory range,
+then `npm install` to refresh the lockfile.
+
 ## kimi-code: the source checkout runs ahead of releases
 
 Before declaring a kimi-code capability missing (from public docs, the

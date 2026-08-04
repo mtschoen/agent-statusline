@@ -13,7 +13,7 @@ the walker and persists the result.
 Patches _walker_subcommand and _find_beacon_anchors in-process so no real
 walker binary is required.
 
-Run from anywhere; imports from `schoen-claude-status` package by path.
+Run from anywhere; imports from `agent-statusline` package by path.
 """
 
 import json

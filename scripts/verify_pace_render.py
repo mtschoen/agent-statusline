@@ -7,7 +7,7 @@ Covers:
     5h path (lines 364-373), elapsed<=0 guard (line 370), use_trailing=True with
     deltas=None (line 376), exception path (lines 379-380)
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

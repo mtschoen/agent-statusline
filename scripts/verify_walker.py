@@ -8,7 +8,7 @@ Covers:
     non-zero returncode, empty/None stdout, ProcessTimeout, OSError, JSON parse
     error.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import json

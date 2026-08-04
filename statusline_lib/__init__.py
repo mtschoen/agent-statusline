@@ -1,4 +1,4 @@
-"""Shared rendering helpers for the schoen-claude-status statuslines.
+"""Shared rendering helpers for the agent-statusline statuslines.
 
 Used by:
   statusline.py            -- main session: up to 3-line layout

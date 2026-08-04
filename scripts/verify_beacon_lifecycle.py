@@ -2,7 +2,7 @@
 terminator: after an `end`, a `report` with no intervening `begin` must
 NOT keep the prior begin as the turn anchor.
 
-Run from anywhere; imports from `schoen-claude-status` package by path.
+Run from anywhere; imports from `agent-statusline` package by path.
 """
 
 import json

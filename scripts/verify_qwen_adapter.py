@@ -14,7 +14,7 @@ into its own namespace) rather than exercised for real, so this never
 touches the live ~/.qwen or ~/.claude session-count/debounce/render-timer
 state files.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

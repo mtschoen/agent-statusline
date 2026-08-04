@@ -11,7 +11,7 @@ call via statusline_lib.base.state_dir(), so isolation here uses the same
 explicit `state_dir=` seam scripts/verify_render_timer.py uses for
 rendertimer.py, rather than monkeypatching a baked-in path.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import json

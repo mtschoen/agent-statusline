@@ -3,7 +3,7 @@ _discover_pace_groups (parent + subagent grouping, mtime-OSError skips) in
 statusline_lib/pace.py. The _pace_hourly_cached stale-while-revalidate
 contract lives in verify_pace_refresh.py.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

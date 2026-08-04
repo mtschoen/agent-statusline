@@ -24,7 +24,7 @@ Split out of verify_render_budget.py (which owns the general render-path
 sync-call and cold/warm budget checks) once this suite's growth pushed the
 combined file over aislop's file-size gate.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import json

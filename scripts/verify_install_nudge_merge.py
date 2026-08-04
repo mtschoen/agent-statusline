@@ -32,6 +32,13 @@ RENAMED_COMMAND = (
 # An entry written by an install from before the sentinel existed: current
 # filename, no sentinel. Matched via the basename marker and migrated.
 PRE_SENTINEL_COMMAND = 'python3 "/repo/wrap_nudge.py" || true'
+# An entry written before the schoen-claude-status -> agent-statusline repo
+# rename: current filename, but the sentinel still carries the old repo name
+# literally (not derived from the live _NUDGE_SENTINEL, since that now holds
+# the new value). Matched via the basename marker, same as PRE_SENTINEL_COMMAND.
+LEGACY_REPO_SENTINEL_COMMAND = (
+    'python3 "/repo/wrap_nudge.py" || true #managed-by:schoen-claude-status/wrap-nudge'
+)
 OTHER_HOOK = {"type": "command", "command": "echo unrelated"}
 
 
@@ -93,6 +100,21 @@ def _check_pre_sentinel_migrated(failures):
         failures.append(
             f"migration: pre-sentinel entry should be repointed, got {_nudge_commands(settings)!r}"
         )
+
+
+def _check_legacy_repo_sentinel_migrated(failures):
+    # An entry stamped with the pre-rename sentinel (literal old repo name,
+    # not derived from the live constant) must still be found via the
+    # basename marker and repointed onto the current command, including the
+    # current sentinel -- proving the rename didn't orphan existing installs.
+    settings = _settings_with(LEGACY_REPO_SENTINEL_COMMAND)
+    _merge_nudge_hook(settings, MARKERS, COMMAND)
+    if _nudge_commands(settings) != [COMMAND]:
+        failures.append(
+            f"legacy sentinel: pre-rename entry should be repointed, got {_nudge_commands(settings)!r}"
+        )
+    if not _nudge_hook_current(settings, MARKERS, COMMAND):
+        failures.append("legacy sentinel: should be current after merge")
 
 
 def _check_stale_duplicate_removed(failures):
@@ -169,6 +191,7 @@ def check(failures):
     _check_fresh_insert(failures)
     _check_survives_rename(failures)
     _check_pre_sentinel_migrated(failures)
+    _check_legacy_repo_sentinel_migrated(failures)
     _check_stale_duplicate_removed(failures)
     _check_shared_group_preserved(failures)
     _check_command_both_platform_branches(failures)

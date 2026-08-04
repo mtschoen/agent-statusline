@@ -19,7 +19,7 @@ The cold-start scenario checks (a brand-new session's first-ever render, and
 an ongoing session hitting bias-factor's own cold cache) live in
 verify_cold_start.py after the e22f841 split -- do not re-add them here.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import ast

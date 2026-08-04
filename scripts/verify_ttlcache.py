@@ -9,7 +9,7 @@ cache directory (write must swallow the OSError and never raise), and the
 atomic round-trip (write then read returns the same value plus the caller's
 own fields untouched).
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import json

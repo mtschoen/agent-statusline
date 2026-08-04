@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""statusline-ctl: live control of the schoen-claude-status status line.
+"""statusline-ctl: live control of the agent-statusline status line.
 
 Reads/writes ~/.claude/.statusline-prefs.json (the file the status line reads
 fresh every render), so toggles take effect with NO Claude Code restart. This is

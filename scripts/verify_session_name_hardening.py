@@ -11,7 +11,7 @@ statusline.py is imported directly (not just driven via subprocess) so this
 runs fast and reports precise failures; importing it is safe since all
 side-effecting work happens inside main()'s `__main__` guard.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

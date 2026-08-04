@@ -2,7 +2,7 @@
 Antigravity's `agent_state` field, absent when the field is absent (as it
 always is on a Claude Code payload).
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

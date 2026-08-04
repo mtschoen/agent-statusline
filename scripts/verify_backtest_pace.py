@@ -7,7 +7,7 @@ cumulative curve into a 0..100 synthetic-util series ending at exactly 100; and
 score_candidate runs project_delta across the window and returns finite
 convergence / jumpiness / false-call metrics.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

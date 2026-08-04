@@ -71,7 +71,7 @@ def _parse_args():
     parser.add_argument(
         "--repo",
         required=True,
-        help="Absolute path to the schoen-claude-status checkout",
+        help="Absolute path to the agent-statusline checkout",
     )
     parser.add_argument(
         "--platform",

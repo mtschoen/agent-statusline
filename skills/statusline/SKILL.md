@@ -1,6 +1,6 @@
 ---
 name: statusline
-description: Use when the user wants to change the schoen-claude-status status line live - hide or show cost figures, switch compact mode, set or derive the burn-rate target, set a daily budget, toggle verbose pace, or turn the progress-beacon ETA on/off - without restarting Claude Code. Triggers include "hide the cost", "make the statusline compact", "pin the target rate", "turn off the beacon ETA", "what statusline settings are set".
+description: Use when the user wants to change the agent-statusline status line live - hide or show cost figures, switch compact mode, set or derive the burn-rate target, set a daily budget, toggle verbose pace, or turn the progress-beacon ETA on/off - without restarting Claude Code. Triggers include "hide the cost", "make the statusline compact", "pin the target rate", "turn off the beacon ETA", "what statusline settings are set".
 ---
 
 # Statusline live control
@@ -12,10 +12,10 @@ status line applies: prefs file (this CLI) > settings.json `env` > built-in defa
 
 ## How to run it
 
-The CLI lives at the schoen-claude-status repo root. Run it via Bash:
+The CLI lives at the agent-statusline repo root. Run it via Bash:
 
 ```
-python ~/schoen-claude-status/statusline_ctl.py <command>
+python ~/agent-statusline/statusline_ctl.py <command>
 ```
 
 (If the repo is elsewhere, use that path. A `statusline-ctl` PATH shim, if the

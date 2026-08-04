@@ -9,7 +9,7 @@ Covers:
     sessions count; helpers (intact-chain or disowned) and children of
     node-wrapped sessions do not; AccessDenied candidates are skipped.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

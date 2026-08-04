@@ -5,7 +5,7 @@ which reassigns burnrate._sum_window_spend and pins the clock via pace._now_unix
 mirroring verify_quota_render.py. Target-rate resolution (the →$ arrow and the
 adaptive weekly target) lives in its sibling verify_target_rate.py.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import builtins

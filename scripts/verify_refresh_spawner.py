@@ -5,7 +5,7 @@ snippet end to end against a fixture corpus.
 
 The cache-side stale-while-revalidate contract lives in verify_pace_refresh.py.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

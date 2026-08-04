@@ -12,7 +12,7 @@ shared-key fallback, corrupt/absent state, and end-to-end renders of
 PhaseTimer (a separate, much cheaper concern also living in rendertimer.py)
 has its own verify_phase_timer.py.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import json

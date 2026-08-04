@@ -3,7 +3,7 @@ built from Antigravity's `context_window.current_usage` payload block, since
 agy's brain transcripts carry no usage data for the session-cumulative walk
 the Claude/Qwen cache column uses.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

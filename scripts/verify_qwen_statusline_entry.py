@@ -13,7 +13,7 @@ Runs each case with $HOME faked to a fresh temp dir, so state/log writes
 (session-count debounce, render-timer peak tracking, the input/error logs)
 never touch the real ~/.qwen.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

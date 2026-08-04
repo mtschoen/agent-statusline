@@ -1,4 +1,4 @@
-# schoen-claude-status — Plan
+# agent-statusline - Plan
 
 ## Inbox
 

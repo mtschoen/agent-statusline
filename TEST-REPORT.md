@@ -1,4 +1,4 @@
-# schoen-claude-status - Test Report
+# agent-statusline - Test Report
 
 `2026-07-28`
 

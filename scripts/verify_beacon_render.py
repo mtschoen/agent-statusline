@@ -6,7 +6,7 @@ _format_clock_and_elapsed.
 Walker-dependent paths (format_beacon, _bias_factor_cached,
 format_calibrated_eta) live in verify_beacon_walker.py.
 
-Run from anywhere; imports from `schoen-claude-status` package by path.
+Run from anywhere; imports from `agent-statusline` package by path.
 """
 
 import json

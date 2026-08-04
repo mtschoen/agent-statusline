@@ -6,7 +6,7 @@ delta uses the window's own util/$ ratio to turn recent $/h into %/h, and both
 deltas are shrunk toward 0 early in the window by the warmup prior. These checks
 feed synthetic hourly arrays so no transcripts or clock are involved.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import os

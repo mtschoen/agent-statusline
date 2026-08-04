@@ -17,9 +17,16 @@ import os
 # execution). The installer recognizes its own entry by this sentinel rather
 # than by the script's filename, so the script can be renamed or moved freely
 # without orphaning entries written by earlier installs (which is what
-# happened with the nudge_200k.py -> wrap_nudge.py rename). Treat the sentinel
-# text itself as frozen: changing it recreates the very problem it solves.
-_NUDGE_SENTINEL = "#managed-by:schoen-claude-status/wrap-nudge"
+# happened with the nudge_200k.py -> wrap_nudge.py rename, and again with the
+# schoen-claude-status -> agent-statusline repo rename below). _nudge_markers
+# pairs this constant with the script's current basename, and
+# _find_nudge_hooks matches on either marker -- so the sentinel text can
+# change as long as the basename doesn't change in the same release; an entry
+# stamped with a prior sentinel value is still found via the basename and
+# gets repointed onto the new command (including the new sentinel) the next
+# time the merge runs. Only changing the sentinel and the basename together
+# would orphan old entries.
+_NUDGE_SENTINEL = "#managed-by:agent-statusline/wrap-nudge"
 
 
 def _nudge_command(repo, platform="claude"):

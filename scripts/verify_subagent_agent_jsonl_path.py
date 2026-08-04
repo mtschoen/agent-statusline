@@ -17,7 +17,7 @@ depend on the routing bug that motivated the argv-flag fix.
 Uses a synthetic `brain/<task_id>/.system_generated/logs/transcript.jsonl`
 fixture under a faked HOME (never live `~/.gemini` data).
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

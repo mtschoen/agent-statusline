@@ -12,7 +12,7 @@ best-effort field in this file rather than taking the whole row with it.
 subagent_statusline.py is imported directly, matching
 scripts/verify_session_name_hardening.py's approach for statusline.py.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

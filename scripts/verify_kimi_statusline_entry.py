@@ -11,7 +11,7 @@ with $HOME faked to a fresh temp dir so state/log writes (session-count
 debounce, render-timer peak tracking, the input/error logs) never touch the
 real ~/.kimi-code.
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

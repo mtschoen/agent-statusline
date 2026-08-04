@@ -4,7 +4,7 @@ included, and delegates recomputation to a detached child via
 refresh.maybe_spawn_refresh. Siblings: verify_spend_refresh.py (the burnrate
 spend cache's identical contract) and verify_refresh_spawner.py (the spawner).
 
-Run from anywhere; imports from `schoen-claude-status` by path.
+Run from anywhere; imports from `agent-statusline` by path.
 """
 
 import json

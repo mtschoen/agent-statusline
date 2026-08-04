@@ -12,7 +12,7 @@ low-utilization sibling from the same family -- see
 _check_format_agy_quota_never_hides_hottest_window for the reviewer's exact
 reproduction of that bug, kept as a permanent regression test.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

@@ -17,7 +17,7 @@ the app_dir() half of this contract.
 Both the Windows (`py -3 ...`) and POSIX (`bash ...`) command forms are
 covered -- CI runs this suite on both hosts.
 
-Run from anywhere; imports from schoen-claude-status by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
 import os

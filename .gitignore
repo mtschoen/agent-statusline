@@ -12,9 +12,6 @@ __pycache__/
 # installed with `npm ci --ignore-scripts`; the tree itself is not committed.
 node_modules/
 
-# aislop per-run artifacts (session/history logs; .aislop/config.yml stays tracked)
-.aislop/*.jsonl
-
 # coverage.py data files (the 100% gate runs in CI; local runs leave these behind)
 .coverage
 .coverage.*
@@ -22,6 +19,7 @@ node_modules/
 # pytest cache (no pytest suite; stray runs still drop it)
 .pytest_cache/
 
-# aislop tool state (scan artifacts); config.yml stays tracked
-.aislop/*
-!.aislop/config.yml
+# aislop runtime artifacts (session/history logs, caches, baselines).
+# Unanchored so nested project directories are covered too.
+**/.aislop/*
+!**/.aislop/config.yml

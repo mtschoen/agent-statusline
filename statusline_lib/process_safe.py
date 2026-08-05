@@ -203,7 +203,12 @@ def spawn_detached(
     detach_kwargs: dict[str, object]
     if os.name == "nt":
         detach_kwargs = _windows_hidden_kwargs()
-        detach_kwargs["creationflags"] |= subprocess.CREATE_NEW_PROCESS_GROUP
+        # getattr-guarded like _windows_hidden_kwargs above: the constant is
+        # Windows-only, and the nt arm has to stay runnable on any host for
+        # the cross-platform checks to reach it.
+        detach_kwargs["creationflags"] |= getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
     else:
         detach_kwargs = {"start_new_session": True}
     return subprocess.Popen(

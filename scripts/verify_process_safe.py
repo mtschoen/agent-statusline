@@ -13,6 +13,7 @@ fake Popen instead, since triggering them via a real process is racy.
 Run from anywhere; imports from agent-statusline by path.
 """
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -188,6 +189,41 @@ def _check_run_inherit_forwards_returncode(failures):
         failures.append(f"run_inherit: command not forwarded, got {captured_command!r}")
 
 
+class _FakeStartupInfo:
+    """Stand-in for subprocess.STARTUPINFO, which only exists on Windows."""
+
+    def __init__(self):
+        self.dwFlags = 0
+        self.wShowWindow = 1
+
+
+@contextlib.contextmanager
+def _windows_constants():
+    """Install the Windows-only subprocess names the nt arm reads.
+
+    Off Windows every ``getattr(subprocess, ...)`` in that arm falls back to
+    0/None, so each nt assertion short-circuits and the checks pass without
+    testing anything - the arm is executed but unverified. Installing
+    real-valued fakes makes the Linux run assert what the Windows run does.
+
+    Only genuinely missing names are installed, so this is inert on Windows.
+    """
+    fakes = {
+        "CREATE_NO_WINDOW": 0x08000000,
+        "CREATE_NEW_PROCESS_GROUP": 0x00000200,
+        "STARTF_USESHOWWINDOW": 1,
+        "STARTUPINFO": _FakeStartupInfo,
+    }
+    installed = [name for name in fakes if not hasattr(subprocess, name)]
+    for name in installed:
+        setattr(subprocess, name, fakes[name])
+    try:
+        yield
+    finally:
+        for name in installed:
+            delattr(subprocess, name)
+
+
 def _check_spawn_detached_default_stdio(failures):
     # Exercise BOTH os arms regardless of host: the nt arm swaps
     # start_new_session for hidden-window creationflags + startupinfo.
@@ -315,8 +351,11 @@ def main():
     _check_reader_exception_is_swallowed(failures)
     _check_kill_oserror_is_swallowed(failures)
     _check_run_inherit_forwards_returncode(failures)
-    _check_spawn_detached_default_stdio(failures)
-    _check_run_captured_windows_hidden(failures)
+    # Both of these force the nt arm, which reads Windows-only subprocess
+    # constants. Without the fakes their assertions are vacuous off Windows.
+    with _windows_constants():
+        _check_spawn_detached_default_stdio(failures)
+        _check_run_captured_windows_hidden(failures)
     _check_spawn_detached_explicit_stdio_and_env(failures)
 
     if failures:

@@ -1,17 +1,42 @@
 # agent-statusline - Test Report
 
-`2026-07-28`
+`2026-08-06`
 
 | Field | Value |
 |-------|-------|
-| **Status** | PASS |
+| **Status** | PASS (Windows and Linux; the Linux job was red before this run) |
 | **Mode** | maintain (lint AND coverage - both hard CI gates) |
-| **Tests** | 66 `scripts/verify_*.py`, all passing locally |
-| **Git** | `682b7db` (`main`, plus the uncommitted kimi-platform WIP and this change at time of writing) |
-| **Coverage** | 2492/2492 statements (100%), 0 exclusion annotations |
+| **Tests** | 67 `scripts/verify_*.py`, all passing on Windows and on WSL Ubuntu-24.04 |
+| **Git** | `f483c74` (`main`) plus the process_safe nt-arm fix below |
+| **Coverage** | 2695/2695 statements (100%), 0 exclusion annotations |
 | **Lint** | ruff format 0 / ruff check 0; aislop ci exit 0 (6 pre-existing file-size warnings in untracked WIP files, gate failBelow 90); aislop scan --staged 100/100 Healthy (0 issues) |
 
-**This run (kimi working-tree git badge + refresh-child platform pin):**
+**This run (fix the red Linux job in `process_safe`'s nt arm):** the
+`Unit tests (Linux)` job had been failing with
+`AttributeError: module 'subprocess' has no attribute 'CREATE_NEW_PROCESS_GROUP'`.
+`spawn_detached` read that Windows-only constant bare, while everything
+around it in `_windows_hidden_kwargs` is `getattr`-guarded precisely so the
+nt arm stays runnable on any host; `scripts/verify_process_safe.py` forces
+`os.name = "nt"` to exercise that arm, and off Windows the bare read blew
+up. Guarded it to match its neighbours.
+
+That alone turns the job green but leaves a worse problem: off Windows
+*every* nt assertion was vacuous, because each one reads its constant
+through `getattr(..., 0)` and short-circuits on the 0. The Linux run was
+executing the branch and checking nothing. `_windows_constants()` now
+installs real-valued fakes for the missing names around the two nt checks,
+so Linux asserts what Windows asserts. Verified by mutation: deleting the
+`CREATE_NEW_PROCESS_GROUP` flag is now caught on Linux
+(`FAIL: spawn_detached[nt] creationflags missing CREATE_NEW_PROCESS_GROUP`)
+and passed silently before.
+
+Note for future platform branches: do not reach for
+`monkeypatch.setattr(os, "name", ...)` as a general tool. `pathlib` reads
+`os.name` to choose `Path`'s flavour, so forcing `"posix"` on Windows makes
+the next `resolve()` raise `UnsupportedOperation`. It is survivable here
+only because this script forces `"nt"`, and only on Linux.
+
+**Previous run (kimi working-tree git badge + refresh-child platform pin):**
 the kimi line gains kimi-code's built-in footer's `+A -B ↑x ↓y` badge
 inside the branch parens (`(main +2 -2 ↑58)`). The status_line payload
 never carries these counters (confirmed against the released 0.29.2 binary

@@ -26,7 +26,7 @@ the colors read at a glance - click for full size:
 The same full-width render as text:
 
 ```
-⠹ [my-laptop] ~/projects/example-app (feature/example:3f2c9a1) [a1da9354] Investigating the flaky test
+⠹ [my-laptop] ~/projects/example-app (feature/example:3f2c9a1) [a1da9354] 12 turns Investigating the flaky test
 opus4.8[1m] | 183.7K / 1.00M (18.0%) | 12.1K ($0.06) / 15.41M ($1.54) / 207.4K ($1.29) / 48.2K ($1.21) / 99% hit | ⚠ TTL:1 (~$0.31) | 5h: 6% +0.4h wk: 21% +9.7h | $1.02/min →$1.35 ↓ | ($10.66 + $4.82~) = $15.48 | +543/-113
 ⏳ 1h02m · 27m api  ·  ⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
 # API-key session (no rate_limits), STATUSLINE_DAILY_BUDGET=100:
@@ -49,7 +49,10 @@ optional red `[N sessions]` warning when two or more interactive
 Claude Code sessions are running in this cwd, the git ref as `branch:hash`
 (the short commit hash tinted tan so it reads apart from the branch), a short
 `[session-id]` badge (first hex group of the session UUID, steel blue - handy
-for matching a statusline to its transcript file), and the session title.
+for matching a statusline to its transcript file), a muted turn counter
+(`N turns`, one per typed user prompt in the session transcript; falls back to
+`N steps` from the deduped assistant-turn count when the transcript carries no
+user entries at all, e.g. a piped/headless session), and the session title.
 The spinner advances on every render, so a frozen glyph means the statusline
 subprocess has stopped being invoked. An orange `LOCAL` tag appears before the
 hostname when `CLAUDE_LOCAL_MODE=1` is set or `~/.claude/.local-mode` exists.
@@ -64,7 +67,8 @@ it the badge stays off entirely (see [Requirements](#requirements)). When Claude
 `session_name` (its auto-generated title for the session) and there's room
 for it within `$COLUMNS`, it's appended in muted grey after the badges -
 dropped first if the terminal is too narrow, so it never pushes the path off
-screen. The session-id badge, by contrast, is tiny and always shown.
+screen. The session-id badge and turn counter, by contrast, are tiny and
+always shown.
 
 **Line 2** - pipe-separated metrics with no inline labels (colors carry the
 identity); fields are omitted when their data isn't available:

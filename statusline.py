@@ -1,6 +1,6 @@
 """Main statusline entry point. Reads Claude Code's JSON payload from stdin
 and prints up to three lines:
-  line 1: [host] home [rel-cwd] (branch) <session title, if it fits>
+  line 1: [host] home [rel-cwd] (branch) <turn count> <session title, if it fits>
   line 2: ctx | cache | ttl | quota | cost | +/-lines  (fields omitted when their data is absent)
   line 3: session wall/api timing  ·  weekly-quota exhaustion clock (>90%)  ·  live turn beacon + calibrated ETA  ·  previous-render duration + session peak
 
@@ -56,6 +56,7 @@ try:
         format_session_timing,
         format_teammates,
         format_ttl,
+        format_turn_count,
         hostname,
         is_local_mode,
         log_traceback,
@@ -158,7 +159,7 @@ def _format_cwd(home, current):
     return f"{home} {_CWD_REL_COLOR}[{hop}]{RESET}"
 
 
-def _line1(d, cwd, cwd_display, spinner, terminal_width_hint=None):
+def _line1(d, cwd, cwd_display, spinner, terminal_width_hint=None, turns_summary=""):
     host = f"{_HOST_COLOR}{hostname()}{RESET}"
     line1 = (
         f"{spinner} {ORANGE}LOCAL{RESET} [{host}] {cwd_display}"
@@ -182,6 +183,7 @@ def _line1(d, cwd, cwd_display, spinner, terminal_width_hint=None):
     session_id = d.get("session_id") or d.get("conversation_id")
     session_name = d.get("session_name") or d.get("session_title") or d.get("title")
     line1 = _append_session_id(line1, session_id)
+    line1 = _append_turn_count(line1, turns_summary)
     return _append_session_name(line1, session_name, terminal_width_hint)
 
 
@@ -202,6 +204,16 @@ def _append_session_id(line1, session_id):
     if not sid:
         return line1
     return f"{line1} {_SESSION_ID_COLOR}[{sid[:_SESSION_ID_LEN]}]{RESET}"
+
+
+def _append_turn_count(line1, turns_summary):
+    """Append the session turn counter (`N turns`, or `N steps` when the
+    transcript carried no user entries) after the session-id badge. Like the
+    id badge it is tiny and unconditional: not width-gated, unlike the title.
+    "" when the walk produced no turn data (missing transcript) - a no-op."""
+    if not turns_summary:
+        return line1
+    return f"{line1} {turns_summary}"
 
 
 def _append_session_name(line1, session_name, terminal_width_hint=None):
@@ -486,7 +498,8 @@ def main():
     is_agy = d.get("product") == "antigravity"
 
     spinner = spinner_frame()
-    line1 = _line1(d, cwd, cwd_display, spinner, terminal_width_hint)
+    turns_summary = format_turn_count(walk["user_prompts"], walk["assistant_turns"])
+    line1 = _line1(d, cwd, cwd_display, spinner, terminal_width_hint, turns_summary)
     _phase_timer.mark("gitref")
 
     # Resolve compact verbosity (STATUSLINE_COMPACT + $COLUMNS): re-render the

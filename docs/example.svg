@@ -4,7 +4,7 @@
   <!-- main statusline at a typical terminal width (compact auto has shed the widest
        embellishments: cost breakdown, cache $ parens, target arrow). Threshold colors
        sit on the muted #af truecolor plane; identity colors are 256-color hues. -->
-  <text x="14" y="30" fill="#dcdcdc" xml:space="preserve">⠹ [<tspan fill="#875f87">my-laptop</tspan>] ~/projects/example-app (feature/example:<tspan fill="#af875f">3f2c9a1</tspan>) <tspan fill="#5f87af">[a1da9354]</tspan> <tspan fill="#8a8a8a">Investigating the flaky test</tspan></text>
+  <text x="14" y="30" fill="#dcdcdc" xml:space="preserve">⠹ [<tspan fill="#875f87">my-laptop</tspan>] ~/projects/example-app (feature/example:<tspan fill="#af875f">3f2c9a1</tspan>) <tspan fill="#5f87af">[a1da9354]</tspan> <tspan fill="#8a8a8a">12 turns</tspan> <tspan fill="#8a8a8a">Investigating the flaky test</tspan></text>
 
   <!-- subscription session: 5h/wk quota with pace, burn rate carries the weekly needle -->
   <text x="14" y="56" fill="#dcdcdc" xml:space="preserve"><tspan fill="#23d18b">fable5</tspan> | <tspan fill="#00af00">183.7K</tspan> / <tspan fill="#af87af">1.00M</tspan> (<tspan fill="#00af00">18.0%</tspan>) | <tspan fill="#00afd7">15.41M</tspan> / <tspan fill="#af5a00">207.4K</tspan> / <tspan fill="#00af00">99%</tspan> hit | 5h: <tspan fill="#00af00">6%</tspan> <tspan fill="#00af00">+0.4h</tspan> wk: <tspan fill="#00af00">21%</tspan> <tspan fill="#00af00">+9.7h</tspan> | <tspan fill="#00af00">$1.02/min</tspan><tspan fill="#00af00">↓</tspan> | <tspan fill="#00af00">$10.66</tspan></text>

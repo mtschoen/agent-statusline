@@ -237,6 +237,50 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
     acc["last_cache_read"] = r
 
 
+def _typed_prompt_text(content):
+    """Extract the user-typed text from a `message.content` value.
+
+    Plain strings are the common shape, but Claude Code also emits genuine
+    user prompts as content-block lists (`[{"type": "text", "text": ...}]`),
+    so a list is not synonymous with a tool result. Tool results arrive as
+    lists of `tool_result` blocks and carry no typed text; only non-empty
+    `text` blocks count. Returns "" when there is no user-typed text.
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        block.get("text")
+        for block in content
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ]
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
+def _accumulate_user_prompt(entry, acc):
+    """Count one typed user prompt per qualifying transcript line.
+
+    Parent-transcript only (`track_user_prompts`, mirroring the eviction
+    gate): a subagent transcript's user message is its task prompt, not a
+    user turn of this session. Tool results arrive as `user` entries whose
+    content is an all-`tool_result` block list, harness bookkeeping lines are
+    flagged `isMeta`/`isSidechain`, and local slash-command output is a
+    `<local-command-...>` wrapper; none of those are typed prompts.
+    """
+    if not acc.get("track_user_prompts"):
+        return
+    if entry.get("type") != "user" or entry.get("isMeta") or entry.get("isSidechain"):
+        return
+    content = (entry.get("message") or {}).get("content")
+    text = _typed_prompt_text(content)
+    if not text or text.startswith("<local-command"):
+        return
+    acc["user_prompts"] += 1
+
+
 def _walk_one_transcript(path, acc, seen_ids):
     """Stream one JSONL transcript, folding each line into `acc`."""
     try:
@@ -247,6 +291,7 @@ def _walk_one_transcript(path, acc, seen_ids):
                 except Exception:
                     continue
                 _accumulate_assistant_turn(entry, acc, seen_ids)
+                _accumulate_user_prompt(entry, acc)
     except OSError:
         # Transcript became unreadable mid-walk; use the totals gathered so far
         # rather than failing the whole render.
@@ -266,6 +311,9 @@ def walk_transcript(path, include_subagents=False):
       last_model_id                                      -- model on most recent assistant turn
       last_input, last_cache_create, last_cache_read     -- usage of most recent turn
                                                             (used to derive ctx_used at "now")
+      user_prompts                                       -- typed-prompt count, parent only
+      assistant_turns                                    -- deduped assistant-turn count
+                                                            (parent + subagents when included)
 
     `include_subagents=True` (main script) also walks
     <path-without-.jsonl>/subagents/agent-*.jsonl so the cache total reflects
@@ -284,7 +332,9 @@ def walk_transcript(path, include_subagents=False):
         "ttl_evictions": 0,
         "ttl_wasted": 0.0,
         "assistant_turns": 0,
+        "user_prompts": 0,
         "track_evictions": False,
+        "track_user_prompts": False,
         "last_model": "",
         "last_input": 0,
         "last_cache_create": 0,
@@ -298,11 +348,15 @@ def walk_transcript(path, include_subagents=False):
     if path and os.path.exists(path):
         # Eviction tracking is parent-only: a subagent's first turn is a full
         # write by construction and isn't user-controllable cache behavior.
+        # User-prompt counting is parent-only too: a subagent transcript's
+        # user message is its task prompt, not a turn the user typed.
         acc["track_evictions"] = True
+        acc["track_user_prompts"] = True
         _walk_one_transcript(path, acc, seen_ids)
         parent_cost = acc["cost"]
         if include_subagents and path.endswith(".jsonl"):
             acc["track_evictions"] = False
+            acc["track_user_prompts"] = False
             sub_dir = path[:-6] + "/subagents"
             if os.path.isdir(sub_dir):
                 for sub in glob.glob(os.path.join(sub_dir, "agent-*.jsonl")):
@@ -326,4 +380,6 @@ def walk_transcript(path, include_subagents=False):
         "last_input": acc["last_input"],
         "last_cache_create": acc["last_cache_create"],
         "last_cache_read": acc["last_cache_read"],
+        "user_prompts": acc["user_prompts"],
+        "assistant_turns": acc["assistant_turns"],
     }

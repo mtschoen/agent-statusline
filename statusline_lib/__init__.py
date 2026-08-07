@@ -49,6 +49,7 @@ Package layout (dependency order, no cycles):
   diffstat -- format_lines (session +/- line counts for line 2)
   pace     -- pace walking, format_quota
   teams    -- agent-teams teammate summary line (subagentStatusLine can't reach it)
+  turns    -- line-1 session turn counter (typed prompts, assistant-step fallback)
   agy      -- Antigravity CLI payload adapters: quota -> 5h/wk render, agent_state
               tag, per-turn cache fallback (payload-only, no transcript walk)
 """
@@ -259,6 +260,9 @@ from .ttlcache import (
     read_ttl_cache,
     write_ttl_cache,
 )
+from .turns import (
+    format_turn_count,
+)
 from .walker import (
     _WALKER_BIN_ENV,
     _WALKER_ROOTS_CONFIG_PATH,
@@ -315,6 +319,7 @@ __all__ = [
     "format_session_timing",
     "format_teammates",
     "format_ttl",
+    "format_turn_count",
     "full_flags",
     "hostname",
     "is_local_mode",

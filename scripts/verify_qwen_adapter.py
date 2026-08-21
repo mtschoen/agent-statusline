@@ -116,28 +116,33 @@ def _check_model_summaries_valid_with_cache(failures):
 
 class _PatchedQwenSessions:
     """Swap statusline_lib.qwen's imported count_active_sessions /
-    debounce_session_count / format_render_suffix names for fakes, so
-    render_qwen_statusline's session-badge and render-timer-suffix branches
-    are exercised without touching real state files."""
+    debounce_session_count / format_render_suffix / format_fable_quota
+    names for fakes, so render_qwen_statusline's session-badge and
+    render-timer-suffix branches are exercised without touching real state
+    files or the fable quota cache."""
 
-    def __init__(self, n_sessions, render_suffix):
+    def __init__(self, n_sessions, render_suffix, fable_summary=""):
         self._n_sessions = n_sessions
         self._render_suffix = render_suffix
+        self._fable_summary = fable_summary
         self._originals = {}
 
     def __enter__(self):
         self._originals["count_active_sessions"] = qwen_module.count_active_sessions
         self._originals["debounce_session_count"] = qwen_module.debounce_session_count
         self._originals["format_render_suffix"] = qwen_module.format_render_suffix
+        self._originals["format_fable_quota"] = qwen_module.format_fable_quota
         qwen_module.count_active_sessions = lambda cwd: self._n_sessions
         qwen_module.debounce_session_count = lambda raw_count, cwd: raw_count
         qwen_module.format_render_suffix = lambda session_id: self._render_suffix
+        qwen_module.format_fable_quota = lambda: self._fable_summary
         return self
 
     def __exit__(self, *_exc_info):
         qwen_module.count_active_sessions = self._originals["count_active_sessions"]
         qwen_module.debounce_session_count = self._originals["debounce_session_count"]
         qwen_module.format_render_suffix = self._originals["format_render_suffix"]
+        qwen_module.format_fable_quota = self._originals["format_fable_quota"]
 
 
 def _check_render_qwen_statusline_full_payload(failures):

@@ -616,12 +616,14 @@ def _check_render_integration(failures):
             "debounce_session_count",
             "format_render_suffix",
             "format_qwen_quota",
+            "format_fable_quota",
         )
     }
     try:
         qwen_module.count_active_sessions = lambda cwd: 1
         qwen_module.debounce_session_count = lambda raw_count, cwd: raw_count
         qwen_module.format_render_suffix = lambda session_id: ""
+        qwen_module.format_fable_quota = lambda: ""
         qwen_module.format_qwen_quota = lambda: "5h: 50% +5.0h wk: 50% +0.0h"
         _line1, line2 = render_qwen_statusline(payload, "/tmp", "|")
         if "5h: 50% +5.0h wk: 50% +0.0h" not in line2:

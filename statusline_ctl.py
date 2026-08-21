@@ -21,6 +21,8 @@ Keys (friendly name -> what it controls):
   daily-budget  <$/day>|off         API-key daily budget (sets the needle)
   verbose-pace  on|off              numeric pace deltas instead of the glyph
   beacon        on|off              render the progress-beacon ETA column
+  fable-quota   on|off              Anthropic Fable weekly quota pool display
+  fable-quota-host <host[:port]>|off Quota dashboard fleet host (default llamabox:8001)
   qwen-quota-5h    <calls>|off      Qwen 5h rolling plan-quota limit
   qwen-quota-weekly <calls>|off     Qwen weekly plan-quota limit
   qwen-quota-anchor <5h_used>,<wk_used>
@@ -127,6 +129,13 @@ def _norm_quota_anchor(raw):
     return f"{match.group(1)},{match.group(2)}@{int(time.time())}", None
 
 
+def _norm_host(raw):
+    v = raw.strip()
+    if not v:
+        return None, "expected a host or 'off'"
+    return v, None
+
+
 # cost on = SHOW => HIDE_COST "0"; cost off = HIDE => HIDE_COST "1".
 SETTINGS = {
     "cost": _Setting("STATUSLINE_HIDE_COST", _onoff("0", "1"), "on|off"),
@@ -139,6 +148,10 @@ SETTINGS = {
     ),
     "verbose-pace": _Setting("STATUSLINE_VERBOSE_PACE", _onoff("1", "0"), "on|off"),
     "beacon": _Setting("STATUSLINE_BEACON", _onoff("1", "0"), "on|off"),
+    "fable-quota": _Setting("STATUSLINE_FABLE_QUOTA", _onoff("1", "0"), "on|off"),
+    "fable-quota-host": _Setting(
+        "STATUSLINE_FABLE_QUOTA_HOST", _norm_host, "<host[:port]>|off"
+    ),
     "qwen-quota-5h": _Setting(
         "STATUSLINE_QWEN_QUOTA_5H", _norm_quota_limit, "<calls>|off"
     ),

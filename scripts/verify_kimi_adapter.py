@@ -21,34 +21,39 @@ from statusline_lib.kimi import render_kimi_statusline
 
 class _PatchedKimiSessions:
     """Swap statusline_lib.kimi's imported count_active_sessions /
-    debounce_session_count / git_working_tree_cached names for fakes, so
-    render_kimi_statusline's session-badge and working-tree-badge branches
-    are exercised without touching real state files or the gitref cache."""
+    debounce_session_count / git_working_tree_cached / format_fable_quota
+    names for fakes, so render_kimi_statusline's session-badge and
+    working-tree-badge branches are exercised without touching real state
+    files, the gitref cache, or the fable quota cache."""
 
-    def __init__(self, n_sessions, git_stats=(0, 0, 0, 0)):
+    def __init__(self, n_sessions, git_stats=(0, 0, 0, 0), fable_summary=""):
         self._n_sessions = n_sessions
         self._git_stats = git_stats
+        self._fable_summary = fable_summary
         self._originals = {}
 
     def __enter__(self):
         self._originals["count_active_sessions"] = kimi_module.count_active_sessions
         self._originals["debounce_session_count"] = kimi_module.debounce_session_count
         self._originals["git_working_tree_cached"] = kimi_module.git_working_tree_cached
+        self._originals["format_fable_quota"] = kimi_module.format_fable_quota
         kimi_module.count_active_sessions = lambda cwd: self._n_sessions
         kimi_module.debounce_session_count = lambda raw_count, cwd: raw_count
         kimi_module.git_working_tree_cached = lambda cwd, state_dir=None: (
             self._git_stats
         )
+        kimi_module.format_fable_quota = lambda: self._fable_summary
         return self
 
     def __exit__(self, *_exc_info):
         kimi_module.count_active_sessions = self._originals["count_active_sessions"]
         kimi_module.debounce_session_count = self._originals["debounce_session_count"]
         kimi_module.git_working_tree_cached = self._originals["git_working_tree_cached"]
+        kimi_module.format_fable_quota = self._originals["format_fable_quota"]
 
 
-def _render(payload, n_sessions=1, git_stats=(0, 0, 0, 0)):
-    with _PatchedKimiSessions(n_sessions, git_stats):
+def _render(payload, n_sessions=1, git_stats=(0, 0, 0, 0), fable_summary=""):
+    with _PatchedKimiSessions(n_sessions, git_stats, fable_summary):
         return render_kimi_statusline(payload, "/tmp", "|")
 
 

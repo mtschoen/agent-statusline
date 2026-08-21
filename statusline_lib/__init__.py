@@ -194,6 +194,9 @@ from .costfmt import (
 from .diffstat import (
     format_lines,
 )
+from .fable_quota import (
+    format_fable_quota,
+)
 from .pace import (
     _PACE_CACHE_TTL_SECONDS,
     _PACE_HOURLY_CACHE_PATH,
@@ -308,6 +311,7 @@ __all__ = [
     "format_cost",
     "format_cost_with_subagents",
     "format_day_budget",
+    "format_fable_quota",
     "format_lines",
     "format_model_badge",
     "format_quota",

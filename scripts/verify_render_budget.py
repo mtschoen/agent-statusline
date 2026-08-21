@@ -362,10 +362,57 @@ def check_warm_core_median(failures):
             )
 
 
+def check_unreachable_host_render_budget(failures):
+    """End-to-end render when the quota dashboard host is unreachable (non-routable IP)
+    must finish inside the cold-render budget without blocking or crashing."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        home = os.path.join(tmp, "home")
+        build_fixture_home(home)
+        env = dict(os.environ)
+        env["HOME"] = home
+        env["USERPROFILE"] = home
+        env["STATUSLINE_FABLE_QUOTA_HOST"] = "192.0.2.1:8001"
+        env.pop("CLAUDE_WALKER_BIN", None)
+        payload = json.dumps(
+            {
+                "session_id": str(uuid.uuid4()),
+                "cwd": _REPO,
+                "workspace": {"current_dir": _REPO, "project_dir": _REPO},
+                "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
+            }
+        )
+        start = time.perf_counter()
+        try:
+            result = subprocess.run(
+                [sys.executable, os.path.join(_REPO, "statusline.py")],
+                input=payload,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=env,
+                timeout=_RENDER_BUDGET_SECONDS * 3,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(
+                f"unreachable-host render exceeded {_RENDER_BUDGET_SECONDS * 3}s hard kill"
+            )
+            return
+        elapsed = time.perf_counter() - start
+        if result.returncode != 0:
+            failures.append(f"unreachable-host render exited {result.returncode}")
+        if elapsed > _RENDER_BUDGET_SECONDS:
+            failures.append(
+                f"unreachable-host render took {elapsed:.1f}s"
+                f" (budget {_RENDER_BUDGET_SECONDS}s) -- an inline sync network call is"
+                " blocking the render path"
+            )
+
+
 def main():
     failures = []
     check_render_path_sync_calls(failures)
     check_cold_render_budget(failures)
+    check_unreachable_host_render_budget(failures)
     check_warm_core_median(failures)
 
     if failures:

@@ -16,6 +16,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.beacon as beacon
 import statusline_lib.burnrate as burnrate
+import statusline_lib.fable_quota as fable_quota
 import statusline_lib.pace as pace
 import statusline_lib.refresh as refresh
 from statusline_lib.process_safe import run_captured
@@ -175,6 +176,22 @@ def _check_run_refresh_bias_factor_dispatch(failures):
         failures.append(f"bias-factor dispatch calls: {calls!r}")
 
 
+def _check_run_refresh_fable_quota_dispatch(failures):
+    """run_refresh routes fable-quota to fable_quota.refresh_fable_quota_cache."""
+    calls = []
+    saved_refresher = fable_quota.refresh_fable_quota_cache
+    fable_quota.refresh_fable_quota_cache = lambda arg: calls.append(arg)
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = _pin_refresh(tmp, _NOW)
+        try:
+            refresh.run_refresh("fable-quota", 0)
+        finally:
+            _restore_refresh(saved)
+            fable_quota.refresh_fable_quota_cache = saved_refresher
+    if calls != [0]:
+        failures.append(f"fable-quota dispatch calls: {calls!r}")
+
+
 def _check_spawn_timings_instrumentation(failures):
     """Every maybe_spawn_refresh call (success or failure) is timed into
     refresh.spawn_timings(), reset by reset_spawn_timings() -- the source
@@ -297,6 +314,7 @@ def main():
     _check_run_refresh_dispatch(failures)
     _check_run_refresh_spend_dispatch(failures)
     _check_run_refresh_bias_factor_dispatch(failures)
+    _check_run_refresh_fable_quota_dispatch(failures)
     _check_spawn_timings_instrumentation(failures)
     _check_child_snippet_end_to_end(failures)
     _check_child_snippet_pins_platform(failures)

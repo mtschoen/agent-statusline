@@ -177,6 +177,7 @@ _REFRESHER_MODULES = {
     "session-count": ("sessions", "refresh_session_count_cache"),
     "bias-factor": ("beacon", "refresh_bias_factor_cache"),
     "qwen-quota": ("qwen_quota", "refresh_qwen_quota_cache"),
+    "fable-quota": ("fable_quota", "refresh_fable_quota_cache"),
 }
 
 

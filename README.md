@@ -145,6 +145,15 @@ identity); fields are omitted when their data isn't available:
   reconstructed historical windows, and trailing-24h was by far the most stable
   (EWMA/slope variants flap or explode on bursty usage). The shipped default
   lives in `statusline_lib/project.py` (`DEFAULT_PARAMS`).
+- **Fable quota** - labeled `fable:`, the Anthropic Fable weekly quota pool
+  utilization and pace projection (`fable: P% ±Hh`) exposed by the fleet quota
+  dashboard (`GET http://<dashboard-host>:8001/api/quota/providers`). Sourced
+  via a stale-while-revalidate detached background refresher with a 15s TTL so
+  the render never blocks on network calls. Renders empty when the dashboard is
+  unreachable or when disabled via `STATUSLINE_FABLE_QUOTA=off` or
+  `STATUSLINE_FABLE_QUOTA_HOST=off`. Host defaults to `llamabox:8001` (or
+  schoen_fleet host registry when available) and is overridable via
+  `STATUSLINE_FABLE_QUOTA_HOST`.
 - **Burn rate** - a live `$/min` spend rate over the trailing 5 minutes,
   aggregated across **all** local sessions (cross-machine, via the same walker
   roots the pace walk uses). Funny-money units, like the cost field. It is the
@@ -710,8 +719,9 @@ python statusline_ctl.py reset target-rate        # fall back to env/default
 Friendly keys map to the env vars: `cost` (`STATUSLINE_HIDE_COST`, inverted),
 `compact` (`STATUSLINE_COMPACT`), `target-rate` (`STATUSLINE_TARGET_RATE`;
 `<$/min>`, `auto`, or `off`), `daily-budget` (`STATUSLINE_DAILY_BUDGET`),
-`verbose-pace` (`STATUSLINE_VERBOSE_PACE`), and `beacon` (`STATUSLINE_BEACON`,
-gates the beacon-ETA render). In Claude Code, the `/statusline` skill wraps this
+`verbose-pace` (`STATUSLINE_VERBOSE_PACE`), `beacon` (`STATUSLINE_BEACON`,
+gates the beacon-ETA render), `fable-quota` (`STATUSLINE_FABLE_QUOTA`), and
+`fable-quota-host` (`STATUSLINE_FABLE_QUOTA_HOST`, `<host[:port]>` or `off`). In Claude Code, the `/statusline` skill wraps this
 CLI so natural-language requests ("hide the cost", "pin the target to $0.50") map
 to the right command.
 

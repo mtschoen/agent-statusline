@@ -38,6 +38,7 @@ the short-lived Python statusline renderer.
 
 from .badge import format_context, format_model_badge
 from .base import CTX_DENOM, GREEN, RED, RESET, YELLOW, fmt, hostname
+from .fable_quota import format_fable_quota
 from .gitref import git_working_tree_cached
 from .qwen import _safe_int, _safe_str
 from .sessions import count_active_sessions, debounce_session_count
@@ -168,12 +169,14 @@ def render_kimi_statusline(payload, cwd, spinner):
         _safe_int(payload.get("maxContextTokens")),
         model_name,
     )
+    fable_summary = format_fable_quota()
 
     parts = [
         s
         for s in (
             model_summary,
             context_summary,
+            fable_summary,
             _permission_badge(payload.get("permissionMode")),
             _plan_badge(payload.get("planMode")),
             _version_badge(payload.get("version")),

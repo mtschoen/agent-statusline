@@ -7,6 +7,9 @@ Covers:
     error states, malformed shapes, non-weekly isolation, malformed numeric values
   - Safe float parsing: valid numbers, invalid strings, non-numeric types, None
   - HTTP fetcher: 200, 204, 500, network errors, timeout handling
+  - Observed push: rate_limits carried in the POST body, missing rate_limits
+    still succeeds, 404/405 falls back to GET /api/quota/providers, other
+    failures negative-cache directly without a fallback attempt
   - SWR cache: fresh, stale, missing, corrupt, failure negative-caching with backoff
   - Pace projection: on-target, surplus, deficit, zero utilization, boundary crossings
   - Format output: full with pace, compact without pace, disabled toggles
@@ -26,6 +29,7 @@ import threading
 import time
 import types
 from datetime import UTC, datetime
+from typing import ClassVar
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline
@@ -109,6 +113,21 @@ class _Fixture:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f)
+
+
+def _check_quota_ttl_floor(failures):
+    """The poll TTL must never drop back below the dashboard's own 60s cache
+    TTL: the datum is a seven-day pool that cannot move enough in under a
+    minute to justify polling faster than the server refreshes it, and each
+    poll below that floor buys nothing while still triggering a live, metered
+    Anthropic API call on the server."""
+    server_cache_ttl_seconds = 60
+    if server_cache_ttl_seconds > fable_quota._QUOTA_TTL_SECONDS:
+        failures.append(
+            "_QUOTA_TTL_SECONDS "
+            f"({fable_quota._QUOTA_TTL_SECONDS}) must be at least the "
+            f"server-side cache TTL ({server_cache_ttl_seconds}s)"
+        )
 
 
 def _check_now_unix_and_paths(failures):
@@ -416,8 +435,21 @@ def _check_format_fable_quota(failures):
 
 
 class _TestHttpHandler(http.server.BaseHTTPRequestHandler):
+    """Stands in for the dashboard. GET /api/quota/providers is the legacy
+    route; POST /api/quota/observed is the push-capable route the module now
+    tries first. By default POST mirrors GET's response_code/response_body
+    (matching the real endpoint's "identical report shape" contract), so
+    every pre-existing test that only sets response_code/response_body keeps
+    exercising a real success/failure response without change. Setting
+    observed_status_override simulates a dashboard that predates the observed
+    route (a bare 404/405, independent of the providers response), which is
+    what exercises the fallback path. Every POST body received is recorded in
+    received_observed_bodies so tests can assert rate_limits was pushed."""
+
     response_code = _HTTP_OK
     response_body = b"{}"
+    observed_status_override = None
+    received_observed_bodies: ClassVar[list] = []
 
     def do_GET(self):
         if self.path == "/api/quota/providers":
@@ -428,6 +460,26 @@ class _TestHttpHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def do_POST(self):
+        if self.path != "/api/quota/observed":
+            self.send_response(404)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        with contextlib.suppress(ValueError):
+            _TestHttpHandler.received_observed_bodies.append(
+                json.loads(raw.decode("utf-8")) if raw else {}
+            )
+        if _TestHttpHandler.observed_status_override is not None:
+            self.send_response(_TestHttpHandler.observed_status_override)
+            self.end_headers()
+            return
+        self.send_response(self.response_code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(self.response_body)
 
     def log_message(self, *args):
         pass
@@ -534,6 +586,136 @@ def _check_failure_preserves_stale_value(failures):
             server.shutdown()
 
 
+def _check_observed_push_and_fallback(failures):
+    """POST /api/quota/observed is the primary route now: the pushed
+    rate_limits must reach the request body, a missing rate_limits must still
+    succeed (no rate_limits key, no error), a dashboard that answers 404/405
+    on the observed route (predates it) must fall back to the legacy
+    GET /api/quota/providers route, and the response is parsed by the exact
+    same extraction path either way."""
+    with socketserver.TCPServer(("127.0.0.1", 0), _TestHttpHandler) as server:
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            valid = {
+                "providers": [
+                    {
+                        "provider": "anthropic-sub",
+                        "pool": "fable",
+                        "windows": [
+                            {
+                                "name": "seven_day",
+                                "headroom_fraction": 0.46,
+                                "resets_at": RESET_AT_MIDWEEK_ISO,
+                            }
+                        ],
+                    }
+                ]
+            }
+            _TestHttpHandler.response_code = _HTTP_OK
+            _TestHttpHandler.response_body = json.dumps(valid).encode("utf-8")
+            _TestHttpHandler.observed_status_override = None
+
+            sample_rate_limits = {
+                "five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
+                "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600},
+            }
+
+            # The pushed rate_limits reach the POST body untouched.
+            _TestHttpHandler.received_observed_bodies.clear()
+            with _Fixture() as fx:
+                fx.set_env(STATUSLINE_FABLE_QUOTA_HOST=f"127.0.0.1:{port}")
+                refresh_fable_quota_cache(sample_rate_limits)
+                if "54%" not in format_fable_quota():
+                    failures.append("observed push: refresh failed to populate cache")
+            if _TestHttpHandler.received_observed_bodies != [
+                {"rate_limits": sample_rate_limits}
+            ]:
+                failures.append(
+                    "observed push: rate_limits not carried in POST body, got "
+                    f"{_TestHttpHandler.received_observed_bodies!r}"
+                )
+
+            # Missing rate_limits: no key in the body, still succeeds.
+            _TestHttpHandler.received_observed_bodies.clear()
+            with _Fixture() as fx:
+                fx.set_env(STATUSLINE_FABLE_QUOTA_HOST=f"127.0.0.1:{port}")
+                refresh_fable_quota_cache(None)
+                if "54%" not in format_fable_quota():
+                    failures.append(
+                        "observed push: missing rate_limits must still succeed"
+                    )
+            if _TestHttpHandler.received_observed_bodies != [{}]:
+                failures.append(
+                    "observed push: missing rate_limits must send no "
+                    f"rate_limits key, got {_TestHttpHandler.received_observed_bodies!r}"
+                )
+
+            # 404 on the observed route falls back to the legacy GET route.
+            for status in (404, 405):
+                _TestHttpHandler.observed_status_override = status
+                _TestHttpHandler.received_observed_bodies.clear()
+                with _Fixture() as fx:
+                    fx.set_env(STATUSLINE_FABLE_QUOTA_HOST=f"127.0.0.1:{port}")
+                    refresh_fable_quota_cache(sample_rate_limits)
+                    if "54%" not in format_fable_quota():
+                        failures.append(
+                            f"observed {status}: must fall back to GET /providers"
+                        )
+                if not _TestHttpHandler.received_observed_bodies:
+                    failures.append(
+                        f"observed {status}: POST must still have been attempted"
+                    )
+            _TestHttpHandler.observed_status_override = None
+
+            # A non-404/405 observed failure must not retry GET: point the
+            # legacy route at a payload that would succeed if it were reached,
+            # confirming the failure was negative-cached directly instead.
+            _TestHttpHandler.observed_status_override = 500
+            _TestHttpHandler.received_observed_bodies.clear()
+            with _Fixture() as fx:
+                fx.set_env(STATUSLINE_FABLE_QUOTA_HOST=f"127.0.0.1:{port}")
+                refresh_fable_quota_cache(sample_rate_limits)
+                if format_fable_quota() != "":
+                    failures.append(
+                        "observed 500: must not fall back to GET /providers"
+                    )
+                cached = _fable_quota_cached(NOW)
+                if cached is None or not cached.get("failed"):
+                    failures.append("observed 500: must write failure cache")
+            _TestHttpHandler.observed_status_override = None
+        finally:
+            server.shutdown()
+
+
+def _check_observed_post_transport_failures(failures):
+    """The POST helper must treat a returned non-200 response and a transport
+    timeout as direct failures that do not request the legacy GET fallback."""
+    saved_urlopen = fable_quota.urllib.request.urlopen
+    try:
+        response = types.SimpleNamespace(status=204)
+        fable_quota.urllib.request.urlopen = lambda *_arguments, **_keyword_arguments: (
+            contextlib.nullcontext(response)
+        )
+        result = fable_quota._post_quota_observed(
+            "http://dashboard/api/quota/observed", None
+        )
+        if result != (None, False):
+            failures.append(f"observed non-200 response: got {result!r}")
+
+        def raise_timeout(*_arguments, **_keyword_arguments):
+            raise TimeoutError("dashboard request timed out")
+
+        fable_quota.urllib.request.urlopen = raise_timeout
+        result = fable_quota._post_quota_observed(
+            "http://dashboard/api/quota/observed", None
+        )
+        if result != (None, False):
+            failures.append(f"observed transport timeout: got {result!r}")
+    finally:
+        fable_quota.urllib.request.urlopen = saved_urlopen
+
+
 def _check_unreachable_endpoint_handling(failures):
     start = time.monotonic()
     if (
@@ -551,7 +733,9 @@ def _check_swr_cache_mechanics(failures):
         saved_spawn = maybe_spawn_refresh
         fable_quota.maybe_spawn_refresh = lambda kind, arg: spawned.append((kind, arg))
         try:
-            if _fable_quota_cached(NOW) is not None or spawned != [("fable-quota", 0)]:
+            if _fable_quota_cached(NOW) is not None or spawned != [
+                ("fable-quota", None)
+            ]:
                 failures.append("missing cache must spawn and return None")
             spawned.clear()
 
@@ -561,12 +745,12 @@ def _check_swr_cache_mechanics(failures):
                 failures.append("fresh cache must return entry without spawn")
             spawned.clear()
 
-            fx.write_cache(50.0, cached_at_unix=NOW - 20)
+            fx.write_cache(50.0, cached_at_unix=NOW - 305)
             stale = _fable_quota_cached(NOW)
             if (
                 stale is None
                 or stale.get("used_percentage") != 50.0
-                or spawned != [("fable-quota", 0)]
+                or spawned != [("fable-quota", None)]
             ):
                 failures.append("stale cache must return entry and spawn")
             spawned.clear()
@@ -582,7 +766,7 @@ def _check_swr_cache_mechanics(failures):
             if (
                 fail_stale is None
                 or not fail_stale.get("failed")
-                or spawned != [("fable-quota", 0)]
+                or spawned != [("fable-quota", None)]
             ):
                 failures.append("stale failure cache must spawn")
         finally:
@@ -639,6 +823,7 @@ def _check_refresher_dispatch(failures):
 
 def main():
     failures = []
+    _check_quota_ttl_floor(failures)
     _check_now_unix_and_paths(failures)
     _check_safe_float(failures)
     _check_dashboard_host_resolution(failures)
@@ -651,6 +836,8 @@ def main():
     _check_format_fable_quota(failures)
     _check_fetch_and_refresh_with_http_server(failures)
     _check_failure_preserves_stale_value(failures)
+    _check_observed_push_and_fallback(failures)
+    _check_observed_post_transport_failures(failures)
     _check_unreachable_endpoint_handling(failures)
     _check_swr_cache_mechanics(failures)
     _check_adapter_integrations(failures)

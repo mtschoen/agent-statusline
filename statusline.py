@@ -369,7 +369,9 @@ def _render_line2(flags, inputs):
         if inputs.rate_limits
         else format_agy_quota(inputs.agy_quota, show_pace=flags["quota_pace"])
     )
-    fable_summary = format_fable_quota(show_pace=flags["quota_pace"])
+    fable_summary = format_fable_quota(
+        inputs.rate_limits, show_pace=flags["quota_pace"]
+    )
     burnrate_summary = (
         format_burn_rate(inputs.rate_limits, show_target=flags["burn_target"])
         if flags["burn_rate"] and money

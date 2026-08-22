@@ -147,9 +147,21 @@ identity); fields are omitted when their data isn't available:
   lives in `statusline_lib/project.py` (`DEFAULT_PARAMS`).
 - **Fable quota** - labeled `fable:`, the Anthropic Fable weekly quota pool
   utilization and pace projection (`fable: P% ±Hh`) exposed by the fleet quota
-  dashboard (`GET http://<dashboard-host>:8001/api/quota/providers`). Sourced
-  via a stale-while-revalidate detached background refresher with a 15s TTL so
-  the render never blocks on network calls. Renders empty when the dashboard is
+  dashboard. Claude Code's stdin payload already carries the `default` pool's
+  own windows for free as its `rate_limits` object; the detached refresher
+  pushes that alongside the request (`POST
+  http://<dashboard-host>:8001/api/quota/observed`), which folds it into the
+  dashboard's cached `default` pool and returns the current report in the
+  same round trip -- one request both feeds and reads. The `fable` pool is
+  scoped separately and never present in `rate_limits`, so the request still
+  has to happen to read it. A dashboard that predates the observed route
+  (404/405) falls back to the legacy `GET /api/quota/providers` route. Sourced
+  via a stale-while-revalidate detached background refresher with a 300s (5
+  minute) TTL so the render never blocks on network calls. The pool is a
+  seven-day window that moves roughly 1% per 100 minutes and the endpoint
+  triggers a live, metered Anthropic API call per fetch, so the TTL is set
+  well above the dashboard's own 60s cache instead of chasing freshness the
+  datum cannot show. Renders empty when the dashboard is
   unreachable or when disabled via `STATUSLINE_FABLE_QUOTA=off` or
   `STATUSLINE_FABLE_QUOTA_HOST=off`. Host defaults to `llamabox:8001` (or
   schoen_fleet host registry when available) and is overridable via

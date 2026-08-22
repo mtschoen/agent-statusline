@@ -2,21 +2,34 @@
 
 Data model:
 Schoen-lab's inference_manager dashboard exposes provider quota pools via
-`GET http://<dashboard-host>:8001/api/quota/providers` (backed by
+`POST http://<dashboard-host>:8001/api/quota/observed` (backed by
 `core/quota_status.py`'s `quota_report()`). AnthropicSubscriptionReader emits
 a separate `fable` scoped pool alongside the existing `default` pool.
 
-This module consumes that endpoint, extracts the `anthropic-sub` (or `anthropic`)
-provider's `fable` pool (utilization percent and seven-day reset timestamp),
+Claude Code hands the statusline the `default` pool's own windows for free on
+every render, as the `rate_limits` object on stdin. The observed endpoint
+folds that pushed data into the dashboard's cached `default` pool and returns
+the same report shape `GET /api/quota/providers` returns, so one request both
+feeds and reads: the render never has to pay a second metered upstream call
+for data it already has for free. The `fable` pool is scoped separately and
+is never present in `rate_limits`, so the request still has to happen to read
+it. A dashboard that predates the observed endpoint answers 404/405, in which
+case this module falls back to the older `GET /api/quota/providers` route.
+Missing or malformed `rate_limits` is not an error on either path -- the POST
+carries no `rate_limits` key and the response is unaffected.
+
+This module extracts the `anthropic-sub` (or `anthropic`) provider's `fable`
+pool (utilization percent and seven-day reset timestamp) from that response,
 and renders a compact field e.g. `fable: P% ±Hh` using pace.py's `_project_pace`
 and base.py's `color_high_bad`.
 
 To obey the render-budget invariant (no inline HTTP calls in the render path),
 the render path reads a stale-while-revalidate TTL disk cache and hands
 recomputation to a detached "fable-quota" refresh child
-(statusline_lib/refresh.py, maybe_spawn_refresh). Failures are negative-cached
-to avoid respawning detached children on every render when the endpoint is
-unreachable.
+(statusline_lib/refresh.py, maybe_spawn_refresh), passing the session's
+`rate_limits` through as the refresh argument so the detached child can push
+it. Failures are negative-cached to avoid respawning detached children on
+every render when the endpoint is unreachable.
 
 Host resolution:
 Checks `pref("STATUSLINE_FABLE_QUOTA_HOST")` first (prefs JSON > env var),
@@ -41,11 +54,19 @@ from .refresh import maybe_spawn_refresh
 from .ttlcache import read_raw_cache, write_ttl_cache
 
 _WEEK_SECONDS = 7 * 86400
-_QUOTA_TTL_SECONDS = 15
+# The displayed datum is a seven-day (weekly) quota pool that moves roughly
+# 1% per 100 minutes, so a short poll interval buys no visible freshness.
+# The upstream dashboard endpoint triggers a live, metered Anthropic API call
+# per fetch, so polling faster than its own 60s cache TTL only burns quota
+# for a number that will not have moved. 300s (5 minutes) keeps the field
+# comfortably fresh relative to the weekly window while cutting needless
+# round-the-clock upstream load.
+_QUOTA_TTL_SECONDS = 300
 _QUOTA_FAILURE_TTL_SECONDS = 60
 _DEFAULT_DASHBOARD_HOST = "llamabox:8001"
 _DEFAULT_SCHEME = "http"
-_ENDPOINT_PATH = "/api/quota/providers"
+_ENDPOINT_PATH_PROVIDERS = "/api/quota/providers"
+_ENDPOINT_PATH_OBSERVED = "/api/quota/observed"
 _PREF_HOST = "STATUSLINE_FABLE_QUOTA_HOST"
 _PREF_ENABLED = "STATUSLINE_FABLE_QUOTA"
 _DISABLED_VALUES = ("0", "off", "false", "no")
@@ -108,8 +129,10 @@ def _dashboard_host():
     return _DEFAULT_DASHBOARD_HOST
 
 
-def _dashboard_url(host=None):
-    """Build the full URL for GET /api/quota/providers from <host[:port]> or URL."""
+def _dashboard_url(host=None, path=_ENDPOINT_PATH_PROVIDERS):
+    """Build the full URL for `path` from <host[:port]> or URL. Defaults to
+    the legacy GET /api/quota/providers path; callers pass
+    _ENDPOINT_PATH_OBSERVED for the push-capable POST route."""
     h = (_dashboard_host() if host is None else host) or ""
     h = h.strip()
     if not h:
@@ -121,12 +144,12 @@ def _dashboard_url(host=None):
         netloc = parsed.netloc or parsed.path.split("/")[0] or _DEFAULT_DASHBOARD_HOST
         if ":" not in netloc:
             netloc = f"{netloc}:8001"
-        return f"{scheme}://{netloc}{_ENDPOINT_PATH}"
+        return f"{scheme}://{netloc}{path}"
     # Bare host or host:port - strip any leading/trailing paths if passed
     host_port = h.split("/")[0].strip() or _DEFAULT_DASHBOARD_HOST
     if ":" not in host_port:
         host_port = f"{host_port}:8001"
-    return f"{scheme}://{host_port}{_ENDPOINT_PATH}"
+    return f"{scheme}://{host_port}{path}"
 
 
 def _parse_timestamp(ts_val):
@@ -244,6 +267,51 @@ def _fetch_quota_payload(url, timeout=2.0):
         return None
 
 
+def _post_quota_observed(url, rate_limits, timeout=2.0):
+    """Perform HTTP POST to /api/quota/observed, pushing the session's
+    rate_limits (the Claude Code stdin object, or falsy when unavailable)
+    alongside reading the current report back in the same response.
+
+    Returns (payload, need_providers_fallback):
+      - success: (parsed dict, False)
+      - endpoint missing on an older dashboard (HTTP 404/405): (None, True),
+        signaling the caller to retry against the legacy
+        GET /api/quota/providers route.
+      - any other failure (timeout, connection refused, malformed body):
+        (None, False) -- retrying against the legacy route would not help
+        when the dashboard itself is unreachable, so the caller negative-caches
+        directly instead of paying a second failed round trip."""
+    body = json.dumps({"rate_limits": rate_limits} if rate_limits else {}).encode(
+        "utf-8"
+    )
+    try:
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "agent-statusline/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None, False
+            response_body = resp.read().decode("utf-8")
+            return json.loads(response_body), False
+    except urllib.error.HTTPError as error:
+        return None, error.code in (404, 405)
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        ValueError,
+        Exception,
+    ):
+        return None, False
+
+
 def _write_failure_cache():
     """Negative-cache a failed refresh without erasing the last good value.
 
@@ -258,19 +326,27 @@ def _write_failure_cache():
     write_ttl_cache(_quota_cache_path(), {**existing, "failed": True})
 
 
-def refresh_fable_quota_cache(_argument):
+def refresh_fable_quota_cache(rate_limits):
     """Detached-child recompute for refresh.py's 'fable-quota' kind.
-    Fetches the quota dashboard endpoint and updates the local TTL cache.
-    Runs out of process, so network latency never blocks a render.
-    Unreachable endpoint or malformed responses are negative-cached under
-    _QUOTA_FAILURE_TTL_SECONDS so off-fleet machines do not re-spawn a child on
-    every render; the last good value is preserved so the field keeps serving
-    stale data through transient dashboard failures."""
+    POSTs the session's rate_limits (falsy when unavailable) to the quota
+    dashboard's observed endpoint and updates the local TTL cache from the
+    response. Falls back to the legacy GET route when the observed endpoint
+    is missing (an older, not-yet-upgraded dashboard). Runs out of process,
+    so network latency never blocks a render. Unreachable endpoint or
+    malformed responses are negative-cached under _QUOTA_FAILURE_TTL_SECONDS
+    so off-fleet machines do not re-spawn a child on every render; the last
+    good value is preserved so the field keeps serving stale data through
+    transient dashboard failures."""
     host = _dashboard_host()
     if host.strip().lower() in _DISABLED_VALUES:
         return
-    url = _dashboard_url(host)
-    payload = _fetch_quota_payload(url, timeout=2.0)
+    observed_url = _dashboard_url(host, path=_ENDPOINT_PATH_OBSERVED)
+    payload, need_providers_fallback = _post_quota_observed(
+        observed_url, rate_limits, timeout=2.0
+    )
+    if payload is None and need_providers_fallback:
+        providers_url = _dashboard_url(host, path=_ENDPOINT_PATH_PROVIDERS)
+        payload = _fetch_quota_payload(providers_url, timeout=2.0)
     if payload is None:
         _write_failure_cache()
         return
@@ -288,29 +364,36 @@ def refresh_fable_quota_cache(_argument):
     )
 
 
-def _fable_quota_cached(now_unix):
+def _fable_quota_cached(now_unix, rate_limits=None):
     """SWR cache read: serve the entry stale-or-fresh and hand recomputation
-    to a detached child when it is missing or past the TTL. Returns None on a true miss."""
+    to a detached child when it is missing or past the TTL. `rate_limits` is
+    threaded through only to carry it to the detached refresh child (the read
+    itself never touches it). Returns None on a true miss."""
     entry = read_raw_cache(_quota_cache_path())
     if entry is not None:
         ttl = _QUOTA_FAILURE_TTL_SECONDS if entry.get("failed") else _QUOTA_TTL_SECONDS
         if now_unix - entry.get("cached_at_unix", 0) >= ttl:
-            maybe_spawn_refresh("fable-quota", 0)
+            maybe_spawn_refresh("fable-quota", rate_limits)
         return entry
-    maybe_spawn_refresh("fable-quota", 0)
+    maybe_spawn_refresh("fable-quota", rate_limits)
     return None
 
 
-def format_fable_quota(show_pace=True):
+def format_fable_quota(rate_limits=None, show_pace=True):
     """Line-2 field `fable: P% ±Hh` from the Anthropic Fable weekly quota pool.
-    Returns '' when disabled, unreachable, or cold cache."""
+    `rate_limits` is the Claude Code stdin payload's `rate_limits` object (the
+    `default` pool's windows), pushed through to the dashboard so a fetch it
+    would make anyway for the `fable` pool also feeds the `default` pool at no
+    extra cost. None on harnesses that carry no such field (Kimi, Qwen, and
+    before the first API response). Returns '' when disabled, unreachable, or
+    cold cache."""
     if not pref_bool(_PREF_ENABLED, default=True):
         return ""
     raw_host = pref(_PREF_HOST)
     if raw_host is not None and raw_host.strip().lower() in _DISABLED_VALUES:
         return ""
     now_unix = _now_unix()
-    entry = _fable_quota_cached(now_unix)
+    entry = _fable_quota_cached(now_unix, rate_limits)
     if entry is None:
         return ""
     util = entry.get("used_percentage")

@@ -24,3 +24,6 @@ node_modules/
 **/.aislop/*
 !**/.aislop/config.yml
 !**/.aislop/fork-commit
+
+# Progress-beacon eval scratch / workspace
+/skills/progress-beacon/workspace/

@@ -5,7 +5,7 @@ https://github.com/mtschoen/agent-statusline
 A multi-line [Claude Code](https://claude.com/claude-code) statusline showing
 context, session-wide cache hit %, 5-hour and weekly rate-limit usage with
 pace projection, total session cost, a live `$/min` burn rate, and (when a
-[progress-beacon](https://github.com/mtschoen/skills-progress-beacon)
+[progress-beacon](skills/progress-beacon/SKILL.md)
 is active) a live ETA for the current turn - all colored by configurable
 thresholds. A Pi extension port lives under `pi-extension/` and reuses the
 same visual language against Pi's native session usage data.

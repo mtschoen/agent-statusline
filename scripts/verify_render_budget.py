@@ -37,6 +37,8 @@ from _render_fixture_helpers import _REPO, build_fixture_home
 
 from statusline_lib.rendertimer import render_timer_path
 
+_TEXT_ENCODING = "utf-8"
+
 # The render path: everything importable from a statusline render. install.py
 # and friends are excluded -- installers may run long.
 _RENDER_PATH_FILES = [
@@ -99,7 +101,7 @@ def _numeric_value(node):
 
 def _subprocess_timeout_violations(path):
     """Yield (lineno, message) for subprocess calls without a bounded timeout."""
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding=_TEXT_ENCODING) as f:
         source = f.read()
     tree = ast.parse(source, filename=path)
     for node in ast.walk(tree):
@@ -215,7 +217,7 @@ def check_cold_render_budget(failures):
                 input=payload,
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
+                encoding=_TEXT_ENCODING,
                 env=env,
                 timeout=_RENDER_BUDGET_SECONDS * 3,
             )
@@ -265,7 +267,7 @@ def _measure_warm_core_median(code, env):
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding=_TEXT_ENCODING,
             env=env,
             timeout=_RENDER_BUDGET_SECONDS * 6,
         )
@@ -313,7 +315,7 @@ def check_warm_core_median(failures):
         state_dir = os.path.join(home, ".claude", "state")
         os.makedirs(state_dir, exist_ok=True)
         seed_path = render_timer_path(session_id, state_dir=state_dir)
-        with open(seed_path, "w", encoding="utf-8") as f:
+        with open(seed_path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump({"last_ms": 5.0, "peak_ms": 5.0}, f)
 
         payload = json.dumps(
@@ -388,7 +390,7 @@ def check_unreachable_host_render_budget(failures):
                 input=payload,
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
+                encoding=_TEXT_ENCODING,
                 env=env,
                 timeout=_RENDER_BUDGET_SECONDS * 3,
             )

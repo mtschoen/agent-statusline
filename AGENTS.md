@@ -46,9 +46,9 @@ support:
   two, both `hallucinated-import` on `import statusline` (see
   `.aislop/config.yml` and issue #23); `aislop scan .` prints the suppression
   count, so a third one showing up is visible.
-- Headroom is thin: the gate scores 91 against a floor of 90, because six files
-  are over the 400-line limit. Check `aislop ci .` before pushing anything that
-  adds a file or grows one past 400 lines.
+- Headroom is exhausted: the pinned fork gate scores 90 against a floor of 90,
+  because seven files are over the 400-line limit. Check `aislop ci .` before
+  pushing anything that adds a file or grows one past 400 lines.
 
 To refresh the pinned binary after new commits land on the fork branch:
 `pnpm add -g --allow-build=aislop "github:mtschoen/aislop#schoen/main"`
@@ -58,8 +58,8 @@ To refresh the pinned binary after new commits land on the fork branch:
 against the lockfile, while the local engine may not surface the same
 findings. A fresh advisory on any transitive dep of `@schoen/aislop` then
 drops the CI score below `failBelow` with no local warning (observed: 91 ->
-70). Before pushing, run BOTH `node_modules/.bin/aislop ci .` (the
-lockfile-pinned binary that CI uses, not the global install) and `npm audit`;
+70). Before pushing, run BOTH `aislop ci .` (the installed fork CLI used for
+local checks; CI builds the commit in `.aislop/fork-commit`) and `npm audit`;
 fix new findings via the `overrides` playbook in `package.json` (issue #23):
 bump each entry to the lowest published version outside the advisory range,
 then `npm install` to refresh the lockfile.

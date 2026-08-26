@@ -47,6 +47,9 @@ _PLUS_8 = timezone(timedelta(hours=8))
 NOW = int(datetime(2026, 8, 6, 12, 0, 0, tzinfo=_PLUS_8).timestamp())
 WEEK_START = int(datetime(2026, 8, 3, 0, 0, 0, tzinfo=_PLUS_8).timestamp())
 FIVE_H = 5 * 3600
+_FIVE_HOUR_LIMIT = 12_000
+_TEST_API_KEY = "sk-sp-x"
+_TEXT_ENCODING = "utf-8"
 
 # The unpatched seam, captured before any fixture rebinds the module
 # attribute - exercising it covers the real time.time() body.
@@ -103,7 +106,7 @@ class _Fixture:
             os.environ[key] = value
 
     def write_prefs(self, data):
-        with open(self.prefs_path, "w", encoding="utf-8") as f:
+        with open(self.prefs_path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump(data, f)
 
     def usage_path(self, month):
@@ -114,7 +117,7 @@ class _Fixture:
     def write_usage(self, month, timestamps):
         path = self.usage_path(month)
         lines = [json.dumps({"timestamp": _iso(ts)}) for ts in timestamps]
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             f.write("\n".join(lines) + "\n")
         return path
 
@@ -125,7 +128,7 @@ class _Fixture:
         os.makedirs(os.path.dirname(self.cache_path()), exist_ok=True)
         stamped = dict(payload)
         stamped.setdefault("cached_at_unix", NOW - 1)
-        with open(self.cache_path(), "w", encoding="utf-8") as f:
+        with open(self.cache_path(), "w", encoding=_TEXT_ENCODING) as f:
             json.dump(stamped, f)
 
 
@@ -213,7 +216,7 @@ def _check_count_window_calls(failures):
         _write_records(fx, in_both + five_only + outside)
         # Malformed lines appended to the newest month file - must be skipped.
         newest_month = qwen_quota._local_month(NOW)
-        with open(fx.usage_path(newest_month), "a", encoding="utf-8") as f:
+        with open(fx.usage_path(newest_month), "a", encoding=_TEXT_ENCODING) as f:
             f.write("\n{broken\n" + "[1, 2]\n" + '{"no_ts": 1}\n')
 
         calls_since, calls_5h = _count_window_calls(NOW, since_anchor)
@@ -267,42 +270,52 @@ def _check_five_hour_used_exhausted_hold(failures):
     # Exhausted anchor (anchor_5h >= limit): held flat at the anchored value
     # across the 5h after anchoring, regardless of local deltas.
     entry = {"calls_since_anchor": 300, "calls_5h": 42}
-    exhausted = (12000, 20000, NOW)
+    exhausted = (_FIVE_HOUR_LIMIT, 20000, NOW)
     # At anchor (elapsed=0): held at 12000, delta NOT added.
-    got = _five_hour_used(exhausted, exhausted, NOW, five_hour_limit=12000)
-    if abs(got - 12000) > 1e-6:
+    got = _five_hour_used(exhausted, exhausted, NOW, five_hour_limit=_FIVE_HOUR_LIMIT)
+    if abs(got - _FIVE_HOUR_LIMIT) > 1e-6:
         failures.append(f"exhausted at-anchor five_hour_used = {got}, expected 12000")
     # 43 minutes in (the observed bug scenario): still 12000, not decayed.
-    got = _five_hour_used(entry, exhausted, NOW - 43 * 60, five_hour_limit=12000)
-    if abs(got - 12000) > 1e-6:
+    got = _five_hour_used(
+        entry,
+        exhausted,
+        NOW - 43 * 60,
+        five_hour_limit=_FIVE_HOUR_LIMIT,
+    )
+    if abs(got - _FIVE_HOUR_LIMIT) > 1e-6:
         failures.append(f"exhausted 43min-in five_hour_used = {got}, expected 12000")
     # 4 hours in: still held flat.
-    got = _five_hour_used(entry, exhausted, NOW - 4 * 3600, five_hour_limit=12000)
-    if abs(got - 12000) > 1e-6:
+    got = _five_hour_used(
+        entry,
+        exhausted,
+        NOW - 4 * 3600,
+        five_hour_limit=_FIVE_HOUR_LIMIT,
+    )
+    if abs(got - _FIVE_HOUR_LIMIT) > 1e-6:
         failures.append(f"exhausted 4h-in five_hour_used = {got}, expected 12000")
     # Anchor above the limit (over-exhausted): also held flat.
     over = (15000, 20000, NOW)
-    got = _five_hour_used(entry, over, NOW, five_hour_limit=12000)
+    got = _five_hour_used(entry, over, NOW, five_hour_limit=_FIVE_HOUR_LIMIT)
     if abs(got - 15000) > 1e-6:
         failures.append(f"over-exhausted five_hour_used = {got}, expected 15000")
     # Predicate and clearance helpers agree with the held behavior.
-    if not _anchor_exhausted(12000, 12000):
+    if not _anchor_exhausted(_FIVE_HOUR_LIMIT, _FIVE_HOUR_LIMIT):
         failures.append("anchor == limit must be exhausted")
-    if not _anchor_exhausted(15000, 12000):
+    if not _anchor_exhausted(15000, _FIVE_HOUR_LIMIT):
         failures.append("anchor > limit must be exhausted")
-    if _anchor_exhausted(11999, 12000):
+    if _anchor_exhausted(11999, _FIVE_HOUR_LIMIT):
         failures.append("anchor < limit must NOT be exhausted")
-    if _anchor_exhausted(12000, None):
+    if _anchor_exhausted(_FIVE_HOUR_LIMIT, None):
         failures.append("hidden limit must NOT be exhausted")
-    clearance = _hold_clearance_unix(exhausted, 12000, NOW - 43 * 60)
+    clearance = _hold_clearance_unix(exhausted, _FIVE_HOUR_LIMIT, NOW - 43 * 60)
     # Clearance is anchored_at + 5h, and exhausted's anchored_at is NOW.
     expected_clearance = NOW + FIVE_H
     if clearance is None or abs(clearance - expected_clearance) > 1e-6:
         failures.append(f"hold clearance = {clearance}, expected {expected_clearance}")
-    post_window_anchor = (12000, 20000, NOW - 6 * 3600)
-    if _hold_clearance_unix(post_window_anchor, 12000, NOW) is not None:
+    post_window_anchor = (_FIVE_HOUR_LIMIT, 20000, NOW - 6 * 3600)
+    if _hold_clearance_unix(post_window_anchor, _FIVE_HOUR_LIMIT, NOW) is not None:
         failures.append("post-window clearance must be None")
-    if _hold_clearance_unix((6000, 20000, NOW), 12000, NOW) is not None:
+    if _hold_clearance_unix((6000, 20000, NOW), _FIVE_HOUR_LIMIT, NOW) is not None:
         failures.append("non-exhausted anchor clearance must be None")
 
 
@@ -310,8 +323,8 @@ def _check_five_hour_used_exhausted_post_window(failures):
     # Exhausted anchor with elapsed >= 5h: falls through to pure local
     # calls_5h, no hold.
     entry = {"calls_since_anchor": 300, "calls_5h": 42}
-    exhausted = (12000, 20000, NOW - 6 * 3600)
-    got = _five_hour_used(entry, exhausted, NOW, five_hour_limit=12000)
+    exhausted = (_FIVE_HOUR_LIMIT, 20000, NOW - 6 * 3600)
+    got = _five_hour_used(entry, exhausted, NOW, five_hour_limit=_FIVE_HOUR_LIMIT)
     if abs(got - 42) > 1e-6:
         failures.append(f"exhausted post-window five_hour_used = {got}, expected 42")
 
@@ -322,7 +335,7 @@ def _check_format_exhausted_render(failures):
     anchored_at = NOW - 43 * 60
     anchor_key = f"12000,20000@{anchored_at}"
     with _Fixture() as fx, _SpawnRecorder() as spawner:
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key})
         fx.write_cache(
             {
@@ -360,7 +373,7 @@ def _check_format_exhausted_render(failures):
     # Post-window exhausted anchor: normal pace suffix, no ~<clock>.
     anchor_key_post = f"12000,20000@{NOW - 6 * 3600}"
     with _Fixture() as fx:
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key_post})
         fx.write_cache(
             {
@@ -454,7 +467,7 @@ def _check_refresh_writes_cache(failures):
         fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key})
         _write_records(fx, [NOW - 600, NOW - 4000])
         refresh_qwen_quota_cache(0.0)
-        with open(fx.cache_path(), encoding="utf-8") as f:
+        with open(fx.cache_path(), encoding=_TEXT_ENCODING) as f:
             cache = json.load(f)
         if cache.get("anchor_key") != anchor_key:
             failures.append(f"refresh anchor_key wrong: {cache!r}")
@@ -464,20 +477,20 @@ def _check_refresh_writes_cache(failures):
 
 def _check_limit_arms(failures):
     with _Fixture() as fx:
-        if _limit("STATUSLINE_QWEN_QUOTA_5H", 12000) != 12000:
+        if _limit("STATUSLINE_QWEN_QUOTA_5H", _FIVE_HOUR_LIMIT) != _FIVE_HOUR_LIMIT:
             failures.append("an unset pref must fall back to the default")
         fx.set_env(STATUSLINE_QWEN_QUOTA_5H="42")
-        if _limit("STATUSLINE_QWEN_QUOTA_5H", 12000) != 42:
+        if _limit("STATUSLINE_QWEN_QUOTA_5H", _FIVE_HOUR_LIMIT) != 42:
             failures.append("a numeric pref must parse to its int")
         for off in ("0", "off"):
             fx.set_env(STATUSLINE_QWEN_QUOTA_5H=off)
-            if _limit("STATUSLINE_QWEN_QUOTA_5H", 12000) is not None:
+            if _limit("STATUSLINE_QWEN_QUOTA_5H", _FIVE_HOUR_LIMIT) is not None:
                 failures.append(f"{off!r} must hide the horizon (None)")
         fx.set_env(STATUSLINE_QWEN_QUOTA_5H="garbage")
-        if _limit("STATUSLINE_QWEN_QUOTA_5H", 12000) != 12000:
+        if _limit("STATUSLINE_QWEN_QUOTA_5H", _FIVE_HOUR_LIMIT) != _FIVE_HOUR_LIMIT:
             failures.append("an unparseable pref must fall back to the default")
         fx.set_env(STATUSLINE_QWEN_QUOTA_5H="-3")
-        if _limit("STATUSLINE_QWEN_QUOTA_5H", 12000) is not None:
+        if _limit("STATUSLINE_QWEN_QUOTA_5H", _FIVE_HOUR_LIMIT) is not None:
             failures.append("a negative pref must hide the horizon (None)")
 
 
@@ -485,7 +498,7 @@ def _check_plan_gate(failures):
     with _Fixture() as fx:
         if _plan_gate():
             failures.append("no plan key + no explicit limits must stay closed")
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         if not _plan_gate():
             failures.append("a token-plan key must open the gate")
         os.environ.pop("BAILIAN_TOKEN_PLAN_API_KEY")
@@ -517,13 +530,13 @@ def _check_format_scenarios(failures):
 
     # No anchor.
     with _Fixture() as fx:
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         if format_qwen_quota() != "":
             failures.append("no anchor must render no quota field")
 
     # Both horizons switched off.
     with _Fixture() as fx:
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         fx.write_prefs(
             {
                 "STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key,
@@ -536,7 +549,7 @@ def _check_format_scenarios(failures):
 
     # Cold cache: honest absence plus a spawn to warm it.
     with _Fixture() as fx, _SpawnRecorder() as spawner:
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key})
         if format_qwen_quota() != "":
             failures.append("a cold cache must render no quota field")
@@ -547,7 +560,7 @@ def _check_format_scenarios(failures):
 def _check_format_warm_render(failures):
     anchor_key = f"6000,20000@{NOW}"
     with _Fixture() as fx, _SpawnRecorder() as spawner:
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key})
         fx.write_cache(
             {
@@ -574,7 +587,7 @@ def _check_format_degraded_cache(failures):
     anchor_key = f"6000,20000@{NOW}"
     # Torn cache: counts missing -> degrade to the bare anchor values.
     with _Fixture() as fx:
-        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-x")
+        fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
         fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key})
         fx.write_cache(
             {
@@ -593,7 +606,7 @@ def _check_format_degraded_cache(failures):
 def _check_pace_and_horizon_guards(failures):
     # The None/zero guard branches are defensive; exercise them directly so
     # the coverage gate (no exclusions) holds on both OSes.
-    if qwen_quota._rolling_pace_part(0, 12000) != "":
+    if qwen_quota._rolling_pace_part(0, _FIVE_HOUR_LIMIT) != "":
         failures.append("_rolling_pace_part at zero usage must be ''")
     if qwen_quota._rolling_pace_part(100, None) != "":
         failures.append("_rolling_pace_part with hidden limit must be ''")
@@ -601,7 +614,7 @@ def _check_pace_and_horizon_guards(failures):
         failures.append("_weekly_pace_part with no usage must be ''")
     if qwen_quota._weekly_pace_part(100, None, NOW) != "":
         failures.append("_weekly_pace_part with hidden limit must be ''")
-    if qwen_quota._horizon("5h", None, 12000, "") != "":
+    if qwen_quota._horizon("5h", None, _FIVE_HOUR_LIMIT, "") != "":
         failures.append("_horizon with no usage must be ''")
     if qwen_quota._horizon("5h", 100, None, "") != "":
         failures.append("_horizon with hidden limit must be ''")

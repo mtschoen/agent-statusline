@@ -19,6 +19,7 @@ import statusline_lib.burnrate as burnrate
 
 _WIN_START = 1_748_000_000.0
 _NOW = _WIN_START + 7200.0
+_TEXT_ENCODING = "utf-8"
 
 
 class _SpawnRecorder:
@@ -46,7 +47,7 @@ def _spend_cache_entry(win_start, computed_at, total):
 def _pin_spend(tmp, now, spawn, cache_payload=None):
     cache_path = os.path.join(tmp, "spend-cache-v2.json")
     if cache_payload is not None:
-        with open(cache_path, "w", encoding="utf-8") as f:
+        with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump(cache_payload, f)
     saved = (
         burnrate._SPEND_CACHE_PATH,
@@ -150,7 +151,9 @@ def _check_spend_miss_returns_zero_and_spawns(failures):
         with tempfile.TemporaryDirectory() as tmp:
             saved = _pin_spend(tmp, _NOW, spawn)
             if raw is not None:
-                with open(burnrate._SPEND_CACHE_PATH, "w", encoding="utf-8") as f:
+                with open(
+                    burnrate._SPEND_CACHE_PATH, "w", encoding=_TEXT_ENCODING
+                ) as f:
                     f.write(raw)
             try:
                 result = burnrate._window_spend_cached(_WIN_START)
@@ -172,7 +175,7 @@ def _check_spend_refresh_writes_cache(failures):
             str(2_000_000 + i): {"computed_at_unix": float(i), "total": 0.0}
             for i in range(burnrate._SPEND_CACHE_MAX_ENTRIES + 3)
         }
-        with open(cache_path, "w", encoding="utf-8") as f:
+        with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump({"sums": stale_sums}, f)
         saved = (
             burnrate._SPEND_CACHE_PATH,
@@ -189,7 +192,7 @@ def _check_spend_refresh_writes_cache(failures):
             burnrate.maybe_spawn_refresh = spawn
             served = burnrate._window_spend_cached(_WIN_START)
             burnrate.maybe_spawn_refresh = saved_spawn
-            with open(cache_path, encoding="utf-8") as f:
+            with open(cache_path, encoding=_TEXT_ENCODING) as f:
                 sums = json.load(f)["sums"]
         finally:
             (

@@ -1,12 +1,12 @@
 # aislop (AI-slop gate) config.
-# The gate runs the @schoen/aislop 0.12.3 fork (lockfile-pinned; `npm run
-# lint:aislop`). 0.12.3 supports per-rule severity overrides
-# (rules: {"<rule>": error|warning|off}) plus exclude/include globs, engine
-# toggles, and ci.failBelow -- but overrides are repo-wide, not per-file, so
-# house policy is restructure-first (see AGENTS.md); none are set here.
+# CI builds the fork commit pinned in .aislop/fork-commit (`aislop ci .`).
+# The fork supports per-rule severity overrides (rules: {"<rule>":
+# error|warning|off}) plus exclude/include globs, engine toggles, and
+# ci.failBelow -- but overrides are repo-wide, not per-file, so house
+# policy is restructure-first (see AGENTS.md); none are set here.
 #
 # The two exceptions in the tree are inline `aislop-ignore-next-line` directives
-# (0.12.3's own per-line suppression, narrower than a repo-wide rules: entry) on
+# (the fork's own per-line suppression, narrower than a repo-wide rules: entry) on
 # `import statusline` in kimi_statusline.py and qwen_statusline.py. The rule
 # resolves local *packages* (directories with __init__.py) but not root-level
 # top-level modules, so it reads a real sibling file as a missing pip package.
@@ -14,12 +14,13 @@
 # site carries its rationale; see issue #23.
 #
 # failBelow is 90, `aislop ci .` runs in CI and exits non-zero below it.
-# STANDING MARGIN WARNING (2026-08-03, issue #23): the repo scores 93, not
-# the 100/100 this comment used to claim. Five files exceed the 400-line
-# code-quality limit (pi-extension/renderer.ts, statusline.py,
-# statusline_lib/pace.py, scripts/verify_badge.py, and
-# scripts/verify_beacon_walker.py) and those warnings cost seven points. There are
-# three score points above the floor. Split those files (or make a deliberate
+# STANDING MARGIN WARNING: the repo scores 90 against a floor of 90 (headroom
+# is exhausted). Seven files exceed the 400-line code-quality limit
+# (pi-extension/renderer.ts, scripts/verify_badge.py,
+# scripts/verify_beacon_walker.py, scripts/verify_fable_quota.py,
+# scripts/verify_qwen_quota.py, statusline.py, and statusline_lib/pace.py)
+# and those warnings cost ten points. Split those files (or make a deliberate
 # call on the limit) before the next feature pushes the gate red again.
 ci:
   failBelow: 90
+

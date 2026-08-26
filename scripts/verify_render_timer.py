@@ -34,6 +34,7 @@ from statusline_lib.rendertimer import (
 
 SID = "test-session-abc123"
 OTHER = "other-session-def456"
+TEXT_ENCODING = "utf-8"
 
 
 def check_env_gate(failures):
@@ -143,12 +144,12 @@ def check_corrupt_state_file(failures):
     with tempfile.TemporaryDirectory() as tmp:
         path = render_timer_path(SID, state_dir=tmp)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=TEXT_ENCODING) as f:
             f.write("{ not valid json")
         if read_previous(SID, state_dir=tmp) is not None:
             failures.append("corrupt state file should read as None")
 
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=TEXT_ENCODING) as f:
             json.dump({"last_ms": "not-a-number", "peak_ms": 1.0}, f)
         if read_previous(SID, state_dir=tmp) is not None:
             failures.append("non-numeric fields should read as None")
@@ -160,7 +161,7 @@ def check_record_render_oserror(failures):
     # must swallow (a failed write must never break the render).
     with tempfile.TemporaryDirectory() as tmp:
         blocker = os.path.join(tmp, "not_a_dir")
-        with open(blocker, "w", encoding="utf-8") as f:
+        with open(blocker, "w", encoding=TEXT_ENCODING) as f:
             f.write("blocker")
         bad_state_dir = os.path.join(blocker, "subdir")
         record_render(1.0, SID, state_dir=bad_state_dir)  # must not raise
@@ -197,7 +198,7 @@ def _run_statusline(tmp_home, payload):
         input=json.dumps(payload),
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding=TEXT_ENCODING,
         env=env,
         timeout=30,
         check=False,
@@ -247,7 +248,7 @@ def check_statusline_timing_disabled_end_to_end(failures):
                 input=json.dumps(payload),
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
+                encoding=TEXT_ENCODING,
                 env=env,
                 timeout=30,
                 check=False,
@@ -272,7 +273,7 @@ def _run_qwen(tmp_home, payload):
         input=json.dumps(payload),
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding=TEXT_ENCODING,
         env=env,
         timeout=30,
         check=False,

@@ -27,6 +27,7 @@ import statusline
 import statusline_lib.gitref as gitref_mod
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_TEXT_ENCODING = "utf-8"
 
 
 def _strip(text):
@@ -65,7 +66,7 @@ def _check_cache_miss_serves_blank_and_spawns(failures, tmpdir):
 def _check_cache_hit_skips_spawn(failures, tmpdir):
     cache_path = gitref_mod._git_ref_cache_path("/cached/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(
             {
                 "cached_at_unix": time.time(),
@@ -97,7 +98,7 @@ def _check_cache_expiry_serves_stale_and_spawns(failures, tmpdir):
     cache_path = gitref_mod._git_ref_cache_path("/expired/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     stale_ts = time.time() - gitref_mod._GIT_REF_CACHE_TTL_SECONDS - 1
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(
             {"cached_at_unix": stale_ts, "branch": "old", "short_hash": "old123"}, f
         )
@@ -124,7 +125,7 @@ def _check_cache_expiry_serves_stale_and_spawns(failures, tmpdir):
 def _check_corrupt_cache_degrades(failures, tmpdir):
     cache_path = gitref_mod._git_ref_cache_path("/corrupt/repo", state_dir=tmpdir)
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         f.write("not-json")
 
     spawn = _SpawnRecorder()
@@ -247,7 +248,7 @@ def _check_refresh_writes_cache(failures, tmpdir):
             f"refresh_git_ref_cache must call git four times; got {len(calls)} calls"
         )
     cache_path = gitref_mod._git_ref_cache_path("/refreshed/repo", state_dir=tmpdir)
-    with open(cache_path, encoding="utf-8") as f:
+    with open(cache_path, encoding=_TEXT_ENCODING) as f:
         persisted = json.load(f)
     expected = {"added": 3, "deleted": 1, "ahead": 58, "behind": 2}
     for key, want in expected.items():

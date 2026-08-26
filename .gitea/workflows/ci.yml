@@ -18,12 +18,53 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+
+      # Pin-only PRs (a bump of .aislop/fork-commit, opened by the aislop fork's
+      # sync-consumers workflow) don't touch anything this job builds or tests.
+      # Detect that case and skip the rest of the job's steps (still SUCCESS,
+      # not skipped-as-failure, so branch protection's required check is
+      # satisfied) instead of paying for a full build+test cycle. Never use
+      # workflow-level paths/paths-ignore for this: on Gitea that leaves the
+      # required check permanently pending for any PR that doesn't touch the
+      # matched paths (gitea issue 36895).
+      - name: Determine changed files (pin-only PR early exit)
+        id: changed-files
+        shell: bash
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
+        run: |
+          PIN_ONLY=false
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -n "$GITHUB_BASE_REF" ]; then
+            if git fetch --depth=1 origin "$GITHUB_BASE_REF" 2>/dev/null; then
+              CHANGED=$(git diff --name-only FETCH_HEAD HEAD 2>/dev/null || true)
+              echo "Changed files vs $GITHUB_BASE_REF:"
+              echo "$CHANGED"
+              if [ "$CHANGED" = ".aislop/fork-commit" ]; then
+                PIN_ONLY=true
+              fi
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ -n "$EVENT_BEFORE" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if git fetch --depth=1 origin "$EVENT_BEFORE" 2>/dev/null; then
+              CHANGED=$(git diff --name-only "$EVENT_BEFORE" "$EVENT_AFTER" 2>/dev/null || true)
+              echo "Changed files ($EVENT_BEFORE..$EVENT_AFTER):"
+              echo "$CHANGED"
+              if [ "$CHANGED" = ".aislop/fork-commit" ]; then
+                PIN_ONLY=true
+              fi
+            fi
+          fi
+          echo "pin_only=$PIN_ONLY" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v5
+        if: steps.changed-files.outputs.pin_only != 'true'
         with:
           python-version: '3.11'
       - name: Check syntax
+        if: steps.changed-files.outputs.pin_only != 'true'
         run: python -m py_compile statusline.py subagent_statusline.py install.py wrap_nudge.py statusline_lib/*.py
       - name: Lint (ruff)
+        if: steps.changed-files.outputs.pin_only != 'true'
         # The validation gate. Config lives in pyproject.toml; 0 findings is
         # the bar. This step is the hard gate that blocks merge on regression.
         run: |
@@ -31,12 +72,14 @@ jobs:
           ruff check .
           ruff format --check .
       - name: Type check (pyright, non-blocking)
+        if: steps.changed-files.outputs.pin_only != 'true'
         # Informational for now. Drop the `|| true` to hard-fail once the
         # codebase is clean against pyright.
         run: |
           pip install pyright
           pyright || true
       - name: Lint shell (shellcheck, non-blocking)
+        if: steps.changed-files.outputs.pin_only != 'true'
         # Informational until the .sh scripts are triaged to 0 findings, then
         # drop the `|| true` to make it a hard gate like ruff.
         run: shellcheck $(git ls-files '*.sh') || true
@@ -47,15 +90,56 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+
+      # Pin-only PRs (a bump of .aislop/fork-commit, opened by the aislop fork's
+      # sync-consumers workflow) don't touch anything this job builds or tests.
+      # Detect that case and skip the rest of the job's steps (still SUCCESS,
+      # not skipped-as-failure, so branch protection's required check is
+      # satisfied) instead of paying for a full build+test cycle. Never use
+      # workflow-level paths/paths-ignore for this: on Gitea that leaves the
+      # required check permanently pending for any PR that doesn't touch the
+      # matched paths (gitea issue 36895).
+      - name: Determine changed files (pin-only PR early exit)
+        id: changed-files
+        shell: bash
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
+        run: |
+          PIN_ONLY=false
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -n "$GITHUB_BASE_REF" ]; then
+            if git fetch --depth=1 origin "$GITHUB_BASE_REF" 2>/dev/null; then
+              CHANGED=$(git diff --name-only FETCH_HEAD HEAD 2>/dev/null || true)
+              echo "Changed files vs $GITHUB_BASE_REF:"
+              echo "$CHANGED"
+              if [ "$CHANGED" = ".aislop/fork-commit" ]; then
+                PIN_ONLY=true
+              fi
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ -n "$EVENT_BEFORE" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if git fetch --depth=1 origin "$EVENT_BEFORE" 2>/dev/null; then
+              CHANGED=$(git diff --name-only "$EVENT_BEFORE" "$EVENT_AFTER" 2>/dev/null || true)
+              echo "Changed files ($EVENT_BEFORE..$EVENT_AFTER):"
+              echo "$CHANGED"
+              if [ "$CHANGED" = ".aislop/fork-commit" ]; then
+                PIN_ONLY=true
+              fi
+            fi
+          fi
+          echo "pin_only=$PIN_ONLY" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v5
+        if: steps.changed-files.outputs.pin_only != 'true'
         with:
           python-version: '3.11'
       - name: Install optional runtime deps
+        if: steps.changed-files.outputs.pin_only != 'true'
         # psutil is import-guarded in statusline_lib, but installing it lets the
         # suite exercise the real process-enumeration path instead of the mtime
         # fallback. coverage powers the 100% line-coverage gate below.
         run: pip install psutil coverage
       - name: Run verification scripts (coverage-gated)
+        if: steps.changed-files.outputs.pin_only != 'true'
         # Run every scripts/verify_*.py under coverage; collect failures so one
         # bad script doesn't mask the others. statusline_lib is held at 100%
         # line coverage (reached 2026-06-10; see TEST-REPORT.md) -- the report
@@ -79,7 +163,7 @@ jobs:
         # event including failure (if: always()) so the status always reflects
         # the latest run; the helper posts state=error if coverage.json is
         # missing. Only the Linux job posts to avoid double-posting the same SHA.
-        if: always()
+        if: always() && steps.changed-files.outputs.pin_only != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 ci/post-coverage-status.py
@@ -96,7 +180,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pin-only PRs (a bump of .aislop/fork-commit, opened by the aislop fork's
+      # sync-consumers workflow) don't touch anything this job builds or tests.
+      # Detect that case and skip the rest of the job's steps (still SUCCESS,
+      # not skipped-as-failure, so branch protection's required check is
+      # satisfied) instead of paying for a full build+test cycle. Never use
+      # workflow-level paths/paths-ignore for this: on Gitea that leaves the
+      # required check permanently pending for any PR that doesn't touch the
+      # matched paths (gitea issue 36895).
+      - name: Determine changed files (pin-only PR early exit)
+        id: changed-files
+        shell: pwsh
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
+        run: |
+          $pinOnly = $false
+          try {
+            if ($env:GITHUB_EVENT_NAME -eq "pull_request" -and $env:GITHUB_BASE_REF) {
+              git fetch --depth=1 origin $env:GITHUB_BASE_REF 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                $changed = @(git diff --name-only FETCH_HEAD HEAD 2>$null)
+                Write-Host "Changed files vs $($env:GITHUB_BASE_REF):"
+                $changed | ForEach-Object { Write-Host $_ }
+                if ($changed.Count -eq 1 -and $changed[0] -eq ".aislop/fork-commit") {
+                  $pinOnly = $true
+                }
+              }
+            } elseif ($env:GITHUB_EVENT_NAME -eq "push" -and $env:EVENT_BEFORE -and $env:EVENT_BEFORE -ne "0000000000000000000000000000000000000000") {
+              git fetch --depth=1 origin $env:EVENT_BEFORE 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                $changed = @(git diff --name-only $env:EVENT_BEFORE $env:EVENT_AFTER 2>$null)
+                Write-Host "Changed files ($($env:EVENT_BEFORE)..$($env:EVENT_AFTER)):"
+                $changed | ForEach-Object { Write-Host $_ }
+                if ($changed.Count -eq 1 -and $changed[0] -eq ".aislop/fork-commit") {
+                  $pinOnly = $true
+                }
+              }
+            }
+          } catch {
+            Write-Host "Changed-file detection failed, running the job in full: $_"
+            $pinOnly = $false
+          }
+          "pin_only=$($pinOnly.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Install Python 3.11 (python-build-standalone)
+        if: steps.changed-files.outputs.pin_only != 'true'
         # setup-python@v5 and the python.org MSI both fail under the SYSTEM-account
         # WinSW runner (WOW64 path redirection / SYSTEM ACLs break registration);
         # the portable tarball just unpacks with the runner's tar.exe. See local-ci
@@ -119,6 +248,7 @@ jobs:
           "$pyDir\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Install optional runtime deps
+        if: steps.changed-files.outputs.pin_only != 'true'
         # psutil exercises the real process-enumeration path in the active-session
         # check instead of the mtime fallback (matches the Linux test job).
         # coverage powers the 100% line-coverage gate below.
@@ -130,6 +260,7 @@ jobs:
         run: python -m pip install psutil coverage
 
       - name: Check syntax (py_compile)
+        if: steps.changed-files.outputs.pin_only != 'true'
         shell: pwsh
         run: |
           $files = Get-ChildItem statusline_lib/*.py | ForEach-Object { $_.FullName }
@@ -137,6 +268,7 @@ jobs:
           python -m py_compile @files
 
       - name: Run verification scripts (coverage-gated)
+        if: steps.changed-files.outputs.pin_only != 'true'
         # The same scripts/verify_*.py suite the Linux job runs, on Windows,
         # under the same 100% statusline_lib line-coverage gate (platform
         # branches must be covered on BOTH OSes -- tests patch os.name to force

@@ -31,17 +31,20 @@ from statusline_lib.process_safe import (
 )
 
 _PY = sys.executable
+_PROCESS_TIMEOUT_SECONDS = 5
 
 
 def _check_success_captures_stdout(failures):
-    result = run_captured([_PY, "-c", "print('hello')"], timeout=5)
+    result = run_captured(
+        [_PY, "-c", "print('hello')"], timeout=_PROCESS_TIMEOUT_SECONDS
+    )
     if result.returncode != 0 or result.stdout.strip() != "hello":
         failures.append(f"success: expected rc=0 stdout='hello', got {result!r}")
 
 
 def _check_nonzero_returncode_and_stderr(failures):
     code = "import sys; sys.stderr.write('boom'); sys.exit(2)"
-    result = run_captured([_PY, "-c", code], timeout=5)
+    result = run_captured([_PY, "-c", code], timeout=_PROCESS_TIMEOUT_SECONDS)
     if result.returncode != 2 or "boom" not in result.stderr:
         failures.append(f"nonzero exit: expected rc=2 stderr~'boom', got {result!r}")
 
@@ -49,7 +52,7 @@ def _check_nonzero_returncode_and_stderr(failures):
 def _check_check_true_raises_on_failure(failures):
     code = "import sys; sys.exit(5)"
     try:
-        run_captured([_PY, "-c", code], timeout=5, check=True)
+        run_captured([_PY, "-c", code], timeout=_PROCESS_TIMEOUT_SECONDS, check=True)
         failures.append("check=True with nonzero exit must raise CalledProcessError")
     except subprocess.CalledProcessError as exc:
         if exc.returncode != 5:
@@ -59,7 +62,9 @@ def _check_check_true_raises_on_failure(failures):
 
 
 def _check_check_true_no_raise_on_success(failures):
-    result = run_captured([_PY, "-c", "pass"], timeout=5, check=True)
+    result = run_captured(
+        [_PY, "-c", "pass"], timeout=_PROCESS_TIMEOUT_SECONDS, check=True
+    )
     if result.returncode != 0:
         failures.append(f"check=True with rc=0 must not raise; got {result!r}")
 
@@ -67,7 +72,10 @@ def _check_check_true_no_raise_on_success(failures):
 def _check_launch_failure_propagates_oserror(failures):
     raised = False
     try:
-        run_captured(["definitely-not-a-real-binary-xyz123"], timeout=5)
+        run_captured(
+            ["definitely-not-a-real-binary-xyz123"],
+            timeout=_PROCESS_TIMEOUT_SECONDS,
+        )
     except OSError:
         raised = True
     if not raised:
@@ -81,7 +89,7 @@ def _check_env_override_reaches_child(failures):
     )
     env = dict(os.environ)
     env["PROCESS_SAFE_TEST_VAR"] = "hello"
-    result = run_captured([_PY, "-c", code], timeout=5, env=env)
+    result = run_captured([_PY, "-c", code], timeout=_PROCESS_TIMEOUT_SECONDS, env=env)
     if result.returncode != 0:
         failures.append("env= override did not reach the child process")
 
@@ -90,7 +98,9 @@ def _check_cwd_is_honored(failures):
     with tempfile.TemporaryDirectory() as tmp:
         real_tmp = os.path.realpath(tmp)
         code = "import os, sys; sys.stdout.write(os.path.realpath(os.getcwd()))"
-        result = run_captured([_PY, "-c", code], timeout=5, cwd=tmp)
+        result = run_captured(
+            [_PY, "-c", code], timeout=_PROCESS_TIMEOUT_SECONDS, cwd=tmp
+        )
         if not os.path.samefile(result.stdout.strip(), real_tmp):
             failures.append(
                 f"cwd= not honored: expected {real_tmp!r}, got {result.stdout.strip()!r}"
@@ -133,7 +143,7 @@ def _check_reader_exception_is_swallowed(failures):
         raising_communicate, lambda: None
     )
     try:
-        result = run_captured(["ignored"], timeout=5)
+        result = run_captured(["ignored"], timeout=_PROCESS_TIMEOUT_SECONDS)
     finally:
         process_safe_module.subprocess.Popen = original_popen
 
@@ -291,7 +301,7 @@ def _check_run_captured_windows_hidden(failures):
     )
     process_safe_module.os.name = "nt"
     try:
-        run_captured(["ignored"], timeout=5)
+        run_captured(["ignored"], timeout=_PROCESS_TIMEOUT_SECONDS)
     finally:
         process_safe_module.subprocess.Popen = original_popen
         process_safe_module.os.name = original_os_name

@@ -20,6 +20,7 @@ from statusline_lib.project import (
 )
 
 _HOUR = 3600.0
+_WEEKLY_PERIOD_SECONDS = 7 * 24 * _HOUR
 
 
 def _params(**overrides):
@@ -45,7 +46,7 @@ def _check_estimators_pick_recent(failures):
 def _check_flat_burn_is_on_pace(failures):
     """Flat burn that has used `util`% over exactly half the window projects to
     ~100% at reset: cumulative delta ~= 0 (after full warmup)."""
-    period = 7 * 24 * _HOUR
+    period = _WEEKLY_PERIOD_SECONDS
     elapsed = period / 2
     hourly = [1.0] * int(elapsed // _HOUR)
     cum, _ = project_delta(
@@ -59,7 +60,7 @@ def _check_flat_burn_is_on_pace(failures):
 
 def _check_warmup_shrinks_to_zero(failures):
     """At elapsed << warmup, both deltas are pulled toward 0 regardless of raw rate."""
-    period = 7 * 24 * _HOUR
+    period = _WEEKLY_PERIOD_SECONDS
     elapsed = 2 * _HOUR
     hourly = [50.0, 50.0]  # very hot start
     p = _params(warmup_seconds=48 * _HOUR)
@@ -79,7 +80,7 @@ def _check_warmup_shrinks_to_zero(failures):
 
 def _check_degenerate_window(failures):
     """No $ in window => current-rate delta is None (arrow omitted), cumulative still computed."""
-    period = 7 * 24 * _HOUR
+    period = _WEEKLY_PERIOD_SECONDS
     elapsed = period / 2
     cum, cur = project_delta(
         [], 50.0, elapsed, period - elapsed, period, _params(warmup_seconds=1)
@@ -92,7 +93,7 @@ def _check_degenerate_window(failures):
 
 def _check_bad_util(failures):
     """util <= 0 or non-positive elapsed/remaining => (None, None)."""
-    period = 7 * 24 * _HOUR
+    period = _WEEKLY_PERIOD_SECONDS
     for util, el, rem in (
         (0.0, period / 2, period / 2),
         (50.0, 0.0, period),
@@ -118,7 +119,7 @@ def _check_partial_params(failures):
         failures.append(
             f"current_rate with partial params should still compute, got {rate}"
         )
-    period = 7 * 24 * _HOUR
+    period = _WEEKLY_PERIOD_SECONDS
     try:
         cum, _cur = project_delta(
             [1.0] * 84, 50.0, period / 2, period / 2, period, {"estimator": "ewma"}

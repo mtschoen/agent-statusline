@@ -39,6 +39,8 @@ from statusline_lib.claude_family_install import (
 )
 from statusline_lib.settings_io import atomic_write_settings, load_settings
 
+_TEXT_ENCODING = "utf-8"
+
 
 @contextlib.contextmanager
 def _tmp_dir():
@@ -59,7 +61,7 @@ def _check_load_missing_returns_empty(failures):
 def _check_load_empty_file_returns_empty(failures):
     with _tmp_dir() as d:
         path = os.path.join(d, "settings.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             f.write("   \n")
         got = load_settings(path)
         if got != {}:
@@ -69,7 +71,7 @@ def _check_load_empty_file_returns_empty(failures):
 def _check_load_valid_object(failures):
     with _tmp_dir() as d:
         path = os.path.join(d, "settings.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump({"foo": "bar"}, f)
         got = load_settings(path)
         if got != {"foo": "bar"}:
@@ -79,7 +81,7 @@ def _check_load_valid_object(failures):
 def _check_load_non_object_raises_value_error(failures):
     with _tmp_dir() as d:
         path = os.path.join(d, "settings.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump([1, 2, 3], f)
         try:
             load_settings(path)
@@ -92,7 +94,7 @@ def _check_load_non_object_raises_value_error(failures):
 def _check_load_malformed_json_raises_decode_error(failures):
     with _tmp_dir() as d:
         path = os.path.join(d, "settings.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             f.write("{not valid json")
         try:
             load_settings(path)
@@ -109,7 +111,7 @@ def _check_atomic_write_creates_parent_and_round_trips(failures):
             failures.append("atomic_write_settings should create missing parent dirs")
         if os.path.exists(path + ".tmp"):
             failures.append("atomic_write_settings should not leave a .tmp file behind")
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding=_TEXT_ENCODING) as f:
             if json.load(f) != {"a": 1}:
                 failures.append("written settings did not round-trip")
 
@@ -126,7 +128,7 @@ _NUDGE_MARKERS = (_NUDGE_SENTINEL,)
 def _check_missing_required_scripts(failures):
     with _tmp_dir() as d:
         present = os.path.join(d, "present.py")
-        with open(present, "w", encoding="utf-8") as f:
+        with open(present, "w", encoding=_TEXT_ENCODING) as f:
             f.write("# stub\n")
         missing_one = os.path.join(d, "missing.py")
 
@@ -246,7 +248,7 @@ def _check_install_claude_smoke(failures):
                 "install.py claude smoke should write ~/.claude/settings.json"
             )
             return
-        with open(settings_path, encoding="utf-8") as f:
+        with open(settings_path, encoding=_TEXT_ENCODING) as f:
             settings = json.load(f)
         if "statusLine" not in settings or "subagentStatusLine" not in settings:
             failures.append(f"claude settings missing statusline keys: {settings!r}")
@@ -272,7 +274,7 @@ def _check_install_antigravity_smoke(failures):
                 "~/.gemini/antigravity-cli/settings.json"
             )
             return
-        with open(settings_path, encoding="utf-8") as f:
+        with open(settings_path, encoding=_TEXT_ENCODING) as f:
             settings = json.load(f)
         status_line = settings.get("statusLine") or {}
         command = status_line.get("command", "")

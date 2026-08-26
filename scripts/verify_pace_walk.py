@@ -17,6 +17,7 @@ import statusline_lib.pace as pace
 
 _WIN_START = 1_748_000_000.0
 _PERIOD = 7 * 86400
+_TEXT_ENCODING = "utf-8"
 
 
 def _make_rl(util, resets_at):
@@ -118,7 +119,7 @@ def _check_weekly_needle_verbose(failures):
         import tempfile as _tf
 
         with _tf.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
+            mode="w", suffix=".json", delete=False, encoding=_TEXT_ENCODING
         ) as pf:
             json.dump({"STATUSLINE_VERBOSE_PACE": "1"}, pf)
             prefs_file = pf.name
@@ -220,7 +221,7 @@ def _check_discover_pace_groups_skips_non_matches(failures):
         stray_sub_file = os.path.join(sub_dir, "not-an-agent.jsonl")
         keeper = os.path.join(sub_dir, "agent-x.jsonl")
         for path in (stray_root_file, stray_slug_file, stray_sub_file, keeper):
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding=_TEXT_ENCODING) as f:
                 f.write("")
             os.utime(path, fresh)
 
@@ -245,24 +246,24 @@ def _check_discover_pace_groups_subagent(failures):
         slug_dir = os.path.join(root, "slug1")
         os.makedirs(slug_dir)
         parent_path = os.path.join(slug_dir, "sess1.jsonl")
-        with open(parent_path, "w", encoding="utf-8") as f:
+        with open(parent_path, "w", encoding=_TEXT_ENCODING) as f:
             f.write("")
         os.utime(parent_path, fresh)
 
         sub_dir = os.path.join(root, "slug1", "sess1", "subagents")
         os.makedirs(sub_dir)
         agent_path = os.path.join(sub_dir, "agent-x.jsonl")
-        with open(agent_path, "w", encoding="utf-8") as f:
+        with open(agent_path, "w", encoding=_TEXT_ENCODING) as f:
             f.write("")
         os.utime(agent_path, fresh)
 
         # Too-old siblings in BOTH glob shapes: must be mtime-filtered out.
         stale_parent = os.path.join(slug_dir, "old.jsonl")
-        with open(stale_parent, "w", encoding="utf-8") as f:
+        with open(stale_parent, "w", encoding=_TEXT_ENCODING) as f:
             f.write("")
         os.utime(stale_parent, stale)
         stale_agent = os.path.join(sub_dir, "agent-old.jsonl")
-        with open(stale_agent, "w", encoding="utf-8") as f:
+        with open(stale_agent, "w", encoding=_TEXT_ENCODING) as f:
             f.write("")
         os.utime(stale_agent, stale)
 

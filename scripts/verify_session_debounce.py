@@ -21,6 +21,8 @@ from statusline_lib import _SESSION_DEBOUNCE_DWELL_SECONDS, debounce_session_cou
 
 DWELL = _SESSION_DEBOUNCE_DWELL_SECONDS
 CWD = os.path.normcase(r"C:\Users\mtsch\liminal")
+START_TIME = 1000.0
+TEXT_ENCODING = "utf-8"
 
 
 def fresh_state_path(tmp):
@@ -28,7 +30,7 @@ def fresh_state_path(tmp):
 
 
 def write_state(path, obj):
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding=TEXT_ENCODING) as f:
         json.dump(obj, f)
 
 
@@ -37,26 +39,32 @@ def check(failures):
         sp = fresh_state_path(tmp)
 
         # Case 1: count below the warn threshold passes straight through.
-        if debounce_session_count(0, CWD, now=1000.0, state_path=sp) != 0:
+        if debounce_session_count(0, CWD, now=START_TIME, state_path=sp) != 0:
             failures.append("raw 0 should pass through as 0")
-        if debounce_session_count(1, CWD, now=1000.0, state_path=sp) != 1:
+        if debounce_session_count(1, CWD, now=START_TIME, state_path=sp) != 1:
             failures.append("raw 1 should pass through as 1")
 
         # Case 2: first time the count is elevated -> suppressed (reported as 1)
         # so a momentary handoff never paints the badge.
-        if debounce_session_count(2, CWD, now=1000.0, state_path=sp) != 1:
+        if debounce_session_count(2, CWD, now=START_TIME, state_path=sp) != 1:
             failures.append("first elevated render should be suppressed (1)")
 
         # Case 3: still inside the dwell window -> still suppressed.
-        if debounce_session_count(2, CWD, now=1000.0 + DWELL - 1, state_path=sp) != 1:
+        if (
+            debounce_session_count(2, CWD, now=START_TIME + DWELL - 1, state_path=sp)
+            != 1
+        ):
             failures.append("elevated within dwell should stay suppressed (1)")
 
         # Case 4: once the elevated count has persisted >= dwell, show the truth.
-        if debounce_session_count(2, CWD, now=1000.0 + DWELL, state_path=sp) != 2:
+        if debounce_session_count(2, CWD, now=START_TIME + DWELL, state_path=sp) != 2:
             failures.append("elevated past dwell should report real count (2)")
 
         # Case 5: a higher real count surfaces too, once dwelled.
-        if debounce_session_count(3, CWD, now=1000.0 + DWELL + 5, state_path=sp) != 3:
+        if (
+            debounce_session_count(3, CWD, now=START_TIME + DWELL + 5, state_path=sp)
+            != 3
+        ):
             failures.append("elevated past dwell should report real count (3)")
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -84,7 +92,7 @@ def check(failures):
     with tempfile.TemporaryDirectory() as tmp:
         sp = fresh_state_path(tmp)
         # Case 8: a corrupt state file must not crash and must behave as fresh.
-        with open(sp, "w", encoding="utf-8") as f:
+        with open(sp, "w", encoding=TEXT_ENCODING) as f:
             f.write("{ this is not json")
         if debounce_session_count(2, CWD, now=4000.0, state_path=sp) != 1:
             failures.append("corrupt state file should behave as fresh (suppress)")
@@ -103,7 +111,7 @@ def check_save_debounce_state_oserror(failures):
 
     with tempfile.TemporaryDirectory() as tmp:
         blocker = os.path.join(tmp, "not_a_dir")
-        with open(blocker, "w", encoding="utf-8") as f:
+        with open(blocker, "w", encoding=TEXT_ENCODING) as f:
             f.write("blocker")
         bad_path = os.path.join(blocker, "debounce.json")
         # Must not raise; an unwritable cache is non-fatal.
@@ -119,7 +127,7 @@ def check_load_debounce_state_non_dict(failures):
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "debounce.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=TEXT_ENCODING) as f:
             f.write("[1, 2, 3]")
         result = _load_debounce_state(path)
         if result != {}:

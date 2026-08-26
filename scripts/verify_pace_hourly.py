@@ -22,6 +22,9 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.pace as pace
 
+_TEXT_ENCODING = "utf-8"
+_WINDOW_START_TIMESTAMP = 1_700_000_000.0
+
 
 def _line(ts_unix, message_id, output_tokens):
     return json.dumps(
@@ -40,7 +43,7 @@ def _line(ts_unix, message_id, output_tokens):
 
 
 def _check_hourly_binning(failures):
-    win_start = 1_700_000_000.0
+    win_start = _WINDOW_START_TIMESTAMP
     now = win_start + 3 * 3600 + 600  # 3h10m of window elapsed
     # 1M opus output tokens = $25.00 per turn.
     turns = [
@@ -53,7 +56,7 @@ def _check_hourly_binning(failures):
         slug_dir = os.path.join(root, "slug")
         os.makedirs(slug_dir)
         path = os.path.join(slug_dir, "sess.jsonl")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             for ts, mid, tok in turns:
                 f.write(_line(ts, mid, tok) + "\n")
             # A non-assistant line the file walk must skip (the continue branch)
@@ -81,7 +84,7 @@ def _check_hourly_binning(failures):
 
 def _check_parse_pace_line_edge_cases(failures):
     """Cover the skip/return-None branches of _parse_pace_line."""
-    win_start = 1_700_000_000.0
+    win_start = _WINDOW_START_TIMESTAMP
     seen = set()
 
     # Blank line -> None (line 46)
@@ -155,7 +158,7 @@ def _check_parse_pace_line_truncated_id_not_poisoned(failures):
     """A truncated line (same id, no/bad timestamp) must not mark the id as
     seen -- otherwise the later complete line with that id is wrongly dropped
     as a duplicate, silently undercounting spend."""
-    win_start = 1_700_000_000.0
+    win_start = _WINDOW_START_TIMESTAMP
     seen = set()
 
     truncated = json.dumps({"message": {"role": "assistant", "id": "trunc1"}})
@@ -184,7 +187,10 @@ def _check_parse_pace_line_truncated_id_not_poisoned(failures):
 def _check_pace_hourly_for_file_oserror(failures):
     """Cover the OSError return in _pace_hourly_for_file (lines 117-118)."""
     result = pace._pace_hourly_for_file(
-        "/nonexistent/path/that/cannot/exist.jsonl", set(), 1_700_000_000.0, 4
+        "/nonexistent/path/that/cannot/exist.jsonl",
+        set(),
+        _WINDOW_START_TIMESTAMP,
+        4,
     )
     if result != [0.0, 0.0, 0.0, 0.0]:
         failures.append(
@@ -197,7 +203,7 @@ def _check_walk_pace_hourly_empty_roots(failures):
     real_roots = pace._walker_root_list
     pace._walker_root_list = list
     try:
-        result = pace._walk_pace_hourly(1_700_000_000.0)
+        result = pace._walk_pace_hourly(_WINDOW_START_TIMESTAMP)
     finally:
         pace._walker_root_list = real_roots
     if result != []:
@@ -206,7 +212,7 @@ def _check_walk_pace_hourly_empty_roots(failures):
 
 def _check_walk_pace_hourly_empty_groups(failures):
     """Cover the empty-groups zero-buckets return (line 183)."""
-    win_start = 1_700_000_000.0
+    win_start = _WINDOW_START_TIMESTAMP
     now = win_start + 3600
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -230,7 +236,7 @@ def _check_walk_pace_hourly_empty_groups(failures):
 
 def _check_walk_pace_hourly_parallel(failures):
     """Cover the parallel branch (line 186) by placing >2 session groups."""
-    win_start = 1_700_000_000.0
+    win_start = _WINDOW_START_TIMESTAMP
     now = win_start + 3600 + 600
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -256,7 +262,7 @@ def _check_walk_pace_hourly_parallel(failures):
                     },
                 }
             )
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding=_TEXT_ENCODING) as f:
                 f.write(turn + "\n")
 
         real_roots = pace._walker_root_list
@@ -276,7 +282,7 @@ def _check_walk_pace_hourly_parallel(failures):
 
 def _check_walk_hourly_parallel_oserror_fallback(failures):
     """Cover the OSError/RuntimeError fallback to inline in _walk_hourly_parallel (lines 164-165)."""
-    win_start = 1_700_000_000.0
+    win_start = _WINDOW_START_TIMESTAMP
     n_buckets = 2
     # Build a small groups dict with one real entry so inline fallback has something to sum
     good_ts = (
@@ -301,7 +307,7 @@ def _check_walk_hourly_parallel_oserror_fallback(failures):
                 },
             }
         )
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             f.write(turn + "\n")
 
         groups = pace._discover_pace_groups([root], win_start)
@@ -330,7 +336,7 @@ def _check_walk_hourly_parallel_oserror_fallback(failures):
 def _check_walk_hourly_parallel_worker_failure(failures):
     """Cover the per-future except -> continue in _walk_hourly_parallel: a group
     whose worker raises is skipped (zeroes out) while good groups still count."""
-    win_start = 1_700_000_000.0
+    win_start = _WINDOW_START_TIMESTAMP
     n_buckets = 2
     good_ts = (
         datetime.fromtimestamp(win_start + 60, tz=UTC)
@@ -354,7 +360,7 @@ def _check_walk_hourly_parallel_worker_failure(failures):
                 },
             }
         )
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             f.write(turn + "\n")
 
         groups = pace._discover_pace_groups([root], win_start)

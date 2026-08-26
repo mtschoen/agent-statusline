@@ -3,14 +3,12 @@ name: aislop
 # `aislop ci` scores the whole repo (0-100) and exits non-zero when the score
 # drops below ci.failBelow (90) in .aislop/config.yml - gating the PR/push.
 #
-# Unlike schoen-lab and git-wizard, which clone + build the aislop CLI from a
-# pinned fork commit, this repo vendors the fork build as a lockfile-pinned
-# devDependency (@schoen/aislop, served from the self-hosted Gitea npm
-# registry - see .npmrc) and installs it via `npm ci --ignore-scripts`. That
-# stays the install method here (it predates this workflow, matching the old
-# in-Lint-job step and the per-edit hook) - bump the devDependency version in
-# package.json/package-lock.json deliberately, do not switch this leg to
-# `npx` or a from-source clone.
+# We clone + build the mtschoen/aislop fork at the commit pinned in
+# .aislop/fork-commit and run the built CLI. Gitea is the canonical source - the
+# pin is bumped by pushes that land there first - and github.com/mtschoen/aislop
+# is a mirror that can lag behind, so a freshly bumped sha may not exist on
+# GitHub yet. The pin is bumped by the aislop fork's sync-consumers workflow via
+# PR; a manual bump = edit .aislop/fork-commit directly.
 on:
   pull_request:
   push:
@@ -23,23 +21,49 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Read aislop fork pin
+        # Pinned by commit, not a published version - the registry publish
+        # route is retired. The pin is bumped by the aislop fork's
+        # sync-consumers workflow via PR; a manual bump = edit
+        # .aislop/fork-commit directly. .aislop/fork-commit is modified by
+        # external bump PRs by design, so validate it is exactly one 40-char
+        # lowercase hex sha before it reaches GITHUB_ENV - an unvalidated
+        # write would let a crafted file with embedded newlines inject
+        # arbitrary env vars into later steps.
+        run: |
+          commit=$(tr -d '[:space:]' < .aislop/fork-commit)
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: .aislop/fork-commit is not a single 40-char lowercase sha" >&2
+            exit 1
+          fi
+          echo "AISLOP_FORK_COMMIT=$commit" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Install aislop (lockfile-pinned, no install scripts)
-        # package-lock.json carries the integrity hashes and the Gitea
-        # registry URL; npm ci verifies them. --ignore-scripts skips aislop's
-        # postinstall (bundled-ruff download) - aislop resolves ruff from
-        # PATH instead, same as when this step lived in the Lint job.
-        run: npm ci --ignore-scripts
+          # 22, not 20: building the fork via its "prepare": "tsdown" script
+          # requires Node ^22.18 || >=24.11 at build time (tsdown >= 0.22 calls
+          # Promise.withResolvers, added in Node 22). On Node 20 the build fails
+          # with "Promise.withResolvers is not a function". The built CLI still
+          # targets node18, so this is aislop's build floor, not its runtime floor.
+          node-version: 22
+      - name: Build aislop (pinned fork commit)
+        # Cloned outside the workspace so aislop does not scan the fork's own source.
+        # From Gitea (canonical, always current), not the github.com mirror (can lag
+        # behind by many commits, so a freshly bumped pin can be absent there).
+        # The fork is a pnpm workspace (packageManager pnpm@10.28.0 + pnpm-lock.yaml);
+        # npm chokes on it on some npm versions, so install via pnpm through npx -y
+        # (hermetic - no corepack or preinstalled pnpm needed).
+        run: |
+          git clone https://gitea.fleet.sticktoitive.net/schoen/aislop.git "$RUNNER_TEMP/aislop"
+          git -C "$RUNNER_TEMP/aislop" checkout "$AISLOP_FORK_COMMIT"
+          (cd "$RUNNER_TEMP/aislop" && npx -y pnpm@10.28.0 install --frozen-lockfile)
       - name: aislop quality gate
         # Sanity-fail if the scan didn't actually walk the repo (avoid a
         # silent pass on an empty/broken run): require a healthy file count
         # alongside the score gate, same guard shape as schoen-lab's
-        # aislop.yml. This repo scans ~114 files today.
+        # aislop.yml. This repo scans ~122 files today.
         run: |
           REPORT="$RUNNER_TEMP/aislop-report.json"
-          node_modules/.bin/aislop ci . --json > "$REPORT" || GATE_FAILED=1
+          node "$RUNNER_TEMP/aislop/dist/cli.js" ci . --json > "$REPORT" || GATE_FAILED=1
           node -e "const r=require(process.env.REPORT); const f=r.summary?.files??0; console.log('aislop score',r.score,'over',f,'files'); if(f<20){console.error('aislop only scanned '+f+' files - the scan did not run');process.exit(1);}"
           if [ -n "$GATE_FAILED" ]; then echo "GATE_STATE=failure" >> "$GITHUB_ENV"; echo "aislop score below failBelow"; exit 1; fi
           echo "GATE_STATE=success" >> "$GITHUB_ENV"
@@ -48,7 +72,7 @@ jobs:
 
       - name: Post aislop score status
         # Surfaces the score in the PR's checks list (context aislop/score,
-        # e.g. "score 91/100 over 114 files"), the way pr-crew/coverage shows
+        # e.g. "score 90/100 over 122 files"), the way pr-crew/coverage shows
         # its percentage. GATE_STATE is unset when the gate step died before
         # the score check ran - default to failure so the status can never
         # show green without a gate run.

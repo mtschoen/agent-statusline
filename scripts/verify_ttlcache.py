@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from statusline_lib.ttlcache import read_ttl_cache, write_ttl_cache
 
+_TEXT_ENCODING = "utf-8"
+
 
 def check_miss_returns_none(failures):
     with tempfile.TemporaryDirectory() as tmp:
@@ -49,7 +51,7 @@ def check_write_then_read_hit(failures):
 def check_expiry_returns_none(failures):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "stale.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump({"cached_at_unix": time.time() - 100, "data": "old"}, f)
         if read_ttl_cache(path, 10) is not None:
             failures.append("an entry older than the TTL must read as None")
@@ -58,7 +60,7 @@ def check_expiry_returns_none(failures):
 def check_within_ttl_is_a_hit(failures):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "fresh.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump({"cached_at_unix": time.time() - 1, "data": "recent"}, f)
         cached = read_ttl_cache(path, 10)
         if cached is None or cached.get("data") != "recent":
@@ -68,7 +70,7 @@ def check_within_ttl_is_a_hit(failures):
 def check_corrupt_json_returns_none(failures):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "corrupt.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             f.write("not-json")
         if read_ttl_cache(path, 10) is not None:
             failures.append("corrupt JSON must read as None, not raise")
@@ -77,7 +79,7 @@ def check_corrupt_json_returns_none(failures):
 def check_non_dict_json_returns_none(failures):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "list.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump([1, 2, 3], f)
         if read_ttl_cache(path, 10) is not None:
             failures.append("a non-dict JSON payload must read as None")
@@ -86,7 +88,7 @@ def check_non_dict_json_returns_none(failures):
 def check_unwritable_dir_does_not_raise(failures):
     with tempfile.TemporaryDirectory() as tmp:
         blocker = os.path.join(tmp, "not-a-dir")
-        with open(blocker, "w", encoding="utf-8") as f:
+        with open(blocker, "w", encoding=_TEXT_ENCODING) as f:
             f.write("x")
         # A path component that is a file makes os.makedirs fail with an
         # OSError subclass on every platform -- simulates an unwritable

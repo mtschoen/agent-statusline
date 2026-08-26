@@ -31,6 +31,7 @@ import statusline_lib.beacon_cache as _beacon_cache_mod
 from statusline_lib.beacon import format_beacon, format_calibrated_eta
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_TEXT_ENCODING = "utf-8"
 
 
 def _strip(text):
@@ -155,7 +156,7 @@ def _check_bias_cache_fresh_hit_skips_spawn(failures, tmpdir):
             "bias_factor": 0.8,
         }
     }
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(fresh, f)
 
     calls = []
@@ -192,7 +193,7 @@ def _check_bias_cache_stale_serves_and_spawns(failures, tmpdir):
             "bias_factor": 0.5,
         }
     }
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(stale, f)
 
     calls = []
@@ -240,7 +241,7 @@ def _check_bias_cache_miss_and_wrong_period_serve_neutral_and_spawn(failures, tm
         cache_path = os.path.join(tmpdir, f"bias-cache-{label}.json")
         _beacon_mod._BIAS_CACHE_PATH = cache_path
         if seed is not None:
-            with open(cache_path, "w", encoding="utf-8") as f:
+            with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
                 f.write(seed)
 
         calls = []
@@ -279,7 +280,7 @@ def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
             "bias_factor": 2.2,
         }
     }
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(other_period_entry, f)
 
     _beacon_mod._walker_subcommand = lambda *_a, **_kw: {
@@ -291,7 +292,7 @@ def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
         failures.append(
             f"refresh_bias_factor_cache must return the fresh values; got ({n!r},{bias!r})"
         )
-    with open(cache_path, encoding="utf-8") as f:
+    with open(cache_path, encoding=_TEXT_ENCODING) as f:
         cache = json.load(f)
     if "300" not in cache:
         failures.append("refresh_bias_factor_cache must not clobber other periods")
@@ -308,7 +309,7 @@ def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
         failures.append(
             f"refresh_bias_factor_cache walker failure: expected (0, None), got ({n2!r},{bias2!r})"
         )
-    with open(cache_path, encoding="utf-8") as f:
+    with open(cache_path, encoding=_TEXT_ENCODING) as f:
         cache = json.load(f)
     failure_entry = cache.get("604800") or {}
     if not failure_entry.get("failed"):
@@ -437,7 +438,7 @@ def _check_bias_cache_alternating_periods(failures, tmpdir):
             "bias_factor": 2.0,
         },
     }
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(seeded, f)
 
     spawn = _SpawnRecorder()
@@ -491,7 +492,7 @@ def _check_bias_cache_stale_period_spawns_only_its_own_key(failures, tmpdir):
             "bias_factor": 2.0,
         },
     }
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(seeded, f)
 
     spawn = _SpawnRecorder()
@@ -684,7 +685,7 @@ def _check_beacons_latest_cache_hit_skips_spawn(failures, tmpdir):
         "cache-hit-session", state_dir=tmpdir
     )
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(
             {"cached_at_unix": datetime.now(UTC).timestamp(), "data": fresh_data}, f
         )
@@ -727,7 +728,7 @@ def _check_beacons_latest_cache_expiry_serves_stale_and_spawns(failures, tmpdir)
         - 1
     )
     stale_data = {"beacon": {"kind": "report", "summary": "stale-but-served"}}
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump({"cached_at_unix": stale_ts, "data": stale_data}, f)
 
     spawn = _SpawnRecorder()
@@ -750,7 +751,7 @@ def _check_beacons_latest_cache_corrupt_file_degrades(failures, tmpdir):
         "corrupt-session", state_dir=tmpdir
     )
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    with open(cache_path, "w", encoding="utf-8") as f:
+    with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         f.write("not-json")
 
     spawn = _SpawnRecorder()

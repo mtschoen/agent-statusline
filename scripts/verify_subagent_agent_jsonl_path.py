@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import subagent_statusline as sub
 
 _TASK_ID = "agent-task-0001"
+_TEXT_ENCODING = "utf-8"
 
 
 def _fake_expanduser_for(tmp, original):
@@ -73,7 +74,7 @@ def _check_direct_mapping_via_path_substring(failures):
     def run(tmp):
         transcript = _brain_transcript_path(tmp, _TASK_ID)
         os.makedirs(os.path.dirname(transcript), exist_ok=True)
-        with open(transcript, "w", encoding="utf-8") as f:
+        with open(transcript, "w", encoding=_TEXT_ENCODING) as f:
             f.write("{}\n")
         parent = os.path.join(tmp, ".gemini", "antigravity-cli", "brain", "lead.jsonl")
         result = sub._agent_jsonl_path(parent, _TASK_ID)
@@ -92,7 +93,7 @@ def _check_direct_mapping_via_antigravity_agent_env(failures):
     def run(tmp):
         transcript = _brain_transcript_path(tmp, _TASK_ID)
         os.makedirs(os.path.dirname(transcript), exist_ok=True)
-        with open(transcript, "w", encoding="utf-8") as f:
+        with open(transcript, "w", encoding=_TEXT_ENCODING) as f:
             f.write("{}\n")
         os.environ["ANTIGRAVITY_AGENT"] = "1"
         result = sub._agent_jsonl_path("/some/other/path.jsonl", _TASK_ID)
@@ -113,7 +114,7 @@ def _check_glob_fallback_on_id_drift(failures):
         drifted_dir = f"session-{_TASK_ID}-suffix"
         transcript = _brain_transcript_path(tmp, drifted_dir)
         os.makedirs(os.path.dirname(transcript), exist_ok=True)
-        with open(transcript, "w", encoding="utf-8") as f:
+        with open(transcript, "w", encoding=_TEXT_ENCODING) as f:
             f.write("{}\n")
         parent = os.path.join(tmp, ".gemini", "antigravity-cli", "brain", "lead.jsonl")
         result = sub._agent_jsonl_path(parent, _TASK_ID)
@@ -156,7 +157,7 @@ def _check_non_antigravity_path_falls_through_to_claude_layout(failures):
         sub_dir = base + "/subagents"
         os.makedirs(sub_dir, exist_ok=True)
         direct = os.path.join(sub_dir, f"agent-{_TASK_ID}.jsonl")
-        with open(direct, "w", encoding="utf-8") as f:
+        with open(direct, "w", encoding=_TEXT_ENCODING) as f:
             f.write("{}\n")
         result = sub._agent_jsonl_path(parent, _TASK_ID)
         if result != direct:

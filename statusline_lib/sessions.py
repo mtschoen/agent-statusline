@@ -48,11 +48,12 @@ _SESSION_COUNT_CACHE_PATH = os.path.join(
 )
 _SESSION_COUNT_CACHE_TTL_SECONDS = 8
 _SESSION_COUNT_CACHE_MAX_AGE_SECONDS = 86400  # prune entries older than a day
+_TEXT_ENCODING = "utf-8"
 
 
 def _load_session_count_cache(path):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding=_TEXT_ENCODING) as f:
             state = json.load(f)
         return state if isinstance(state, dict) else {}
     except (OSError, ValueError):
@@ -67,7 +68,7 @@ def _save_session_count_cache(path, cache, now):
         and (now - v.get("ts", 0)) <= _SESSION_COUNT_CACHE_MAX_AGE_SECONDS
     }
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump(pruned, f)
     except OSError:
         # Best-effort cache write; an unwritable/missing cache dir is non-fatal
@@ -372,7 +373,7 @@ _SESSION_DEBOUNCE_MAX_AGE_SECONDS = 86400  # prune entries older than a day
 
 def _load_debounce_state(path):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding=_TEXT_ENCODING) as f:
             state = json.load(f)
         return state if isinstance(state, dict) else {}
     except (OSError, ValueError):
@@ -387,7 +388,7 @@ def _save_debounce_state(path, state, now):
         and (now - v.get("last", 0)) <= _SESSION_DEBOUNCE_MAX_AGE_SECONDS
     }
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump(pruned, f)
     except OSError:
         # Best-effort cache write; an unwritable cache dir is non-fatal.

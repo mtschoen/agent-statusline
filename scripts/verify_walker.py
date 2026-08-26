@@ -23,6 +23,8 @@ from scripts._walker_helpers import restore_walker_state, save_walker_state
 from statusline_lib.process_safe import ProcessTimeout
 from statusline_lib.walker import _walker_root_list, _walker_subcommand
 
+_TEXT_ENCODING = "utf-8"
+
 
 def _fake_expanduser_for(tmp, original):
     def fake_expanduser(path):
@@ -62,7 +64,7 @@ def _check_root_list_malformed_json(failures):
     try:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = os.path.join(tmp, "walker-roots.json")
-            with open(config_path, "w", encoding="utf-8") as fh:
+            with open(config_path, "w", encoding=_TEXT_ENCODING) as fh:
                 fh.write("{not valid json")
             walker_module._WALKER_ROOTS_CONFIG_PATH = config_path
             default_dir = os.path.join(tmp, ".claude", "projects")
@@ -89,7 +91,7 @@ def _check_root_list_extra_roots(failures):
             os.makedirs(extra1, exist_ok=True)
             extra2 = os.path.join(tmp, "extra2_nonexistent")
             config_path = os.path.join(tmp, "walker-roots.json")
-            with open(config_path, "w", encoding="utf-8") as fh:
+            with open(config_path, "w", encoding=_TEXT_ENCODING) as fh:
                 json.dump({"extra_roots": [extra1, extra2]}, fh)
             walker_module._WALKER_ROOTS_CONFIG_PATH = config_path
             default_dir = os.path.join(tmp, ".claude", "projects")
@@ -125,7 +127,7 @@ def _check_root_list_dedup(failures):
             default_dir = os.path.join(tmp, ".claude", "projects")
             os.makedirs(default_dir, exist_ok=True)
             config_path = os.path.join(tmp, "walker-roots.json")
-            with open(config_path, "w", encoding="utf-8") as fh:
+            with open(config_path, "w", encoding=_TEXT_ENCODING) as fh:
                 json.dump({"extra_roots": [default_dir]}, fh)
             walker_module._WALKER_ROOTS_CONFIG_PATH = config_path
             walker_module.os.path.expanduser = _fake_expanduser_for(
@@ -147,7 +149,7 @@ def _check_root_list_non_list_extra_roots(failures):
     try:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = os.path.join(tmp, "walker-roots.json")
-            with open(config_path, "w", encoding="utf-8") as fh:
+            with open(config_path, "w", encoding=_TEXT_ENCODING) as fh:
                 json.dump({"extra_roots": "not-a-list"}, fh)
             walker_module._WALKER_ROOTS_CONFIG_PATH = config_path
             default_dir = os.path.join(tmp, ".claude", "projects")

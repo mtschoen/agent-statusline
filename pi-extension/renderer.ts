@@ -24,6 +24,8 @@ const SPEND_WINDOW_MS_5M = 300_000;
 const SPEND_WINDOW_MS_24H = 86_400_000;
 const SPEND_CACHE_TTL_MS = 15_000;
 const GIT_CACHE_TTL_MS = 5_000;
+const TEXT_ENCODING = "utf8";
+const GIT_COMMAND_TIMEOUT_MS = 1_000;
 const execFileAsync = promisify(execFile);
 
 export interface RenderState {
@@ -388,7 +390,7 @@ function spendSince(windowMilliseconds: number, state: RenderState, sessionId: s
 
 function spendFromFile(path: string, windowStart: number): number {
 	try {
-		return readFileSync(path, "utf8").split(/\r?\n/).reduce((sum, line) => {
+		return readFileSync(path, TEXT_ENCODING).split(/\r?\n/).reduce((sum, line) => {
 			if (!line.trim()) return sum;
 			try {
 				const entry = JSON.parse(line);
@@ -447,11 +449,11 @@ function scheduleGitRefresh(cwd: string, state: RenderState): void {
 		let reference = "";
 		let difference = "";
 		try {
-			await execFileAsync("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 1000 });
+			await execFileAsync("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"], { encoding: TEXT_ENCODING, timeout: GIT_COMMAND_TIMEOUT_MS });
 			const [branchResult, hashResult, differenceResult] = await Promise.allSettled([
-				execFileAsync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8", timeout: 1000 }),
-				execFileAsync("git", ["-C", cwd, "rev-parse", "--short", "HEAD"], { encoding: "utf8", timeout: 1000 }),
-				execFileAsync("git", ["-C", cwd, "diff", "--numstat"], { encoding: "utf8", timeout: 1000 }),
+				execFileAsync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], { encoding: TEXT_ENCODING, timeout: GIT_COMMAND_TIMEOUT_MS }),
+				execFileAsync("git", ["-C", cwd, "rev-parse", "--short", "HEAD"], { encoding: TEXT_ENCODING, timeout: GIT_COMMAND_TIMEOUT_MS }),
+				execFileAsync("git", ["-C", cwd, "diff", "--numstat"], { encoding: TEXT_ENCODING, timeout: GIT_COMMAND_TIMEOUT_MS }),
 			]);
 			const branch = branchResult.status === "fulfilled" ? branchResult.value.stdout.trim() : "";
 			const hash = hashResult.status === "fulfilled" ? hashResult.value.stdout.trim() : "";

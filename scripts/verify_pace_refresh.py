@@ -17,6 +17,7 @@ import statusline_lib.pace as pace
 
 _WIN_START = 1_748_000_000.0
 _NOW = _WIN_START + 7200.0
+_TEXT_ENCODING = "utf-8"
 
 
 class _SpawnRecorder:
@@ -47,7 +48,7 @@ def _pin_pace(tmp, now, spawn, cache_payload=None):
     render path ever calls it inline. Returns the state to restore."""
     cache_path = os.path.join(tmp, "pace-cache-v2.json")
     if cache_payload is not None:
-        with open(cache_path, "w", encoding="utf-8") as f:
+        with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump(cache_payload, f)
     saved = (
         pace._PACE_HOURLY_CACHE_PATH,
@@ -122,7 +123,9 @@ def _check_pace_miss_returns_empty_and_spawns(failures):
         with tempfile.TemporaryDirectory() as tmp:
             saved = _pin_pace(tmp, _NOW, spawn)
             if raw is not None:
-                with open(pace._PACE_HOURLY_CACHE_PATH, "w", encoding="utf-8") as f:
+                with open(
+                    pace._PACE_HOURLY_CACHE_PATH, "w", encoding=_TEXT_ENCODING
+                ) as f:
                     f.write(raw)
             try:
                 result = pace._pace_hourly_cached(_WIN_START)
@@ -143,7 +146,7 @@ def _check_pace_refresh_writes_cache(failures):
             str(1_000_000 + i): {"computed_at_unix": float(i), "hourly": [0.0]}
             for i in range(pace._PACE_CACHE_MAX_ENTRIES + 3)
         }
-        with open(cache_path, "w", encoding="utf-8") as f:
+        with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
             json.dump({"entries": stale_entries}, f)
         saved = (pace._PACE_HOURLY_CACHE_PATH, pace._now_unix, pace._walk_pace_hourly)
         pace._PACE_HOURLY_CACHE_PATH = cache_path
@@ -156,7 +159,7 @@ def _check_pace_refresh_writes_cache(failures):
             pace.maybe_spawn_refresh = spawn
             served = pace._pace_hourly_cached(_WIN_START)
             pace.maybe_spawn_refresh = saved_spawn
-            with open(cache_path, encoding="utf-8") as f:
+            with open(cache_path, encoding=_TEXT_ENCODING) as f:
                 entries = json.load(f)["entries"]
         finally:
             (

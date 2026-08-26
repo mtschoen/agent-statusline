@@ -36,6 +36,8 @@ from statusline_lib.badge import (
 from statusline_lib.base import CTX_DENOM, GREEN, ORANGE, RED, YELLOW
 from statusline_lib.nudge import NUDGE_THRESHOLD_TOKENS
 
+_LEGACY_CONTEXT_WINDOW_TOKENS = 200_000
+
 
 def _check_ctx_window_for_model(failures):
     if ctx_window_for_model("claude-fable-5") != 1_000_000:
@@ -50,13 +52,19 @@ def _check_ctx_window_for_model(failures):
         failures.append("ctx_window_for_model: sonnet 5 is natively 1M")
     if ctx_window_for_model("claude-sonnet-4-6") != 1_000_000:
         failures.append("ctx_window_for_model: sonnet 4.6 is natively 1M")
-    if ctx_window_for_model("claude-sonnet-4-5-20250929") != 200_000:
+    if (
+        ctx_window_for_model("claude-sonnet-4-5-20250929")
+        != _LEGACY_CONTEXT_WINDOW_TOKENS
+    ):
         failures.append("ctx_window_for_model: sonnet 4.5 should return 200K")
-    if ctx_window_for_model("claude-opus-4-20250514") != 200_000:
+    if ctx_window_for_model("claude-opus-4-20250514") != _LEGACY_CONTEXT_WINDOW_TOKENS:
         failures.append("ctx_window_for_model: opus 4.0 dated id should return 200K")
-    if ctx_window_for_model("claude-3-5-sonnet-20241022") != 200_000:
+    if (
+        ctx_window_for_model("claude-3-5-sonnet-20241022")
+        != _LEGACY_CONTEXT_WINDOW_TOKENS
+    ):
         failures.append("ctx_window_for_model: claude-3 legacy ids should return 200K")
-    if ctx_window_for_model("claude-haiku-4-5") != 200_000:
+    if ctx_window_for_model("claude-haiku-4-5") != _LEGACY_CONTEXT_WINDOW_TOKENS:
         failures.append("ctx_window_for_model: haiku should return 200K")
     if ctx_window_for_model("opus") != 0:
         failures.append("ctx_window_for_model: versionless alias should be unknown (0)")
@@ -99,7 +107,7 @@ def _check_format_context_unknown_window(failures):
 
 
 def _check_format_context_green(failures):
-    window = 200_000
+    window = _LEGACY_CONTEXT_WINDOW_TOKENS
     used = 10_000
     result = format_context(used, window)
     if GREEN not in result:
@@ -109,7 +117,7 @@ def _check_format_context_green(failures):
 
 
 def _check_format_context_yellow(failures):
-    window = 200_000
+    window = _LEGACY_CONTEXT_WINDOW_TOKENS
     red_tokens = max(0, max(0, window - COMPACT_BUFFER_TOKENS) - RED_MARGIN_TOKENS)
     used = max(red_tokens - 1, window // 2)
     result = format_context(used, window)
@@ -136,7 +144,7 @@ def _check_format_context_orange(failures):
 
 
 def _check_format_context_red(failures):
-    window = 200_000
+    window = _LEGACY_CONTEXT_WINDOW_TOKENS
     red_tokens = max(0, max(0, window - COMPACT_BUFFER_TOKENS) - RED_MARGIN_TOKENS)
     used = red_tokens
     result = format_context(used, window)
@@ -147,7 +155,7 @@ def _check_format_context_red(failures):
 
 
 def _check_format_context_override(failures):
-    window = 200_000
+    window = _LEGACY_CONTEXT_WINDOW_TOKENS
     override_pct = 80
     os.environ["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(override_pct)
     try:
@@ -163,7 +171,7 @@ def _check_format_context_override(failures):
 
 
 def _check_format_context_override_invalid(failures):
-    window = 200_000
+    window = _LEGACY_CONTEXT_WINDOW_TOKENS
     os.environ["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = "not-a-number"
     try:
         result = format_context(0, window)
@@ -176,7 +184,7 @@ def _check_format_context_override_invalid(failures):
 
 
 def _check_format_context_show_flags(failures):
-    window = 200_000
+    window = _LEGACY_CONTEXT_WINDOW_TOKENS
     used = 1_000
     result_no_denom = format_context(used, window, show_denom=False)
     result_full = format_context(used, window)
@@ -210,7 +218,7 @@ def _check_format_context_1m_via_model_id(failures):
             f"format_context: [1m] model_id at nudge threshold should be YELLOW, got {result!r}"
         )
     # Also verify that a non-1M 200K window uses window//2 as yellow threshold instead.
-    window_200k = 200_000
+    window_200k = _LEGACY_CONTEXT_WINDOW_TOKENS
     used_200k = window_200k // 2
     red_200k = max(0, max(0, window_200k - COMPACT_BUFFER_TOKENS) - RED_MARGIN_TOKENS)
     if used_200k < red_200k:
@@ -228,7 +236,7 @@ def _check_format_context_1m_tag_small_window(failures):
     # threshold. red_tokens for a 200K window is 147K; the fixed yellow
     # anchor (250K) sits past it, which made every value >=147K jump straight
     # from GREEN to RED with no YELLOW band ever reachable.
-    window = 200_000
+    window = _LEGACY_CONTEXT_WINDOW_TOKENS
     red_tokens = max(0, max(0, window - COMPACT_BUFFER_TOKENS) - RED_MARGIN_TOKENS)
     if red_tokens >= NUDGE_THRESHOLD_TOKENS:
         failures.append(

@@ -28,6 +28,8 @@ from statusline_lib import (
 
 _SESSION_ID = "b213becd-6513-43f3-95a1-e4d51c47cb39"
 _TEAM_NAME = "session-b213becd"
+_REFERENCE_TIME = 1000.0
+_TEXT_ENCODING = "utf-8"
 
 
 def _assistant_line(model, usage):
@@ -39,7 +41,7 @@ def _assistant_line(model, usage):
 def _write_config(claude_dir, members):
     team_dir = os.path.join(claude_dir, "teams", _TEAM_NAME)
     os.makedirs(team_dir, exist_ok=True)
-    with open(os.path.join(team_dir, "config.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(team_dir, "config.json"), "w", encoding=_TEXT_ENCODING) as f:
         json.dump({"name": _TEAM_NAME, "members": members}, f)
 
 
@@ -66,7 +68,7 @@ def _check_team_name_derivation(failures):
 
 def _check_no_config(failures):
     with tempfile.TemporaryDirectory() as claude_dir:
-        result = format_teammates(_SESSION_ID, "", claude_dir, now=1000.0)
+        result = format_teammates(_SESSION_ID, "", claude_dir, now=_REFERENCE_TIME)
         if result != "":
             failures.append("missing team config should render nothing")
 
@@ -75,11 +77,13 @@ def _check_malformed_config(failures):
     with tempfile.TemporaryDirectory() as claude_dir:
         team_dir = os.path.join(claude_dir, "teams", _TEAM_NAME)
         os.makedirs(team_dir)
-        with open(os.path.join(team_dir, "config.json"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(team_dir, "config.json"), "w", encoding=_TEXT_ENCODING
+        ) as f:
             f.write("{not json")
         if _load_team_config(claude_dir, _TEAM_NAME) is not None:
             failures.append("malformed config.json should load as None, not raise")
-        result = format_teammates(_SESSION_ID, "", claude_dir, now=1000.0)
+        result = format_teammates(_SESSION_ID, "", claude_dir, now=_REFERENCE_TIME)
         if result != "":
             failures.append("malformed team config should render nothing")
 
@@ -87,7 +91,7 @@ def _check_malformed_config(failures):
 def _check_lead_only(failures):
     with tempfile.TemporaryDirectory() as claude_dir:
         _write_config(claude_dir, [_lead_member()])
-        result = format_teammates(_SESSION_ID, "", claude_dir, now=1000.0)
+        result = format_teammates(_SESSION_ID, "", claude_dir, now=_REFERENCE_TIME)
         if result != "":
             failures.append("a team with only the lead should render nothing")
 
@@ -103,7 +107,7 @@ def _check_active_teammate_with_cost(failures):
         sub_dir = os.path.join(os.path.dirname(transcript), "sess", "subagents")
         os.makedirs(sub_dir)
         jsonl = os.path.join(sub_dir, "agent-awatchme-abc123.jsonl")
-        with open(jsonl, "w", encoding="utf-8") as f:
+        with open(jsonl, "w", encoding=_TEXT_ENCODING) as f:
             # opus 1M input tokens -> $5.00, but model here is a generic
             # sonnet: 1M input @ $3/Mtok -> $3.00. (Use sonnet-4-6, not
             # sonnet-5 -- the latter is now a distinct, date-aware family.)
@@ -112,7 +116,9 @@ def _check_active_teammate_with_cost(failures):
             )
         os.utime(jsonl, (990.0, 990.0))  # 10s before "now" -> active
 
-        result = format_teammates(_SESSION_ID, transcript, claude_dir, now=1000.0)
+        result = format_teammates(
+            _SESSION_ID, transcript, claude_dir, now=_REFERENCE_TIME
+        )
         if "teammates: " not in result:
             failures.append("result should be prefixed with 'teammates: '")
         if "watchme" not in result:
@@ -133,12 +139,14 @@ def _check_idle_teammate_no_cost(failures):
         sub_dir = os.path.join(os.path.dirname(transcript), "sess", "subagents")
         os.makedirs(sub_dir)
         jsonl = os.path.join(sub_dir, "agent-aresearcher-def456.jsonl")
-        with open(jsonl, "w", encoding="utf-8") as f:
+        with open(jsonl, "w", encoding=_TEXT_ENCODING) as f:
             f.write(_assistant_line("claude-haiku-4-5", {}) + "\n")
         stale = 1000.0 - IDLE_THRESHOLD_SECONDS - 1
         os.utime(jsonl, (stale, stale))
 
-        result = format_teammates(_SESSION_ID, transcript, claude_dir, now=1000.0)
+        result = format_teammates(
+            _SESSION_ID, transcript, claude_dir, now=_REFERENCE_TIME
+        )
         if GREEN + "●" in result:
             failures.append(
                 "a stale teammate transcript should not render the active icon"
@@ -153,7 +161,7 @@ def _check_no_transcript_yet(failures):
     idle -- not crash."""
     with tempfile.TemporaryDirectory() as claude_dir:
         _write_config(claude_dir, [{"name": "brandnew", "model": "opus"}])
-        result = format_teammates(_SESSION_ID, "", claude_dir, now=1000.0)
+        result = format_teammates(_SESSION_ID, "", claude_dir, now=_REFERENCE_TIME)
         if "brandnew" not in result:
             failures.append(
                 "a teammate with no transcript yet should still render by name"
@@ -197,7 +205,7 @@ def _check_empty_team_name_short_circuits_config_load(failures):
 def _check_nameless_members_render_nothing(failures):
     with tempfile.TemporaryDirectory() as claude_dir:
         _write_config(claude_dir, [{"agentType": "general-purpose"}])
-        result = format_teammates(_SESSION_ID, "", claude_dir, now=1000.0)
+        result = format_teammates(_SESSION_ID, "", claude_dir, now=_REFERENCE_TIME)
         if result != "":
             failures.append("a non-lead member with no name should not render a row")
 

@@ -18,6 +18,10 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statusline_lib.cost import walk_transcript
 
+_REFERENCE_TIMESTAMP = "2026-06-02T15:00:00.000Z"
+_TEXT_ENCODING = "utf-8"
+_WRITE_FLOOR_TOKENS = 5000
+
 
 def _turn(
     mid, read, write, inp=10, out=100, model="claude-opus-4-8", ts=None, ttl="1h"
@@ -41,7 +45,7 @@ def _turn(
 
 
 def _write_jsonl(path, lines):
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding=_TEXT_ENCODING) as f:
         for line in lines:
             f.write(line + "\n")
 
@@ -82,7 +86,7 @@ def _check_ttl_threshold_derived_from_write(failures):
     # so the rewrite is some other bust, not a timeout (does not count).
     for ttl, expected in (("5m", 1), ("1h", 0)):
         lines = [
-            _turn("a1", read=50000, write=4000, ts="2026-06-02T15:00:00.000Z", ttl=ttl),
+            _turn("a1", read=50000, write=4000, ts=_REFERENCE_TIMESTAMP, ttl=ttl),
             _turn("a2", read=0, write=30000, ts="2026-06-02T15:06:00.000Z", ttl=ttl),
         ]
         tmp = tempfile.mkdtemp(prefix=f"ttl-gate-{ttl}-")
@@ -102,7 +106,7 @@ def _check_missing_timestamps_not_evicted(failures):
     # Without timestamps the idle gap is unknowable, so a TTL eviction cannot be
     # asserted - the gate stays conservative and counts nothing.
     lines = [
-        _turn("n1", read=0, write=5000),
+        _turn("n1", read=0, write=_WRITE_FLOOR_TOKENS),
         _turn("n2", read=0, write=30000),
     ]
     tmp = tempfile.mkdtemp(prefix="ttl-gate-nots-")
@@ -125,7 +129,7 @@ def _check_partial_hit_evicted(failures):
     # r==0 gate misses these real evictions entirely - the gate now ignores the
     # read count altogether, so this counts on the write + idle-gap facts alone.
     lines = [
-        _turn("p1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
+        _turn("p1", read=0, write=_WRITE_FLOOR_TOKENS, ts=_REFERENCE_TIMESTAMP),
         _turn("p2", read=24299, write=202628, ts="2026-06-02T16:30:00.000Z"),
     ]
     tmp = tempfile.mkdtemp(prefix="ttl-gate-partial-")
@@ -152,7 +156,7 @@ def _check_small_session_partial_hit_evicted(failures):
     # so a small session's real eviction still counts on write + idle-gap
     # alone.
     lines = [
-        _turn("s1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
+        _turn("s1", read=0, write=_WRITE_FLOOR_TOKENS, ts=_REFERENCE_TIMESTAMP),
         _turn("s2", read=24299, write=10000, ts="2026-06-02T16:30:00.000Z"),
     ]
     tmp = tempfile.mkdtemp(prefix="ttl-gate-small-")
@@ -173,7 +177,7 @@ def _check_warm_double_resume_below_floor_not_evicted(failures):
     # write, well past the idle-gap threshold. With no read condition, only
     # the write floor keeps this quiet - w=800 sits below TTL_MIN_WRITE_TOKENS.
     lines = [
-        _turn("d1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
+        _turn("d1", read=0, write=_WRITE_FLOOR_TOKENS, ts=_REFERENCE_TIMESTAMP),
         _turn("d2", read=180000, write=800, ts="2026-06-02T16:30:00.000Z"),
     ]
     tmp = tempfile.mkdtemp(prefix="ttl-gate-warmdouble-")
@@ -193,7 +197,7 @@ def _check_partial_hit_gap_not_exceeded_not_evicted(failures):
     # Same partial-hit read/write shape, but the idle gap since the prior turn
     # does NOT exceed the prior turn's written TTL - still not a TTL expiry.
     lines = [
-        _turn("g1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
+        _turn("g1", read=0, write=_WRITE_FLOOR_TOKENS, ts=_REFERENCE_TIMESTAMP),
         _turn("g2", read=24299, write=202628, ts="2026-06-02T15:00:10.000Z"),
     ]
     tmp = tempfile.mkdtemp(prefix="ttl-gate-partial-gap-")
@@ -214,7 +218,7 @@ def _check_first_turn_not_evicted(failures):
     # is nothing to have evicted yet) - must never count even with a huge
     # write and a timestamp present.
     lines = [
-        _turn("first", read=0, write=500000, ts="2026-06-02T15:00:00.000Z"),
+        _turn("first", read=0, write=500000, ts=_REFERENCE_TIMESTAMP),
     ]
     tmp = tempfile.mkdtemp(prefix="ttl-gate-first-")
     parent = os.path.join(tmp, "sess.jsonl")

@@ -31,6 +31,8 @@ from statusline_lib.base import (
     state_dir,
 )
 
+_TEXT_ENCODING = "utf-8"
+
 
 def check_state_dir_explicit_arg_wins(failures):
     if state_dir("/explicit/path") != "/explicit/path":
@@ -130,7 +132,9 @@ def check_is_local_mode_env_vars(failures):
                 failures.append("ANTIGRAVITY_LOCAL_MODE=1 must be local mode")
             os.environ.pop("ANTIGRAVITY_LOCAL_MODE")
 
-            with open(os.path.join(tmp, ".local-mode"), "w", encoding="utf-8") as f:
+            with open(
+                os.path.join(tmp, ".local-mode"), "w", encoding=_TEXT_ENCODING
+            ) as f:
                 f.write("")
             if not is_local_mode():
                 failures.append("a .local-mode marker file must be local mode")
@@ -166,12 +170,12 @@ def check_safe_write_success_and_failure(failures):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "out.txt")
         safe_write(path, "hello")
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding=_TEXT_ENCODING) as f:
             if f.read() != "hello":
                 failures.append("safe_write must write the given text verbatim")
 
         blocker = os.path.join(tmp, "not-a-dir")
-        with open(blocker, "w", encoding="utf-8") as f:
+        with open(blocker, "w", encoding=_TEXT_ENCODING) as f:
             f.write("x")
         safe_write(os.path.join(blocker, "unwritable.txt"), "x")  # must not raise
 
@@ -183,13 +187,13 @@ def check_log_traceback_success_and_failure(failures):
             raise ValueError("boom")
         except ValueError:
             log_traceback(path)
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding=_TEXT_ENCODING) as f:
             content = f.read()
         if "boom" not in content or "ValueError" not in content:
             failures.append(f"log_traceback must record the exception; got {content!r}")
 
         blocker = os.path.join(tmp, "not-a-dir")
-        with open(blocker, "w", encoding="utf-8") as f:
+        with open(blocker, "w", encoding=_TEXT_ENCODING) as f:
             f.write("x")
         log_traceback(os.path.join(blocker, "unwritable.log"))  # must not raise
 

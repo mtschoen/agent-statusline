@@ -32,13 +32,22 @@ it. Failures are negative-cached to avoid respawning detached children on
 every render when the endpoint is unreachable.
 
 Host resolution:
-Checks `pref("STATUSLINE_FABLE_QUOTA_HOST")` first (prefs JSON > env var),
-falls back to `schoen_fleet.get_host("llamabox")` if importable,
-and defaults to "llamabox:8001".
+The quota dashboard host comes from `pref("STATUSLINE_FABLE_QUOTA_HOST")`
+(prefs JSON > env var) and nowhere else. There is deliberately NO default:
+this field talks to a machine on the operator's own fleet, and baking one
+fleet's hostname into the source meant every unconfigured machine -- including
+work machines on unrelated networks -- silently issued HTTP requests to a
+stranger's box and rendered that fleet's quota figure. Unset means the field
+is simply off.
+
+(A previous revision also consulted `schoen_fleet.get_host("llamabox")`. That
+was dead code -- `schoen_fleet` exposes no `get_host` -- and it hard-coded the
+same hostname it was meant to indirect away from. If fleet-aware resolution is
+wanted later, look the dashboard up by ROLE, e.g. a `quota_src` role resolved
+through `schoen_fleet`'s `RoleRecord`/`HostRegistry`, never by host name.)
 """
 
 import contextlib
-import importlib
 import json
 import os
 import time
@@ -63,7 +72,7 @@ _WEEK_SECONDS = 7 * 86400
 # round-the-clock upstream load.
 _QUOTA_TTL_SECONDS = 300
 _QUOTA_FAILURE_TTL_SECONDS = 60
-_DEFAULT_DASHBOARD_HOST = "llamabox:8001"
+_DEFAULT_PORT = 8001
 _DEFAULT_SCHEME = "http"
 _ENDPOINT_PATH_PROVIDERS = "/api/quota/providers"
 _ENDPOINT_PATH_OBSERVED = "/api/quota/observed"
@@ -114,41 +123,42 @@ def _extract_window_metric(window_dict):
 
 
 def _dashboard_host():
-    """Resolve the quota dashboard host: pref/env override > schoen_fleet registry > default."""
+    """The configured quota dashboard host, or None when unconfigured.
+
+    Configuration is the only source (see the module docstring): there is no
+    default, so an unconfigured machine makes no request at all.
+    """
     override = pref(_PREF_HOST)
-    if override is not None:
-        val = override.strip()
-        if val:
-            return val
-    with contextlib.suppress(Exception):
-        schoen_fleet = importlib.import_module("schoen_fleet")
-        if hasattr(schoen_fleet, "get_host"):
-            host = schoen_fleet.get_host("llamabox")
-            if host:
-                return str(host).strip()
-    return _DEFAULT_DASHBOARD_HOST
+    if override is None:
+        return None
+    val = override.strip()
+    return val or None
 
 
-def _dashboard_url(host=None, path=_ENDPOINT_PATH_PROVIDERS):
-    """Build the full URL for `path` from <host[:port]> or URL. Defaults to
-    the legacy GET /api/quota/providers path; callers pass
-    _ENDPOINT_PATH_OBSERVED for the push-capable POST route."""
-    h = (_dashboard_host() if host is None else host) or ""
-    h = h.strip()
+def _dashboard_url(host, path=_ENDPOINT_PATH_PROVIDERS):
+    """Build the full URL for `path` from <host[:port]> or URL, or None when
+    `host` carries no usable authority. Defaults to the legacy
+    GET /api/quota/providers path; callers pass _ENDPOINT_PATH_OBSERVED for the
+    push-capable POST route."""
+    h = (host or "").strip()
     if not h:
-        h = _DEFAULT_DASHBOARD_HOST
+        return None
     scheme = _DEFAULT_SCHEME
     if "://" in h:
         parsed = urllib.parse.urlsplit(h)
         scheme = parsed.scheme or _DEFAULT_SCHEME
-        netloc = parsed.netloc or parsed.path.split("/")[0] or _DEFAULT_DASHBOARD_HOST
+        netloc = parsed.netloc or parsed.path.split("/")[0]
+        if not netloc:
+            return None
         if ":" not in netloc:
-            netloc = f"{netloc}:8001"
+            netloc = f"{netloc}:{_DEFAULT_PORT}"
         return f"{scheme}://{netloc}{path}"
     # Bare host or host:port - strip any leading/trailing paths if passed
-    host_port = h.split("/")[0].strip() or _DEFAULT_DASHBOARD_HOST
+    host_port = h.split("/")[0].strip()
+    if not host_port:
+        return None
     if ":" not in host_port:
-        host_port = f"{host_port}:8001"
+        host_port = f"{host_port}:{_DEFAULT_PORT}"
     return f"{scheme}://{host_port}{path}"
 
 
@@ -338,9 +348,11 @@ def refresh_fable_quota_cache(rate_limits):
     good value is preserved so the field keeps serving stale data through
     transient dashboard failures."""
     host = _dashboard_host()
-    if host.strip().lower() in _DISABLED_VALUES:
+    if host is None or host.strip().lower() in _DISABLED_VALUES:
         return
     observed_url = _dashboard_url(host, path=_ENDPOINT_PATH_OBSERVED)
+    if observed_url is None:
+        return
     payload, need_providers_fallback = _post_quota_observed(
         observed_url, rate_limits, timeout=2.0
     )
@@ -389,8 +401,10 @@ def format_fable_quota(rate_limits=None, show_pace=True):
     cold cache."""
     if not pref_bool(_PREF_ENABLED, default=True):
         return ""
-    raw_host = pref(_PREF_HOST)
-    if raw_host is not None and raw_host.strip().lower() in _DISABLED_VALUES:
+    # Unconfigured is off: there is no default host, so there is nothing to ask.
+    # _dashboard_host() folds unset and empty-string to None.
+    host = _dashboard_host()
+    if host is None or host.strip().lower() in _DISABLED_VALUES:
         return ""
     now_unix = _now_unix()
     entry = _fable_quota_cached(now_unix, rate_limits)

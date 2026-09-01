@@ -155,29 +155,21 @@ def _check_safe_float(failures):
 
 
 def _check_dashboard_host_resolution(failures):
+    """Configuration is the only source; there is deliberately no default.
+
+    A default here was a specific fleet's hostname, so every unconfigured
+    machine issued HTTP requests to that box and rendered its quota figure.
+    Unset and empty must both resolve to None (field off, no request).
+    """
     with _Fixture() as fx:
-        if _dashboard_host() != "llamabox:8001":
-            failures.append(f"default host: got {_dashboard_host()!r}")
+        if _dashboard_host() is not None:
+            failures.append(f"unconfigured host must be None: {_dashboard_host()!r}")
         fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="fleetbox:9000")
         if _dashboard_host() != "fleetbox:9000":
             failures.append(f"env host override: got {_dashboard_host()!r}")
-        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="")
-        mock_fleet = types.ModuleType("schoen_fleet")
-        mock_fleet.get_host = lambda n: (
-            "resolved-fleet:8001" if n == "llamabox" else None
-        )
-        sys.modules["schoen_fleet"] = mock_fleet
-        try:
-            if _dashboard_host() != "resolved-fleet:8001":
-                failures.append(f"schoen_fleet resolution: got {_dashboard_host()!r}")
-            mock_fleet.get_host = lambda _n: None
-            if _dashboard_host() != "llamabox:8001":
-                failures.append("schoen_fleet None fallback mismatch")
-            mock_fleet.get_host = lambda _n: 1 / 0
-            if _dashboard_host() != "llamabox:8001":
-                failures.append("schoen_fleet error fallback mismatch")
-        finally:
-            sys.modules.pop("schoen_fleet", None)
+        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="   ")
+        if _dashboard_host() is not None:
+            failures.append(f"blank host must be None: {_dashboard_host()!r}")
 
 
 def _check_dashboard_url_formatting(failures):
@@ -189,10 +181,12 @@ def _check_dashboard_url_formatting(failures):
         ),
         ("barehost", "http://barehost:8001/api/quota/providers"),
         ("host:9999", "http://host:9999/api/quota/providers"),
-        ("/path", "http://llamabox:8001/api/quota/providers"),
-        ("http://", "http://llamabox:8001/api/quota/providers"),
-        ("", "http://llamabox:8001/api/quota/providers"),
-        (None, "http://llamabox:8001/api/quota/providers"),
+        # No authority to talk to -> no URL, rather than silently substituting
+        # a baked-in fleet hostname.
+        ("/path", None),
+        ("http://", None),
+        ("", None),
+        (None, None),
     ]
     for host, exp in cases:
         if _dashboard_url(host) != exp:

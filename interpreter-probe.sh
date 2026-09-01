@@ -10,10 +10,13 @@
 # the python.org build (~50ms startup) and is where orjson/psutil are installed.
 # On Linux `py` doesn't exist, so we fall back to python3/python (already fast).
 # shellcheck disable=SC2034  # PY is consumed by the script that sources this file
-if command -v py >/dev/null 2>&1; then
+if command -v py >/dev/null 2>&1 && py -3 -c "" >/dev/null 2>&1; then
   PY="py -3"
-elif command -v python3 >/dev/null 2>&1; then
+elif command -v python3 >/dev/null 2>&1 && python3 -c "" >/dev/null 2>&1; then
   PY=python3
-else
+elif command -v python >/dev/null 2>&1; then
   PY=python
+else
+  PY=python3
 fi
+

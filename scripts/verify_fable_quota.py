@@ -1,7 +1,7 @@
 """Verify statusline_lib/fable_quota.py - Anthropic Fable weekly quota pool display.
 
 Covers:
-  - Host resolution: prefs override, schoen_fleet fallback, default llamabox:8001
+  - Host resolution: prefs/env override only, no default (unconfigured is off)
   - URL building: schemes, ports, defaults, path stripping
   - Payload extraction: ISO/unix timestamps, headroom/utilization formats,
     error states, malformed shapes, non-weekly isolation, malformed numeric values
@@ -155,29 +155,21 @@ def _check_safe_float(failures):
 
 
 def _check_dashboard_host_resolution(failures):
+    """Configuration is the only source; there is deliberately no default.
+
+    A default here was a specific fleet's hostname, so every unconfigured
+    machine issued HTTP requests to that box and rendered its quota figure.
+    Unset and empty must both resolve to None (field off, no request).
+    """
     with _Fixture() as fx:
-        if _dashboard_host() != "llamabox:8001":
-            failures.append(f"default host: got {_dashboard_host()!r}")
+        if _dashboard_host() is not None:
+            failures.append(f"unconfigured host must be None: {_dashboard_host()!r}")
         fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="fleetbox:9000")
         if _dashboard_host() != "fleetbox:9000":
             failures.append(f"env host override: got {_dashboard_host()!r}")
-        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="")
-        mock_fleet = types.ModuleType("schoen_fleet")
-        mock_fleet.get_host = lambda n: (
-            "resolved-fleet:8001" if n == "llamabox" else None
-        )
-        sys.modules["schoen_fleet"] = mock_fleet
-        try:
-            if _dashboard_host() != "resolved-fleet:8001":
-                failures.append(f"schoen_fleet resolution: got {_dashboard_host()!r}")
-            mock_fleet.get_host = lambda _n: None
-            if _dashboard_host() != "llamabox:8001":
-                failures.append("schoen_fleet None fallback mismatch")
-            mock_fleet.get_host = lambda _n: 1 / 0
-            if _dashboard_host() != "llamabox:8001":
-                failures.append("schoen_fleet error fallback mismatch")
-        finally:
-            sys.modules.pop("schoen_fleet", None)
+        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="   ")
+        if _dashboard_host() is not None:
+            failures.append(f"blank host must be None: {_dashboard_host()!r}")
 
 
 def _check_dashboard_url_formatting(failures):
@@ -189,10 +181,12 @@ def _check_dashboard_url_formatting(failures):
         ),
         ("barehost", "http://barehost:8001/api/quota/providers"),
         ("host:9999", "http://host:9999/api/quota/providers"),
-        ("/path", "http://llamabox:8001/api/quota/providers"),
-        ("http://", "http://llamabox:8001/api/quota/providers"),
-        ("", "http://llamabox:8001/api/quota/providers"),
-        (None, "http://llamabox:8001/api/quota/providers"),
+        # No authority to talk to -> no URL, rather than silently substituting
+        # a baked-in fleet hostname.
+        ("/path", None),
+        ("http://", None),
+        ("", None),
+        (None, None),
     ]
     for host, exp in cases:
         if _dashboard_url(host) != exp:
@@ -413,6 +407,10 @@ def _check_format_fable_quota(failures):
     with _Fixture() as fx:
         if format_fable_quota() != "":
             failures.append("cold cache must render empty")
+        # A configured host is required for anything to render (see
+        # _check_dashboard_host_resolution); the unconfigured case above
+        # already covers the no-host path.
+        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="testhost:8001")
         fx.write_cache(54.0, resets_at_unix=RESET_AT_MIDWEEK)
         out = format_fable_quota(show_pace=True)
         if "fable:" not in out or "54%" not in out:
@@ -432,6 +430,39 @@ def _check_format_fable_quota(failures):
             fx.set_env(**{k: v})
             if format_fable_quota() != "":
                 failures.append(f"{k}={v} must disable output")
+
+
+def _check_format_fable_quota_cold_with_configured_host(failures):
+    """A true cache miss (no cache file at all) with a *configured* host
+    must still render empty. Distinct from the unconfigured-host cold-cache
+    check above: that one returns '' because _dashboard_host() is None,
+    this one returns '' because _fable_quota_cached() itself misses."""
+    spawned = []
+    with _Fixture() as fx:
+        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="testhost:8001")
+        saved_spawn = fable_quota.maybe_spawn_refresh
+        fable_quota.maybe_spawn_refresh = lambda kind, arg: spawned.append((kind, arg))
+        try:
+            if format_fable_quota() != "":
+                failures.append("cold cache with configured host must render empty")
+            if spawned != [("fable-quota", None)]:
+                failures.append(
+                    f"cold cache with configured host must spawn a refresh: {spawned!r}"
+                )
+        finally:
+            fable_quota.maybe_spawn_refresh = saved_spawn
+
+
+def _check_refresh_with_unusable_host(failures):
+    """A configured host that _dashboard_url cannot resolve to any authority
+    (see the None cases in _check_dashboard_url_formatting) must short-circuit
+    refresh_fable_quota_cache before attempting any request or cache write,
+    rather than crash trying to fetch a None URL."""
+    with _Fixture() as fx:
+        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="/no-authority")
+        refresh_fable_quota_cache(None)
+        if fable_quota.read_raw_cache(_quota_cache_path()) is not None:
+            failures.append("unusable host must not write any cache entry")
 
 
 class _TestHttpHandler(http.server.BaseHTTPRequestHandler):
@@ -775,6 +806,7 @@ def _check_swr_cache_mechanics(failures):
 
 def _check_adapter_integrations(failures):
     with _Fixture() as fx:
+        fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="testhost:8001")
         fx.write_cache(54.0, resets_at_unix=RESET_AT_MIDWEEK)
 
         _l1, qwen_l2 = render_qwen_statusline(
@@ -796,7 +828,20 @@ def _check_adapter_integrations(failures):
         saved_stdin = sys.stdin
         sys.stdin = io.StringIO(
             json.dumps(
-                {"session_id": "s1", "cwd": "/cwd", "model": {"id": "claude-opus-4-8"}}
+                {
+                    "session_id": "s1",
+                    "cwd": "/cwd",
+                    "model": {"id": "claude-opus-4-8"},
+                    # Claude's own statusline gates fable on the session
+                    # carrying subscription rate_limits (see _render_line2);
+                    # the qwen/kimi adapters above have no such gate.
+                    "rate_limits": {
+                        "five_hour": {
+                            "used_percentage": 12.0,
+                            "resets_at": 9_999_999_999,
+                        },
+                    },
+                }
             )
         )
         buf = io.StringIO()
@@ -834,6 +879,8 @@ def main():
     _check_extract_malformed_payloads(failures)
     _check_pace_projection(failures)
     _check_format_fable_quota(failures)
+    _check_format_fable_quota_cold_with_configured_host(failures)
+    _check_refresh_with_unusable_host(failures)
     _check_fetch_and_refresh_with_http_server(failures)
     _check_failure_preserves_stale_value(failures)
     _check_observed_push_and_fallback(failures)

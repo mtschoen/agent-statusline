@@ -22,7 +22,8 @@ Keys (friendly name -> what it controls):
   verbose-pace  on|off              numeric pace deltas instead of the glyph
   beacon        on|off              render the progress-beacon ETA column
   fable-quota   on|off              Anthropic Fable weekly quota pool display
-  fable-quota-host <host[:port]>|off Quota dashboard fleet host (default llamabox:8001)
+  fable-quota-host <host[:port]>|off Quota dashboard host (REQUIRED; no default,
+                                    unset means the fable field is off)
   qwen-quota-5h    <calls>|off      Qwen 5h rolling plan-quota limit
   qwen-quota-weekly <calls>|off     Qwen weekly plan-quota limit
   qwen-quota-anchor <5h_used>,<wk_used>

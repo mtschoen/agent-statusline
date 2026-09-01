@@ -163,9 +163,15 @@ identity); fields are omitted when their data isn't available:
   well above the dashboard's own 60s cache instead of chasing freshness the
   datum cannot show. Renders empty when the dashboard is
   unreachable or when disabled via `STATUSLINE_FABLE_QUOTA=off` or
-  `STATUSLINE_FABLE_QUOTA_HOST=off`. Host defaults to `llamabox:8001` (or
-  schoen_fleet host registry when available) and is overridable via
-  `STATUSLINE_FABLE_QUOTA_HOST`.
+  `STATUSLINE_FABLE_QUOTA_HOST=off`. It also renders empty on any session whose
+  payload carries no `rate_limits` (enterprise and API-billed accounts, and the
+  Kimi/Qwen shims): the pool is subscription-scoped, so on those sessions the
+  dashboard's figure describes a different account than the one being billed.
+  **The host has no default and must be configured** --
+  `STATUSLINE_FABLE_QUOTA_HOST=<host[:port]>`, port 8001 if omitted. Unset means
+  the field is off and no request is made. This is deliberate: a baked-in
+  default was one fleet's own hostname, so every unconfigured machine silently
+  issued HTTP requests to that box and rendered its quota figure.
 - **Burn rate** - a live `$/min` spend rate over the trailing 5 minutes,
   aggregated across **all** local sessions (cross-machine, via the same walker
   roots the pace walk uses). Funny-money units, like the cost field. It is the

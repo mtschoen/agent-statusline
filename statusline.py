@@ -369,8 +369,16 @@ def _render_line2(flags, inputs):
         if inputs.rate_limits
         else format_agy_quota(inputs.agy_quota, show_pace=flags["quota_pace"])
     )
-    fable_summary = format_fable_quota(
-        inputs.rate_limits, show_pace=flags["quota_pace"]
+    # Subscription-scoped pool: gate it on the session actually having
+    # subscription rate limits, exactly as quota_summary does above. Enterprise
+    # and API-billed sessions get no `rate_limits` from Claude Code, so the
+    # dashboard's `fable` pool describes a different account than the one this
+    # session bills to -- it renders a permanent `fable: 0%` that is not merely
+    # uninformative but wrong.
+    fable_summary = (
+        format_fable_quota(inputs.rate_limits, show_pace=flags["quota_pace"])
+        if inputs.rate_limits
+        else ""
     )
     burnrate_summary = (
         format_burn_rate(inputs.rate_limits, show_target=flags["burn_target"])

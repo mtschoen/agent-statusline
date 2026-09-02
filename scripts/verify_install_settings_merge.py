@@ -310,59 +310,23 @@ def _check_installed_wrapper_resolves_shim(failures):
 
 
 def _check_interpreter_probe_broken_py_fallback(failures):
-    # Proves interpreter-probe.sh tests execution of `py` and falls back
-    # to a working python interpreter if `py` exists but fails (e.g. WindowsApps
-    # permissions error in CI / service contexts).
+    from scripts.verify_interpreter_probe import _check_broken_py_fallback
+
     bash = shutil.which("bash")
-    if bash is None:
-        return
-    with tempfile.TemporaryDirectory(prefix="statusline-mock-bin-") as bin_dir:
-        mock_py = os.path.join(bin_dir, "py")
-        with open(mock_py, "w", encoding=_TEXT_ENCODING) as f:
-            f.write("#!/bin/sh\nexit 101\n")
-        os.chmod(mock_py, 0o755)
-
-        env = dict(os.environ)
-        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-
-        probe_path = os.path.join(REPO, "interpreter-probe.sh")
-        result = subprocess.run(
-            [bash, "-c", f'source "{probe_path}" && echo "$PY"'],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-            check=False,
+    if bash is not None:
+        _check_broken_py_fallback(
+            failures, bash, os.path.join(REPO, "interpreter-probe.sh")
         )
-        if result.returncode != 0:
-            failures.append(
-                f"interpreter-probe.sh should succeed with broken py on PATH, "
-                f"got {result.returncode}: stderr={result.stderr!r}"
-            )
-        got_py = result.stdout.strip()
-        if got_py == "py -3":
-            failures.append(
-                "interpreter-probe.sh should not select 'py -3' when `py` fails"
-            )
-        if not got_py:
-            failures.append("interpreter-probe.sh should select a fallback interpreter")
 
-        # Now test when mock `py` succeeds
-        with open(mock_py, "w", encoding=_TEXT_ENCODING) as f:
-            f.write("#!/bin/sh\nexit 0\n")
-        result = subprocess.run(
-            [bash, "-c", f'source "{probe_path}" && echo "$PY"'],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-            check=False,
+
+def _check_interpreter_probe_cache_used_on_second_call(failures):
+    from scripts.verify_interpreter_probe import _check_cache_hit_skips_execution
+
+    bash = shutil.which("bash")
+    if bash is not None:
+        _check_cache_hit_skips_execution(
+            failures, bash, os.path.join(REPO, "interpreter-probe.sh")
         )
-        if result.returncode != 0 or result.stdout.strip() != "py -3":
-            failures.append(
-                f"interpreter-probe.sh should select 'py -3' when `py` succeeds, "
-                f"got {result.stdout.strip()!r} (exit {result.returncode})"
-            )
 
 
 def check(failures):
@@ -380,6 +344,7 @@ def check(failures):
     _check_install_antigravity_smoke(failures)
     _check_installed_wrapper_resolves_shim(failures)
     _check_interpreter_probe_broken_py_fallback(failures)
+    _check_interpreter_probe_cache_used_on_second_call(failures)
 
 
 def main():

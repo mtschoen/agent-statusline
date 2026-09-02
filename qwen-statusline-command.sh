@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Thin shim: forward stdin to qwen_statusline.py. All logic lives there.
 DIR="$(dirname "$0")"
+export STATUSLINE_PLATFORM="${STATUSLINE_PLATFORM:-qwen}"
 # shellcheck source=interpreter-probe.sh disable=SC1091
 source "$DIR/interpreter-probe.sh"
-exec $PY "$DIR/qwen_statusline.py"
+exec $PY "$DIR/qwen_statusline.py" "$@"

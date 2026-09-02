@@ -28,6 +28,7 @@ from .process_safe import spawn_detached
 # A refresher that died without clearing its marker stops suppressing
 # respawns after this long; a healthy one clears the marker on completion.
 _INFLIGHT_TTL_SECONDS = 120
+_INFLIGHT_HARD_CEILING_SECONDS = 10 * _INFLIGHT_TTL_SECONDS
 _INFLIGHT_PATH = os.path.join(app_dir(), ".statusline-refresh-inflight.json")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MAX_CONCURRENT_REFRESH = 8
@@ -71,15 +72,44 @@ def _resolve_psutil():
         return None
 
 
-def _pid_is_alive(pid):
+def _child_create_time(pid):
+    """Query create_time for `pid` via psutil; return None if unavailable or errored."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    ps = _resolve_psutil()
+    if ps is None:
+        return None
+    err_types = (AttributeError, TypeError, ValueError, OSError)
+    if getattr(ps, "Error", None) is not None:
+        err_types = (*err_types, ps.Error)
+    try:
+        proc = ps.Process(pid)
+        return float(proc.create_time())
+    except err_types:
+        return None
+
+
+def _pid_is_alive(pid, create_time=None):
     """Check if process `pid` is currently alive.
-    Returns True if running, False if dead/gone, None if undetermined."""
+    If `create_time` is provided and psutil is available, also verifies that the
+    process's creation time matches (to detect PID reuse).
+    Returns True if running (and create_time matches), False if dead/gone or
+    reused, None if undetermined."""
     if not isinstance(pid, int) or pid <= 0:
         return None
     ps = _resolve_psutil()
     if ps is not None:
-        with contextlib.suppress(AttributeError, TypeError, ValueError, OSError):
-            return bool(ps.pid_exists(pid))
+        err_types = (AttributeError, TypeError, ValueError, OSError)
+        if getattr(ps, "Error", None) is not None:
+            err_types = (*err_types, ps.Error)
+        with contextlib.suppress(*err_types):
+            if not ps.pid_exists(pid):
+                return False
+            if create_time is not None:
+                proc = ps.Process(pid)
+                if abs(float(proc.create_time()) - float(create_time)) > 1.0:
+                    return False
+            return True
     try:
         os.kill(pid, 0)
         return True
@@ -120,12 +150,16 @@ def _inflight_key(kind, argument):
 
 def _is_claim_live(entry, now):
     """Determine if an inflight claim entry is still active.
-    If a PID is recorded, check if that process is still alive.
-    If the PID is dead, the claim is expired regardless of TTL.
+    If older than _INFLIGHT_HARD_CEILING_SECONDS, the claim is expired
+    regardless of process state.
+    If a PID is recorded, check if that process is still alive and matches any
+    recorded create_time (detecting PID reuse).
+    If the PID is dead or reused, the claim is expired regardless of TTL.
     If the PID cannot be checked (or is not recorded), fall back to TTL."""
     if isinstance(entry, (int, float)):
         ts = float(entry)
         pid = None
+        create_time = None
     elif isinstance(entry, dict):
         try:
             ts = float(entry.get("ts", 0))
@@ -133,11 +167,16 @@ def _is_claim_live(entry, now):
             return False
         raw_pid = entry.get("pid")
         pid = raw_pid if isinstance(raw_pid, int) and raw_pid > 0 else None
+        raw_ctime = entry.get("create_time")
+        create_time = float(raw_ctime) if isinstance(raw_ctime, (int, float)) else None
     else:
         return False
 
+    if (now - ts) >= _INFLIGHT_HARD_CEILING_SECONDS:
+        return False
+
     if pid is not None:
-        alive = _pid_is_alive(pid)
+        alive = _pid_is_alive(pid, create_time=create_time)
         if alive is True:
             return True
         if alive is False:
@@ -166,16 +205,24 @@ def _claim_inflight(kind, argument):
     return True
 
 
-def _record_inflight_pid(kind, argument, pid):
-    """Store the spawned child PID in the existing inflight claim."""
+def _record_inflight_pid(kind, argument, pid, create_time=None):
+    """Store the spawned child PID (and optional create_time) in the existing
+    inflight claim."""
     marks = _read_inflight()
     key = _inflight_key(kind, argument)
     if key in marks:
         entry = marks[key]
         if isinstance(entry, dict):
             entry["pid"] = pid
+            if create_time is not None:
+                entry["create_time"] = create_time
+            else:
+                entry.pop("create_time", None)
         else:
-            marks[key] = {"ts": entry, "pid": pid}
+            new_entry = {"ts": entry, "pid": pid}
+            if create_time is not None:
+                new_entry["create_time"] = create_time
+            marks[key] = new_entry
         _write_inflight(marks)
 
 
@@ -236,7 +283,8 @@ def maybe_spawn_refresh(kind, argument):
         proc = spawn_detached([sys.executable, "-c", _child_snippet(kind, argument)])
         pid = getattr(proc, "pid", None)
         if isinstance(pid, int) and pid > 0:
-            _record_inflight_pid(kind, argument, pid)
+            create_time = _child_create_time(pid)
+            _record_inflight_pid(kind, argument, pid, create_time)
     except OSError:
         _clear_inflight(kind, argument)
         return False

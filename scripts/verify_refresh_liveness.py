@@ -1,21 +1,8 @@
 """Verify statusline_lib/refresh.py PID liveness tracking, claim lifecycle,
-concurrency limits, and watchdog timeout deadlines.
-
-Covers:
-  - Regression test for issue #54: a slow refresher running longer than
-    _INFLIGHT_TTL_SECONDS must NOT spawn duplicate children while its PID is
-    alive. When the process dies, the claim is pruned and respawns.
-  - _pid_is_alive branches across psutil availability, os.kill success,
-    ProcessLookupError, PermissionError, and general OSError.
-  - _is_claim_live across float/int timestamps, dict entries with/without PID,
-    dead PIDs, alive PIDs, and unparseable entries.
-  - _record_inflight_pid across dict and numeric legacy entries.
-  - _MAX_CONCURRENT_REFRESH cap: rejecting spawns once the cap is reached.
-  - run_refresh self-deadline watchdog and _timeout_abort.
-
-Run from anywhere; imports from `agent-statusline` by path.
+concurrency limits, watchdog timeout deadlines, and PID reuse detection.
 """
 
+import contextlib
 import os
 import sys
 import tempfile
@@ -28,271 +15,328 @@ _WIN_START = 1_748_000_000.0
 _NOW = _WIN_START + 7200.0
 
 
-class _MockChildProcess:
-    def __init__(self, pid):
-        self.pid = pid
-
-
-def _pin_refresh(tmp, now):
-    marker_path = os.path.join(tmp, "inflight.json")
+@contextlib.contextmanager
+def _pinned_refresh(tmp, now):
     saved = (refresh._INFLIGHT_PATH, refresh._now_unix, refresh.spawn_detached)
-    refresh._INFLIGHT_PATH = marker_path
+    refresh._INFLIGHT_PATH = os.path.join(tmp, "inflight.json")
     refresh._now_unix = lambda: now
-    return saved
-
-
-def _restore_refresh(saved):
-    (refresh._INFLIGHT_PATH, refresh._now_unix, refresh.spawn_detached) = saved
+    try:
+        yield
+    finally:
+        refresh._INFLIGHT_PATH, refresh._now_unix, refresh.spawn_detached = saved
 
 
 def _check_slow_refresher_pid_liveness(failures):
-    """Regression test for issue #54: a slow refresher running longer than
-    _INFLIGHT_TTL_SECONDS must NOT allow duplicate spawns while its PID is
-    alive. When the process dies, the claim is pruned and respawns."""
-    spawned = []
-    fake_pid = 98765
-    alive_pids = {fake_pid}
-
-    with tempfile.TemporaryDirectory() as tmp:
-        saved = _pin_refresh(tmp, _NOW)
+    """Issue #54: slow refresher running longer than TTL debounces while PID is alive."""
+    spawned, fake_pid, alive_pids = [], 98765, {98765}
+    with tempfile.TemporaryDirectory() as tmp, _pinned_refresh(tmp, _NOW):
         saved_pid_alive = getattr(refresh, "_pid_is_alive", None)
-        refresh._pid_is_alive = lambda pid: pid in alive_pids
-        refresh.spawn_detached = lambda command: (
-            spawned.append(command) or _MockChildProcess(fake_pid)
+        refresh._pid_is_alive = lambda pid, **kw: pid in alive_pids
+        refresh.spawn_detached = lambda cmd: (
+            spawned.append(cmd) or types.SimpleNamespace(pid=fake_pid)
         )
         try:
-            first = refresh.maybe_spawn_refresh("session-count", "/my/cwd")
-            # Time advances past the 120s TTL window, but the child process is still alive.
+            r1 = refresh.maybe_spawn_refresh("session-count", "/cwd")
             refresh._now_unix = lambda: _NOW + refresh._INFLIGHT_TTL_SECONDS + 50
-            second = refresh.maybe_spawn_refresh("session-count", "/my/cwd")
-            third = refresh.maybe_spawn_refresh("session-count", "/my/cwd")
-            # Child process terminates / exits
+            r2 = refresh.maybe_spawn_refresh("session-count", "/cwd")
+            r3 = refresh.maybe_spawn_refresh("session-count", "/cwd")
             alive_pids.remove(fake_pid)
-            fourth = refresh.maybe_spawn_refresh("session-count", "/my/cwd")
+            r4 = refresh.maybe_spawn_refresh("session-count", "/cwd")
         finally:
-            _restore_refresh(saved)
-            if saved_pid_alive is not None:
-                refresh._pid_is_alive = saved_pid_alive
-            elif hasattr(refresh, "_pid_is_alive"):
-                delattr(refresh, "_pid_is_alive")
+            refresh._pid_is_alive = saved_pid_alive
 
-    if (first, second, third, fourth) != (True, False, False, True):
+    if (r1, r2, r3, r4) != (True, False, False, True) or len(spawned) != 2:
         failures.append(
-            f"slow refresher debounce: expected (True, False, False, True), got "
-            f"{(first, second, third, fourth)!r}"
+            f"slow refresher debounce failed: {(r1, r2, r3, r4)!r}, {len(spawned)}"
         )
-    if len(spawned) != 2:
-        failures.append(f"slow refresher spawned {len(spawned)} children instead of 2")
+
+
+def _check_reused_pid_create_time_mismatch(failures):
+    """Issue #56: mismatched create_time spawns (reused PID); matching debounces."""
+    reused_pid, created_time = 54321, 100.0
+    current_ctime = {"ctime": 200.0}
+    fake_psutil = types.SimpleNamespace(
+        pid_exists=lambda pid: pid == reused_pid,
+        Process=lambda pid: types.SimpleNamespace(
+            create_time=lambda: current_ctime["ctime"]
+        ),
+        Error=Exception,
+    )
+    with tempfile.TemporaryDirectory() as tmp, _pinned_refresh(tmp, _NOW):
+        saved_resolve = refresh._resolve_psutil
+        refresh._resolve_psutil = lambda: fake_psutil
+        refresh.spawn_detached = lambda cmd: types.SimpleNamespace(pid=99999)
+        try:
+            k1 = refresh._inflight_key("session-count", "/cwd")
+            refresh._write_inflight(
+                {
+                    k1: {
+                        "ts": _NOW - 30.0,
+                        "pid": reused_pid,
+                        "create_time": created_time,
+                    }
+                }
+            )
+            first = refresh.maybe_spawn_refresh("session-count", "/cwd")
+
+            current_ctime["ctime"] = created_time
+            k2 = refresh._inflight_key("git-ref", "/cwd")
+            refresh._write_inflight(
+                {
+                    k2: {
+                        "ts": _NOW - 30.0,
+                        "pid": reused_pid,
+                        "create_time": created_time,
+                    }
+                }
+            )
+            second = refresh.maybe_spawn_refresh("git-ref", "/cwd")
+        finally:
+            refresh._resolve_psutil = saved_resolve
+
+    if first is not True or second is not False:
+        failures.append(f"reused pid check failed: first={first!r}, second={second!r}")
+
+
+def _check_hard_ceiling_pruning(failures):
+    """Issue #56: claim older than _INFLIGHT_HARD_CEILING_SECONDS is pruned even if PID is alive."""
+    fake_pid, ctime = 77777, 100.0
+    fake_psutil = types.SimpleNamespace(
+        pid_exists=lambda pid: pid == fake_pid,
+        Process=lambda pid: types.SimpleNamespace(create_time=lambda: ctime),
+        Error=Exception,
+    )
+    with tempfile.TemporaryDirectory() as tmp, _pinned_refresh(tmp, _NOW):
+        saved_resolve = refresh._resolve_psutil
+        refresh._resolve_psutil = lambda: fake_psutil
+        refresh.spawn_detached = lambda cmd: types.SimpleNamespace(pid=88888)
+        try:
+            hard_ceiling = refresh._INFLIGHT_HARD_CEILING_SECONDS
+            k = refresh._inflight_key("session-count", "/cwd")
+            refresh._write_inflight(
+                {
+                    k: {
+                        "ts": _NOW - hard_ceiling - 10.0,
+                        "pid": fake_pid,
+                        "create_time": ctime,
+                    }
+                }
+            )
+            res = refresh.maybe_spawn_refresh("session-count", "/cwd")
+        finally:
+            refresh._resolve_psutil = saved_resolve
+
+    if res is not True:
+        failures.append("claim past hard ceiling must be pruned")
 
 
 def _check_pid_is_alive_branches(failures):
-    """Exercise _pid_is_alive across valid and invalid PIDs, psutil and
-    os.kill fallbacks."""
-    # Invalid PIDs
+    """Exercise _pid_is_alive across valid/invalid PIDs, psutil, and os.kill."""
     for invalid in (None, 0, -1, "123", 12.5):
         if refresh._pid_is_alive(invalid) is not None:
             failures.append(f"_pid_is_alive({invalid!r}) must return None")
 
-    # psutil branch: exists and does not exist
+    class _Proc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            if self.pid == 333:
+                raise OSError("error")
+            return 100.0
+
     fake_psutil = types.SimpleNamespace(
-        pid_exists=lambda pid: pid == 111,
+        pid_exists=lambda pid: pid in (111, 333),
+        Process=_Proc,
+        Error=Exception,
     )
     saved_resolve = refresh._resolve_psutil
     try:
         refresh._resolve_psutil = lambda: fake_psutil
-        if refresh._pid_is_alive(111) is not True:
-            failures.append("_pid_is_alive with psutil True failed")
-        if refresh._pid_is_alive(222) is not False:
-            failures.append("_pid_is_alive with psutil False failed")
+        for pid, ctime, expected, desc in (
+            (111, None, True, "psutil True"),
+            (111, 100.0, True, "matching create_time"),
+            (111, 200.0, False, "mismatched create_time"),
+            (222, None, False, "psutil False"),
+        ):
+            if refresh._pid_is_alive(pid, create_time=ctime) is not expected:
+                failures.append(f"_pid_is_alive {desc} failed")
 
-        def raising_pid_exists(pid):
-            raise OSError("psutil error")
-
-        fake_psutil.pid_exists = raising_pid_exists
-        # Raising psutil falls back to os.kill
         saved_kill = os.kill
         try:
             os.kill = lambda pid, sig: None
-            if refresh._pid_is_alive(111) is not True:
+            if refresh._pid_is_alive(333, create_time=100.0) is not True:
                 failures.append("_pid_is_alive fallback on psutil error failed")
         finally:
             os.kill = saved_kill
     finally:
         refresh._resolve_psutil = saved_resolve
 
-    # psutil is None -> os.kill fallbacks
     try:
         refresh._resolve_psutil = lambda: None
         saved_kill = os.kill
         try:
-            # os.kill succeeds
             os.kill = lambda pid, sig: None
-            if refresh._pid_is_alive(123) is not True:
-                failures.append("_pid_is_alive with os.kill success failed")
+            if (
+                refresh._pid_is_alive(123) is not True
+                or refresh._pid_is_alive(123, create_time=100.0) is not True
+            ):
+                failures.append("_pid_is_alive without psutil failed")
 
-            # ProcessLookupError
-            def lookup_error(pid, sig):
-                raise ProcessLookupError()
+            for exc, expected, name in (
+                (ProcessLookupError(), False, "ProcessLookupError"),
+                (PermissionError(), True, "PermissionError"),
+                (OSError("error"), None, "OSError"),
+            ):
 
-            os.kill = lookup_error
-            if refresh._pid_is_alive(123) is not False:
-                failures.append(
-                    "_pid_is_alive with ProcessLookupError must return False"
-                )
+                def _raise(pid, sig, e=exc):
+                    raise e
 
-            # PermissionError
-            def perm_error(pid, sig):
-                raise PermissionError()
-
-            os.kill = perm_error
-            if refresh._pid_is_alive(123) is not True:
-                failures.append("_pid_is_alive with PermissionError must return True")
-
-            # Other OSError
-            def other_os_error(pid, sig):
-                raise OSError("mystery error")
-
-            os.kill = other_os_error
-            if refresh._pid_is_alive(123) is not None:
-                failures.append("_pid_is_alive with general OSError must return None")
+                os.kill = _raise
+                if refresh._pid_is_alive(123) is not expected:
+                    failures.append(f"_pid_is_alive with {name} failed")
         finally:
             os.kill = saved_kill
     finally:
         refresh._resolve_psutil = saved_resolve
 
 
+def _check_child_create_time_branches(failures):
+    """Exercise _child_create_time across valid/invalid inputs and error paths."""
+    for invalid in (None, 0, -1, "123", 12.5):
+        if refresh._child_create_time(invalid) is not None:
+            failures.append(f"_child_create_time({invalid!r}) must return None")
+
+    saved_resolve = refresh._resolve_psutil
+    try:
+        refresh._resolve_psutil = lambda: None
+        if refresh._child_create_time(123) is not None:
+            failures.append("_child_create_time with psutil None must return None")
+
+        class _Proc:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def create_time(self):
+                if self.pid == 999:
+                    raise OSError("fail")
+                return 12345.67
+
+        refresh._resolve_psutil = lambda: types.SimpleNamespace(
+            Process=_Proc, Error=Exception
+        )
+        ctime = refresh._child_create_time(123)
+        if ctime != 12345.67 or refresh._child_create_time(999) is not None:
+            failures.append(f"unexpected _child_create_time result: {ctime!r}")
+    finally:
+        refresh._resolve_psutil = saved_resolve
+
+
 def _check_is_claim_live_branches(failures):
-    """Exercise _is_claim_live across entry representations."""
+    """Exercise _is_claim_live across entry representations and TTL/ceiling states."""
     now = 1000.0
+    h_ceil = refresh._INFLIGHT_HARD_CEILING_SECONDS
 
-    # Numeric entry
-    if not refresh._is_claim_live(950.0, now):
-        failures.append("recent numeric entry should be live")
-    if refresh._is_claim_live(800.0, now):
-        failures.append("old numeric entry should be expired")
+    cases = [
+        (950.0, True, "recent numeric"),
+        (800.0, False, "old numeric"),
+        (now - h_ceil - 5, False, "hard-ceiling numeric"),
+        ({"ts": 950.0}, True, "recent dict without PID"),
+        ({"ts": 800.0}, False, "old dict without PID"),
+        ({"ts": now - h_ceil - 5}, False, "hard-ceiling dict without PID"),
+        ({"ts": 950.0, "create_time": "bad"}, True, "bad create_time fallback"),
+        *(
+            (inv, False, f"invalid {inv!r}")
+            for inv in (None, "bad", [], {"ts": "not-a-number"})
+        ),
+    ]
+    for entry, expected, desc in cases:
+        if refresh._is_claim_live(entry, now) is not expected:
+            failures.append(f"_is_claim_live: {desc} expected {expected}")
 
-    # Dict entry without PID
-    if not refresh._is_claim_live({"ts": 950.0}, now):
-        failures.append("recent dict entry without PID should be live")
-    if refresh._is_claim_live({"ts": 800.0}, now):
-        failures.append("old dict entry without PID should be expired")
-
-    # Invalid entries
-    for invalid in (None, "bad", [], {"ts": "not-a-number"}):
-        if refresh._is_claim_live(invalid, now):
-            failures.append(f"invalid entry {invalid!r} must not be live")
-
-    # Dict entry with PID
     saved_alive = refresh._pid_is_alive
     try:
-        # Alive PID keeps claim live past TTL
-        refresh._pid_is_alive = lambda pid: True
-        if not refresh._is_claim_live({"ts": 100.0, "pid": 42}, now):
-            failures.append("entry with alive PID must be live even past TTL")
-
-        # Dead PID expires claim even within TTL
-        refresh._pid_is_alive = lambda pid: False
-        if refresh._is_claim_live({"ts": 999.0, "pid": 42}, now):
-            failures.append("entry with dead PID must not be live")
-
-        # Undetermined PID falls back to TTL
-        refresh._pid_is_alive = lambda pid: None
-        if not refresh._is_claim_live({"ts": 950.0, "pid": 42}, now):
-            failures.append("entry with undetermined PID within TTL must be live")
-        if refresh._is_claim_live({"ts": 800.0, "pid": 42}, now):
-            failures.append("entry with undetermined PID past TTL must be expired")
+        for alive_val, entry, expected, desc in (
+            (True, {"ts": 100.0, "pid": 42}, True, "alive PID past TTL"),
+            (
+                True,
+                {"ts": now - h_ceil - 10, "pid": 42},
+                False,
+                "alive PID past hard ceiling",
+            ),
+            (False, {"ts": 999.0, "pid": 42}, False, "dead PID"),
+            (None, {"ts": 950.0, "pid": 42}, True, "undetermined PID within TTL"),
+            (None, {"ts": 800.0, "pid": 42}, False, "undetermined PID past TTL"),
+        ):
+            refresh._pid_is_alive = lambda pid, val=alive_val, **kw: val
+            if refresh._is_claim_live(entry, now) is not expected:
+                failures.append(f"_is_claim_live with {desc} failed")
     finally:
         refresh._pid_is_alive = saved_alive
 
 
 def _check_record_inflight_pid(failures):
-    """_record_inflight_pid updates dict entries, promotes legacy numeric
-    entries, and safely ignores missing keys."""
-    with tempfile.TemporaryDirectory() as tmp:
-        saved = _pin_refresh(tmp, _NOW)
-        try:
-            # Missing key -> no-op
-            refresh._record_inflight_pid("pace-hourly", _WIN_START, 1234)
-            if refresh._read_inflight() != {}:
-                failures.append(
-                    "_record_inflight_pid on missing key must not create an entry"
-                )
+    """_record_inflight_pid updates dict entries, promotes numeric entries, and safely handles create_time."""
+    with tempfile.TemporaryDirectory() as tmp, _pinned_refresh(tmp, _NOW):
+        refresh._record_inflight_pid("pace-hourly", _WIN_START, 1234)
+        if refresh._read_inflight() != {}:
+            failures.append("_record_inflight_pid on missing key must be no-op")
 
-            # Existing dict entry -> updates pid
-            refresh._claim_inflight("pace-hourly", _WIN_START)
-            refresh._record_inflight_pid("pace-hourly", _WIN_START, 5678)
-            marks = refresh._read_inflight()
-            key = refresh._inflight_key("pace-hourly", _WIN_START)
-            entry = marks.get(key)
-            pid_val = entry.get("pid") if isinstance(entry, dict) else None
-            if pid_val != 5678:
-                failures.append(f"dict pid not updated: {marks!r}")
+        refresh._claim_inflight("pace-hourly", _WIN_START)
+        k = refresh._inflight_key("pace-hourly", _WIN_START)
+        for pid, ctime, expected_ct, name in (
+            (5678, 123.45, 123.45, "update pid/ctime"),
+            (5679, None, None, "clear ctime on None"),
+        ):
+            refresh._record_inflight_pid(
+                "pace-hourly", _WIN_START, pid, create_time=ctime
+            )
+            e = refresh._read_inflight().get(k, {})
+            if e.get("pid") != pid or e.get("create_time") != expected_ct:
+                failures.append(f"_record_inflight_pid {name} failed: {e!r}")
 
-            # Legacy numeric entry -> promoted to dict with pid
-            marks[key] = 12345.0
-            refresh._write_inflight(marks)
-            refresh._record_inflight_pid("pace-hourly", _WIN_START, 9999)
-            marks = refresh._read_inflight()
-            entry = marks.get(key)
+        for ctime, expected_ct, name in (
+            (987.65, 987.65, "promote numeric with ctime"),
+            (None, None, "promote numeric without ctime"),
+        ):
+            refresh._write_inflight({k: 12345.0})
+            refresh._record_inflight_pid(
+                "pace-hourly", _WIN_START, 9999, create_time=ctime
+            )
+            e = refresh._read_inflight().get(k, {})
             if (
-                not isinstance(entry, dict)
-                or entry.get("pid") != 9999
-                or entry.get("ts") != 12345.0
+                e.get("pid") != 9999
+                or e.get("ts") != 12345.0
+                or e.get("create_time") != expected_ct
             ):
-                failures.append(f"numeric entry not promoted to dict: {marks!r}")
-        finally:
-            _restore_refresh(saved)
+                failures.append(f"_record_inflight_pid {name} failed: {e!r}")
 
 
 def _check_max_concurrent_refresh_cap(failures):
     """_claim_inflight respects _MAX_CONCURRENT_REFRESH."""
-    with tempfile.TemporaryDirectory() as tmp:
-        saved = _pin_refresh(tmp, _NOW)
-        try:
-            for i in range(refresh._MAX_CONCURRENT_REFRESH):
-                claimed = refresh._claim_inflight(f"kind-{i}", _WIN_START)
-                if not claimed:
-                    failures.append(f"failed to claim slot {i}")
-            # Next claim exceeds cap -> False
-            overflow = refresh._claim_inflight("overflow-kind", _WIN_START)
-            if overflow:
-                failures.append(
-                    "claim beyond _MAX_CONCURRENT_REFRESH should return False"
-                )
-        finally:
-            _restore_refresh(saved)
+    with tempfile.TemporaryDirectory() as tmp, _pinned_refresh(tmp, _NOW):
+        for i in range(refresh._MAX_CONCURRENT_REFRESH):
+            if not refresh._claim_inflight(f"kind-{i}", _WIN_START):
+                failures.append(f"failed to claim slot {i}")
+        if refresh._claim_inflight("overflow-kind", _WIN_START):
+            failures.append("claim beyond cap should return False")
 
 
-def _check_watchdog_timeout_abort(failures):
-    """_timeout_abort clears the inflight marker and exits with code 1."""
-    with tempfile.TemporaryDirectory() as tmp:
-        saved = _pin_refresh(tmp, _NOW)
+def _check_watchdog_and_deadline(failures):
+    """_timeout_abort clears marker and exits; run_refresh with disabled deadline runs clean."""
+    with tempfile.TemporaryDirectory() as tmp, _pinned_refresh(tmp, _NOW):
         exited = []
         saved_exit = os._exit
         try:
             os._exit = lambda code: exited.append(code)
             refresh._claim_inflight("pace-hourly", _WIN_START)
             refresh._timeout_abort("pace-hourly", _WIN_START)
-            if refresh._read_inflight() != {}:
-                failures.append("_timeout_abort did not clear inflight marker")
-            if exited != [1]:
-                failures.append(
-                    f"_timeout_abort exit code: expected [1], got {exited!r}"
-                )
-        finally:
-            os._exit = saved_exit
-            _restore_refresh(saved)
-
-
-def _check_run_refresh_deadline_disabled(failures):
-    """run_refresh with deadline=0 or None runs without error."""
-    with tempfile.TemporaryDirectory() as tmp:
-        saved = _pin_refresh(tmp, _NOW)
-        try:
+            if refresh._read_inflight() != {} or exited != [1]:
+                failures.append(f"_timeout_abort failed: exited={exited!r}")
             refresh.run_refresh("fable-quota", 0, deadline=0)
             refresh.run_refresh("fable-quota", 0, deadline=None)
         finally:
-            _restore_refresh(saved)
+            os._exit = saved_exit
 
 
 def _check_resolve_psutil_fallback(failures):
@@ -304,11 +348,8 @@ def _check_resolve_psutil_fallback(failures):
     real_psutil = sys.modules.get("psutil")
     try:
         sys.modules["psutil"] = None  # type: ignore[assignment]
-        none_res = refresh._resolve_psutil()
-        if none_res is not None:
-            failures.append(
-                f"_resolve_psutil with ImportError must return None; got {none_res!r}"
-            )
+        if refresh._resolve_psutil() is not None:
+            failures.append("_resolve_psutil with ImportError must return None")
     finally:
         if real_psutil is not None:
             sys.modules["psutil"] = real_psutil
@@ -318,14 +359,19 @@ def _check_resolve_psutil_fallback(failures):
 
 def main():
     failures = []
-    _check_slow_refresher_pid_liveness(failures)
-    _check_pid_is_alive_branches(failures)
-    _check_is_claim_live_branches(failures)
-    _check_record_inflight_pid(failures)
-    _check_max_concurrent_refresh_cap(failures)
-    _check_watchdog_timeout_abort(failures)
-    _check_run_refresh_deadline_disabled(failures)
-    _check_resolve_psutil_fallback(failures)
+    for check in (
+        _check_slow_refresher_pid_liveness,
+        _check_reused_pid_create_time_mismatch,
+        _check_hard_ceiling_pruning,
+        _check_pid_is_alive_branches,
+        _check_child_create_time_branches,
+        _check_is_claim_live_branches,
+        _check_record_inflight_pid,
+        _check_max_concurrent_refresh_cap,
+        _check_watchdog_and_deadline,
+        _check_resolve_psutil_fallback,
+    ):
+        check(failures)
 
     if failures:
         for f in failures:

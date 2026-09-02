@@ -331,6 +331,8 @@ def _count_via_psutil(target_cwd, psutil):
     for pid, name, p in candidates:
         try:
             cmdline = p.cmdline()
+            if not _is_agent_runtime(name, cmdline):
+                continue
             pcwd = p.cwd()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue

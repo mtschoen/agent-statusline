@@ -19,6 +19,7 @@ import importlib
 import json
 import os
 import sys
+import threading
 import time
 
 from .base import app_dir, platform_name
@@ -29,6 +30,8 @@ from .process_safe import spawn_detached
 _INFLIGHT_TTL_SECONDS = 120
 _INFLIGHT_PATH = os.path.join(app_dir(), ".statusline-refresh-inflight.json")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MAX_CONCURRENT_REFRESH = 8
+_REFRESH_TIMEOUT_SECONDS = 60
 
 # Per-render spawn instrumentation: each maybe_spawn_refresh call's
 # (kind, elapsed_seconds), consumed by statusline.py's slow-render breakdown
@@ -58,8 +61,38 @@ def _now_unix():
     return time.time()
 
 
+def _resolve_psutil():
+    """Import psutil if available; return None if not installed."""
+    try:
+        import psutil
+
+        return psutil
+    except ImportError:
+        return None
+
+
+def _pid_is_alive(pid):
+    """Check if process `pid` is currently alive.
+    Returns True if running, False if dead/gone, None if undetermined."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    ps = _resolve_psutil()
+    if ps is not None:
+        with contextlib.suppress(AttributeError, TypeError, ValueError, OSError):
+            return bool(ps.pid_exists(pid))
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+
+
 def _read_inflight():
-    """The inflight marker dict ({"kind:argument": started_at_unix}); {} when
+    """The inflight marker dict ({"kind:argument": {"ts": started_at_unix, "pid": pid}}); {} when
     absent, unreadable, or not a dict (a torn write must read as "nothing in
     flight", never crash the render)."""
     try:
@@ -85,21 +118,65 @@ def _inflight_key(kind, argument):
     return f"{kind}:{argument}"
 
 
+def _is_claim_live(entry, now):
+    """Determine if an inflight claim entry is still active.
+    If a PID is recorded, check if that process is still alive.
+    If the PID is dead, the claim is expired regardless of TTL.
+    If the PID cannot be checked (or is not recorded), fall back to TTL."""
+    if isinstance(entry, (int, float)):
+        ts = float(entry)
+        pid = None
+    elif isinstance(entry, dict):
+        try:
+            ts = float(entry.get("ts", 0))
+        except (ValueError, TypeError):
+            return False
+        raw_pid = entry.get("pid")
+        pid = raw_pid if isinstance(raw_pid, int) and raw_pid > 0 else None
+    else:
+        return False
+
+    if pid is not None:
+        alive = _pid_is_alive(pid)
+        if alive is True:
+            return True
+        if alive is False:
+            return False
+
+    return (now - ts) < _INFLIGHT_TTL_SECONDS
+
+
 def _claim_inflight(kind, argument):
     """Record (kind, argument) as in flight; False when a live claim already
-    exists. Claims older than _INFLIGHT_TTL_SECONDS are pruned on the way."""
+    exists or the concurrency cap is reached. Claims for dead processes or
+    older than _INFLIGHT_TTL_SECONDS are pruned on the way."""
     now = _now_unix()
     marks = {
-        key: started
-        for key, started in _read_inflight().items()
-        if now - started < _INFLIGHT_TTL_SECONDS
+        key: entry
+        for key, entry in _read_inflight().items()
+        if _is_claim_live(entry, now)
     }
     key = _inflight_key(kind, argument)
     if key in marks:
         return False
-    marks[key] = now
+    if len(marks) >= _MAX_CONCURRENT_REFRESH:
+        return False
+    marks[key] = {"ts": now, "pid": None}
     _write_inflight(marks)
     return True
+
+
+def _record_inflight_pid(kind, argument, pid):
+    """Store the spawned child PID in the existing inflight claim."""
+    marks = _read_inflight()
+    key = _inflight_key(kind, argument)
+    if key in marks:
+        entry = marks[key]
+        if isinstance(entry, dict):
+            entry["pid"] = pid
+        else:
+            marks[key] = {"ts": entry, "pid": pid}
+        _write_inflight(marks)
 
 
 def _clear_inflight(kind, argument):
@@ -156,7 +233,10 @@ def maybe_spawn_refresh(kind, argument):
         return False
     started = time.monotonic()
     try:
-        spawn_detached([sys.executable, "-c", _child_snippet(kind, argument)])
+        proc = spawn_detached([sys.executable, "-c", _child_snippet(kind, argument)])
+        pid = getattr(proc, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            _record_inflight_pid(kind, argument, pid)
     except OSError:
         _clear_inflight(kind, argument)
         return False
@@ -181,16 +261,34 @@ _REFRESHER_MODULES = {
 }
 
 
-def run_refresh(kind, argument):
+def _timeout_abort(kind, argument):
+    """Abort a refresh run that exceeded its deadline and clear the marker."""
+    _clear_inflight(kind, argument)
+    os._exit(1)
+
+
+def run_refresh(kind, argument, *, deadline=_REFRESH_TIMEOUT_SECONDS):
     """Detached-child entry point: recompute cache `kind`, then clear the
-    inflight marker so the next stale render may spawn again."""
+    inflight marker so the next stale render may spawn again.
+
+    Enforces a hard self-deadline (deadline seconds) via a watchdog timer so a
+    pathologically slow or wedged refresh child aborts and clears its marker
+    before outliving the next spawn window.
+    """
     target = _REFRESHER_MODULES.get(kind)
     if target is None:
         raise ValueError(f"unknown refresh kind: {kind!r}")
     module_name, attr = target
     module = importlib.import_module(f".{module_name}", package=__package__)
     refresher = getattr(module, attr)
+    timer = None
+    if deadline and deadline > 0:
+        timer = threading.Timer(deadline, _timeout_abort, args=(kind, argument))
+        timer.daemon = True
+        timer.start()
     try:
         refresher(argument)
     finally:
+        if timer is not None:
+            timer.cancel()
         _clear_inflight(kind, argument)

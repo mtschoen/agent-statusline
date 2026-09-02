@@ -316,6 +316,8 @@ def check_count_via_psutil_access_denied(failures):
         _FakeSnapProc(40, 1, "explorer.exe", 100.0),
         _FakeSnapProc(50, 40, "cmd.exe", 200.0),
         _FakeSnapProc(90, 50, "claude", 250.0, denied, denied),
+        _FakeSnapProc(92, 50, "claude", 250.0, ["claude"], denied),
+        _FakeSnapProc(95, 50, "node", 260.0, ["node", "webpack.js"], denied),
         _FakeSnapProc(100, 50, "claude", 300.0, ["claude"], target_cwd),
     ]
     count = sessions_mod._count_via_psutil(target_cwd, _make_fake_psutil(procs))

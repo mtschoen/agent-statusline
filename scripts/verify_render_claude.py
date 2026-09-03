@@ -117,16 +117,18 @@ def check_render_takes_the_walk_it_is_given(failures):
 
 
 def check_context_usage_sums_the_three_usage_fields(failures):
-    used, window = context_usage(_payload())
-    if (used, window) != (40110, 200000):
-        failures.append(f"context_usage returned {(used, window)}")
+    used, window, current_usage = context_usage(_payload())
+    expected_usage = _payload()["context_window"]["current_usage"]
+    if (used, window, current_usage) != (40110, 200000, expected_usage):
+        failures.append(f"context_usage returned {(used, window, current_usage)}")
 
 
 def check_context_usage_defaults_window_when_absent(failures):
-    used, window = context_usage({})
-    if (used, window) != (0, 200_000):
+    used, window, current_usage = context_usage({})
+    if (used, window, current_usage) != (0, 200_000, {}):
         failures.append(
-            f"context_usage should default an absent context_window: {(used, window)}"
+            "context_usage should default an absent context_window: "
+            f"{(used, window, current_usage)}"
         )
 
 

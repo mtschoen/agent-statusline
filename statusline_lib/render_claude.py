@@ -206,7 +206,7 @@ def _beacon_line(session_id):
 
 
 def context_usage(payload):
-    """(context_used, window_size) from the payload's context_window block.
+    """(context_used, window_size, current_usage) from context_window.
 
     Anchored on token counts rather than the payload's used_percentage, which
     rounds to whole percent (10K tokens of slop on a 1M window)."""
@@ -218,7 +218,7 @@ def context_usage(payload):
         + (current_usage.get("cache_creation_input_tokens") or 0)
         + (current_usage.get("cache_read_input_tokens") or 0)
     )
-    return context_used, window_size
+    return context_used, window_size, current_usage
 
 
 def transcript_path_for(payload):
@@ -249,8 +249,7 @@ def render_claude_statusline(
 
     # --- Context: anchored on token counts (avoids the 1% rounding in the
     # payload's used_percentage -- 10K-token slop on a 1M window).
-    context_used, window_size = context_usage(payload)
-    current_usage = (payload.get("context_window") or {}).get("current_usage") or {}
+    context_used, window_size, current_usage = context_usage(payload)
     model_obj = payload.get("model") or {}
     model_id = model_obj.get("id") or ""
     model_summary = format_model_badge(model_id, model_obj.get("display_name") or "")

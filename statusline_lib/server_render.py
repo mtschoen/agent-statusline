@@ -255,7 +255,7 @@ def render_claude_request(payload, tables, clock, state_directory):
     if session_count_is_stale(cwd, now, cache_entry):
         request_refresh("session-count", tuple(tables.known_cwds()))
     session_count = count_active_sessions(cwd, cache_entry=cache_entry)
-    context_used, window_size = context_usage(payload)
+    context_used, window_size, _current_usage = context_usage(payload)
     write_ctx_state(
         session_id, context_used, window_size, now, state_dir=state_directory
     )

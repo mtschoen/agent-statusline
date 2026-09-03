@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.pace as pace
+import statusline_lib.pace_walk as pace_walk
 
 _WIN_START = 1_748_000_000.0
 _PERIOD = 7 * 86400
@@ -182,8 +183,9 @@ def _check_discover_pace_groups_oserror(failures):
         failures.append("_entry_in_window with a raising stat() should be False")
 
     # The stat-raises entry flows through the parent-file arm as a skip.
-    with patch(
-        "statusline_lib.pace._scandir_entries",
+    with patch.object(
+        pace_walk,
+        "_scandir_entries",
         side_effect=[[_FakeDirEntry("slug1")], [_StatRaisingEntry()]],
     ):
         groups = pace._discover_pace_groups(["fake-root"], win_start)

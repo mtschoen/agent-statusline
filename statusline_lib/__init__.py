@@ -46,7 +46,8 @@ Package layout (dependency order, no cycles):
   cost     -- cost calc, transcript walking, context/cache/model-badge formatting
   beacon   -- beacon scanning, format_beacon, format_calibrated_eta, session timing
   diffstat -- format_lines (session +/- line counts for line 2)
-  pace     -- pace walking, format_quota
+  pace_walk -- transcript discovery/parsing and hourly spend aggregation
+  pace      -- pace cache, quota projections, and quota formatting
   teams    -- agent-teams teammate summary line (subagentStatusLine can't reach it)
   turns    -- line-1 session turn counter (typed prompts, assistant-step fallback)
   agy      -- Antigravity CLI payload adapters: quota -> 5h/wk render, agent_state
@@ -204,22 +205,24 @@ from .pace import (
     ARROW_DOWN,
     ARROW_UP,
     ON_TARGET_GLYPH,
-    _discover_pace_groups,
     _fmt_delta_hours,
     _now_unix,
     _pace_hourly_cached,
-    _pace_hourly_for_file,
-    _parse_pace_line,
     _project_pace,
-    _sum_hourly,
-    _walk_hourly_inline,
-    _walk_hourly_parallel,
     _walk_pace_hourly,
-    _walk_session_hourly,
     _weekly_deltas,
     format_quota,
     weekly_exhaustion,
     weekly_needle,
+)
+from .pace_walk import (
+    _discover_pace_groups,
+    _pace_hourly_for_file,
+    _parse_pace_line,
+    _sum_hourly,
+    _walk_hourly_inline,
+    _walk_hourly_parallel,
+    _walk_session_hourly,
 )
 from .prefs import (
     load_prefs,

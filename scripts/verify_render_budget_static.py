@@ -127,7 +127,7 @@ def _subprocess_timeout_violations(path):
     """Yield (lineno, message) for subprocess calls without a bounded timeout."""
     tree = _parse(path)
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # A wrapper that takes timeout as a parameter must bound its DEFAULT.
             for _, default in _default_timeouts(node):
                 value = _numeric_value(default)
@@ -268,6 +268,7 @@ def check_client_is_import_free(failures):
     for path, (allowed_module, allowed_function) in _ALLOWED_IMPORTS.items():
         tree = _parse(path)
         name = os.path.basename(path)
+        allowed_import_count = 0
         for node in ast.walk(tree):
             if not isinstance(node, (ast.Import, ast.ImportFrom)):
                 continue
@@ -282,11 +283,17 @@ def check_client_is_import_free(failures):
                 continue
             enclosing = _enclosing_function_name(tree, node)
             if imported == allowed_module and enclosing == allowed_function:
+                allowed_import_count += 1
                 continue
             failures.append(
                 f"{name}:{node.lineno}: {imported} is outside the standard"
                 f" library; the only one allowed here is {allowed_module}"
                 f" inside {allowed_function}()"
+            )
+        if allowed_import_count != 1:
+            failures.append(
+                f"{name}: {allowed_module} inside {allowed_function}() appears"
+                f" {allowed_import_count} times, expected exactly 1"
             )
 
 

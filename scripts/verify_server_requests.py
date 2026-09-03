@@ -45,6 +45,7 @@ _PROJECTS = build_fixture_home(_HOME, n_sessions=1, turns_per_session=3)
 _TRANSCRIPT = glob.glob(os.path.join(_PROJECTS, "*.jsonl"))[0]
 _SESSION_ID = os.path.basename(_TRANSCRIPT)[: -len(".jsonl")]
 
+import statusline_lib.server as server_module
 from statusline_lib.nudge import read_ctx_used
 from statusline_lib.server import (
     _HANDLER_NAMES,
@@ -316,7 +317,22 @@ def check_a_qwen_render_writes_no_last_render_file(failures):
     """Qwen's payload carries no session id, so there is no key to file a
     last render under. The render still has to reply."""
     server = _server()
-    reply = server.handle_request({"kind": "qwen", "payload": _qwen_payload()})
+    payload = _qwen_payload()
+    calls = []
+    original = server_module.render_qwen_request
+
+    def recording_render(received_payload, tables, state_directory):
+        calls.append(received_payload)
+        return original(received_payload, tables, state_directory)
+
+    server_module.render_qwen_request = recording_render
+    try:
+        reply = server.handle_request({"kind": "qwen", "payload": payload})
+    finally:
+        server_module.render_qwen_request = original
+
+    if calls != [payload]:
+        failures.append(f"qwen request did not reach render_qwen_request: {calls!r}")
     if not reply:
         failures.append("a qwen render must reply even with no session id")
     if os.path.exists(last_render_path("", _STATE_DIR)):

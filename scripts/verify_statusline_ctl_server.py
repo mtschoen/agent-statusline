@@ -173,6 +173,29 @@ def _check_server_stop_live_server(failures):
             failures.append("server stop should remove server.json")
 
 
+def _check_server_stop_reports_failure_when_server_stays_live(failures):
+    """A stop whose wait reports that the server remains must exit nonzero.
+    Stub the wait result so the check is deterministic and does not wait on a
+    deadline."""
+    with (
+        _isolated_state_dir() as state_directory,
+        _live_fixture_server(state_directory),
+    ):
+        saved = ctl.wait_until_gone
+        ctl.wait_until_gone = lambda *arguments, **keywords: False
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                code = _run(["server", "stop"])
+        finally:
+            ctl.wait_until_gone = saved
+        if code == 0:
+            failures.append(
+                "server stop should exit nonzero when the server stays live: "
+                f"{buf.getvalue()!r}"
+            )
+
+
 @contextlib.contextmanager
 def _patched_client_script(path):
     """Point the loaded ctl module's own client-script path at `path` for
@@ -374,6 +397,7 @@ def check(failures):
     _check_server_status_stale_pid(failures)
     _check_server_stop_no_server(failures)
     _check_server_stop_live_server(failures)
+    _check_server_stop_reports_failure_when_server_stays_live(failures)
     _check_server_restart_reports_a_failed_start(failures)
     _check_server_restart_reports_success_with_a_working_client(failures)
     _check_server_restart_handles_a_hanging_client(failures)

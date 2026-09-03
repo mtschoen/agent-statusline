@@ -327,7 +327,8 @@ def _stop_running_server():
 
 
 def _cmd_server_stop():
-    _stop_running_server()
+    if not _stop_running_server():
+        return 1
     return 0
 
 

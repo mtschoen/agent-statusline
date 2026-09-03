@@ -71,6 +71,7 @@ _CWD_COUNT = 4
 # what makes raising that constant a failing test rather than a moved
 # goalpost: four is the number the incident says cannot be exceeded.
 _WORKER_CAP = 4
+_SERVED_RENDER_COUNT = 4
 
 # The kind every client in the burst renders.
 _CLIENT_KIND = "claude"
@@ -214,28 +215,74 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
             f"per-key accepted {accepted_by_key}, per-key refused {refused_by_key}"
         )
 
+    # Every burst line is either the client's own fallback or a server reply;
+    # anything else is a corrupted render. At the production timeout a
+    # fifty-way burst on a contended host legitimately falls back for most
+    # clients (interpreter start-up alone outruns the budget), so the burst
+    # only demands that the server answered someone. The no-fallback
+    # guarantee is check_renders_at_the_production_timeout_are_served below,
+    # where a render is not racing forty-nine siblings.
     fallbacks = _expected_fallbacks(context, _RENDER_COUNT, _CWD_COUNT)
     server_replies = 0
+    fell_back = 0
     for index, (result, fallback) in enumerate(zip(results, fallbacks, strict=True)):
         output = result.stdout.strip()
-        session_badge = f"concurrency-{index:04d}"[:8]
         if output == fallback:
-            failures.append(
-                f"render {index} fell back during the burst instead of receiving a server reply"
-            )
-            continue
-        if session_badge in output and "opus" in output:
+            fell_back += 1
+        elif _is_server_reply(output, index):
             server_replies += 1
         else:
             failures.append(f"render {index} produced unexpected output: {output!r}")
     if server_replies == 0:
-        failures.append("no renders received a server reply during the burst")
+        failures.append(
+            f"no renders received a server reply during the burst"
+            f" ({fell_back} of {_RENDER_COUNT} fell back)"
+        )
     blank = [result for result in results if not result.stdout.strip()]
     nonzero = [result for result in results if result.returncode != 0]
     if blank:
         failures.append(f"{len(blank)} of {_RENDER_COUNT} renders printed nothing")
     if nonzero:
         failures.append(f"{len(nonzero)} of {_RENDER_COUNT} renders exited non-zero")
+
+
+def _is_server_reply(output, index):
+    session_badge = f"concurrency-{index:04d}"[:8]
+    return session_badge in output and "opus" in output
+
+
+def _no_refresh(kind, argument):
+    """Replies come from the receive loop, not the pool, so the served check
+    leaves the shared cwd caches untouched for the wedged-pool checks."""
+    del kind, argument
+
+
+def check_renders_at_the_production_timeout_are_served(failures):
+    """A render that is not racing a burst must never print its fallback at
+    the production client timeout: the fallback line is the client's own
+    minimal output, and the issue this pins is a render that quietly fell
+    back while a live server existed. Renders run one at a time after a
+    warm-up render so the assertion measures the server's reply latency,
+    not the burst's interpreter start-up contention. Refreshes are no-ops
+    here so the shared cwd caches stay cold for the wedged-pool checks."""
+    with _running_server(failures, runner=_no_refresh) as context:
+        _run_clients_in_parallel(context, 1, _CWD_COUNT)
+        results = [
+            _run_clients_in_parallel(context, 1, _CWD_COUNT)[0]
+            for _ in range(_SERVED_RENDER_COUNT)
+        ]
+    fallback = _expected_fallbacks(context, 1, _CWD_COUNT)[0]
+    for attempt, result in enumerate(results):
+        output = result.stdout.strip()
+        if output == fallback:
+            failures.append(
+                f"sequential render {attempt} fell back at the production"
+                " timeout with a live server"
+            )
+        elif not _is_server_reply(output, 0):
+            failures.append(
+                f"sequential render {attempt} produced unexpected output: {output!r}"
+            )
 
 
 def check_a_blocked_refresher_never_blocks_a_reply(failures):
@@ -345,6 +392,7 @@ def check_a_client_exits_after_its_wrapper_is_killed(failures):
 
 def check(failures):
     check_fifty_concurrent_renders_leave_one_server(failures)
+    check_renders_at_the_production_timeout_are_served(failures)
     check_a_blocked_refresher_never_blocks_a_reply(failures)
     check_no_orphan_processes_remain(failures)
     check_a_client_exits_after_its_wrapper_is_killed(failures)

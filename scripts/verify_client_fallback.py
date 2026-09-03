@@ -65,6 +65,9 @@ _KIMI_SESSION_ID = "kimi-session-0001"
 # them between cases without touching the rest of the state directory.
 _LAST_RENDER_PREFIX = "last-render-"
 
+_SPAWN_LOCK_PREFERENCE = "STATUSLINE_SPAWN_LOCK_STALE_SECONDS"
+_HELD_SPAWN_LOCK_SECONDS = "3600"
+
 
 class _FallbackContext:
     """What a fallback check needs: the environment a client subprocess runs
@@ -73,7 +76,9 @@ class _FallbackContext:
 
     def __init__(self):
         self.state_directory = _STATE_DIR
-        self.environment = _client_environment()
+        self.environment = _client_environment(
+            **{_SPAWN_LOCK_PREFERENCE: _HELD_SPAWN_LOCK_SECONDS}
+        )
 
 
 def _remove_state_files(context):

@@ -29,13 +29,19 @@ import sys
 import tempfile
 import time
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
+REPO = os.path.dirname(SCRIPTS_DIR)
 sys.path.insert(0, REPO)
+
+from _client_environment import isolated_client_environment
 
 from scripts._server_wait_helpers import server_json_appeared
 from statusline_lib.server_socket import SPAWN_LOCK_FILENAME
 
 _ENCODING = "utf-8"
+_SPAWN_LOCK_PREFERENCE = "STATUSLINE_SPAWN_LOCK_STALE_SECONDS"
+_HELD_SPAWN_LOCK_SECONDS = "3600"
 
 # Mirrors statusline_client._PLATFORM_APP_DIR_PARTS["kimi"]: the platform
 # app_dir() resolves to under a HOME this suite controls.
@@ -63,21 +69,20 @@ def _hold_spawn_lock(tmp_home):
         json.dump({"pid": os.getpid(), "at": time.time()}, f)
 
 
-def _run_kimi(failures, payload_bytes, tmp_home):
-    """Run kimi_statusline.py against `tmp_home` with stdin=payload_bytes.
+def _run_kimi(failures, payload_raw, tmp_home):
+    """Run kimi_statusline.py against `tmp_home` with stdin=payload_raw.
     Asserts along the way that the spawn lock blocked any background server
     from starting and writing server.json."""
-    env = dict(os.environ)
-    env["HOME"] = tmp_home
-    env["USERPROFILE"] = tmp_home
-    env.pop("STATUSLINE_STATE_DIR", None)
-    env.pop("KIMI_STATE_DIR", None)
-    env.pop("STATUSLINE_PLATFORM", None)
+    env = isolated_client_environment(
+        tmp_home,
+        encoding=_ENCODING,
+        **{_SPAWN_LOCK_PREFERENCE: _HELD_SPAWN_LOCK_SECONDS},
+    )
     _hold_spawn_lock(tmp_home)
 
     result = subprocess.run(
         [sys.executable, os.path.join(REPO, "kimi_statusline.py")],
-        input=payload_bytes,
+        input=payload_raw,
         capture_output=True,
         text=True,
         encoding=_ENCODING,

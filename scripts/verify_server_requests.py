@@ -231,7 +231,8 @@ def check_a_render_requests_one_session_count_job_for_every_cwd(failures):
     server.handle_request({"kind": "claude", "payload": _claude_payload(cwd="/repo-a")})
     server.handle_request({"kind": "claude", "payload": _claude_payload(cwd="/repo-b")})
     counts = [argument for kind, argument in pool.submitted if kind == "session-count"]
-    if counts[-1] != ("/repo-a", "/repo-b"):
+    expected = (os.path.normcase("/repo-a"), os.path.normcase("/repo-b"))
+    if counts[-1] != expected:
         failures.append(f"the last session-count job must carry every cwd: {counts}")
 
 

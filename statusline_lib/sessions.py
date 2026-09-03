@@ -336,27 +336,27 @@ def _count_via_psutil(target_cwd, psutil, scan=None):
             return None
 
     count = 0
-    for pid, name, p in scan.candidates:
+    for pid, name, process in scan.candidates:
         try:
-            cmdline = p.cmdline()
+            cmdline = process.cmdline()
             if not _is_agent_runtime(name, cmdline):
                 continue
-            pcwd = p.cwd()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            process_cwd = process.cwd()
+            if not _process_matches(name, cmdline, process_cwd, target_cwd):
+                continue
+            # environ() is only worth the syscall once name/cmdline/cwd already
+            # matched. Unreadable -> None -> _is_child_session_env fails open
+            # (not excluded), same as the tree walk's AccessDenied handling.
+            try:
+                environment = process.environ()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                environment = None
+            if _is_child_session_env(environment):
+                continue
+            if not _is_excluded_by_tree(pid, snap, cmdline_of):
+                count += 1
+        except Exception:
             continue
-        if not _process_matches(name, cmdline, pcwd, target_cwd):
-            continue
-        # environ() is only worth the syscall once name/cmdline/cwd already
-        # matched. Unreadable -> None -> _is_child_session_env fails open
-        # (not excluded), same as the tree walk's AccessDenied handling.
-        try:
-            env = p.environ()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-            env = None
-        if _is_child_session_env(env):
-            continue
-        if not _is_excluded_by_tree(pid, snap, cmdline_of):
-            count += 1
     return count
 
 

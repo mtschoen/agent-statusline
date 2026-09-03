@@ -166,6 +166,7 @@ class StateTables:
         self._clock = clock
         self._sessions = {}
         self._cwds = {}
+        self._rewalk_count = 0
 
     def touch_session(self, session_id, transcript_path):
         """Return the SessionEntry for `session_id`, creating one on first
@@ -189,12 +190,13 @@ class StateTables:
 
     def touch_cwd(self, cwd):
         """Return the CwdEntry for `cwd`, creating one on first use, and
-        stamp it as seen now. Called for every render, so the cwd table
-        tracks exactly the directories the machine's live sessions sit in."""
-        entry = self._cwds.get(cwd)
+        stamp it as seen now. Keys are normcased so case-equivalent Windows
+        paths share one refresh row."""
+        key = os.path.normcase(cwd)
+        entry = self._cwds.get(key)
         if entry is None:
-            entry = CwdEntry(cwd, self._clock)
-            self._cwds[cwd] = entry
+            entry = CwdEntry(key, self._clock)
+            self._cwds[key] = entry
         else:
             entry.last_seen = self._clock()
         return entry
@@ -221,15 +223,13 @@ class StateTables:
         )
 
     def summary(self):
-        """What the `status` request kind reports: how much the server is
-        holding, and how many times it has had to throw a session's fold
-        state away and rewalk (a non-zero, growing rewalk count means
-        transcripts are being rewritten under us, not that the server is
-        unhealthy)."""
+        """What the `status` request kind reports: current table sizes and
+        the server-lifetime number of session fold resets. The rewalk total is
+        monotonic even when the session that incurred a reset is evicted."""
         return {
             "sessions": len(self._sessions),
             "cwds": len(self._cwds),
-            "rewalks": sum(entry.rewalk_count for entry in self._sessions.values()),
+            "rewalks": self._rewalk_count,
         }
 
     def walk_for(self, entry):
@@ -285,6 +285,7 @@ class StateTables:
         entry.offsets = {}
         entry.parent_cost = 0.0
         entry.rewalk_count += 1
+        self._rewalk_count += 1
 
     def _subagent_paths(self, transcript_path):
         """The same <path-without-.jsonl>/subagents/agent-*.jsonl rule

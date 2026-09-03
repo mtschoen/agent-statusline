@@ -8,9 +8,8 @@ test needs it to expire.
 
 The fixtures come from the three server suites next door rather than from a
 second synthetic home of this file's own: importing scripts/verify_server_-
-requests.py is what installs the temporary HOME and CLAUDE_STATE_DIR the
-whole server suite is isolated by, and a client subprocess inherits exactly
-that environment, so it looks for server.json where the server just wrote it.
+requests.py installs the temporary HOME and CLAUDE_STATE_DIR, and client
+subprocesses run with an isolated environment pointing at that state.
 
 Run from anywhere; imports from agent-statusline by path.
 """
@@ -24,6 +23,7 @@ import sys
 # The scripts directory, so the server suites next door are importable.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _client_environment import isolated_client_environment
 from verify_server_loop import _serving, _stop
 from verify_server_requests import (
     _ENCODING,
@@ -67,7 +67,7 @@ _DECODE_ERRORS = "replace"
 class _Context:
     """What a check needs to talk to one running server: the server itself,
     the port it bound, the state directory it published server.json into, and
-    the environment a client subprocess inherits to find it."""
+    the isolated environment a client subprocess uses to find it."""
 
     def __init__(self, server, port):
         self.server = server
@@ -77,30 +77,19 @@ class _Context:
 
 
 def _client_environment(**overrides):
-    """The environment a client subprocess runs under: this suite's isolated
-    home and state directory, UTF-8 forced so a rendered glyph cannot crash
-    the child on a cp1252 console, plus the caller's overrides. An override
-    of None removes that key entirely."""
-    environment = dict(os.environ)
-    environment["PYTHONUTF8"] = "1"
-    environment["PYTHONIOENCODING"] = _ENCODING
-    for name, value in overrides.items():
-        if value is None:
-            environment.pop(name, None)
-        else:
-            environment[name] = value
-    return environment
+    """The isolated environment used by every real client subprocess."""
+    return isolated_client_environment(
+        _HOME,
+        state_directory=_STATE_DIR,
+        encoding=_ENCODING,
+        **overrides,
+    )
 
 
 def _fixed_render(text):
     """A stand-in renderer that always answers `text`, assigned onto one
     server instance so it only takes effect because dispatch is by name."""
-
-    def render(payload):
-        del payload
-        return text
-
-    return render
+    return lambda payload: text
 
 
 @contextlib.contextmanager
@@ -169,7 +158,7 @@ def check_a_live_server_answers_the_client(failures):
         failures.append(f"client exited {result.returncode}: {result.stderr!r}")
     if not result.stdout.strip():
         failures.append("client printed nothing against a live server")
-    if "STATUSLINE ERROR" in result.stdout:
+    elif "STATUSLINE ERROR" in result.stdout:
         failures.append(f"client printed an error line: {result.stdout!r}")
 
 
@@ -190,7 +179,7 @@ def check_an_empty_reply_prints_nothing(failures):
         result = _run_client(context, "claude", _claude_payload())
     if result.stdout != "":
         failures.append(f"an empty reply must print nothing: {result.stdout!r}")
-    if result.returncode != 0:
+    elif result.returncode != 0:
         failures.append(f"an empty reply must still exit 0, got {result.returncode}")
 
 
@@ -219,8 +208,6 @@ _ENTRY_POINTS = (
 # server would print something else.
 _LIVE_SERVER_MARKER = "LIVE-SERVER-MARKER-8f2c1e04"
 
-# The Server attribute each request kind dispatches through (mirrors
-# statusline_lib.server._HANDLER_NAMES), all overridden to the same marker.
 _HANDLER_NAMES_UNDER_TEST = (
     "_render_claude",
     "_render_subagent",
@@ -250,7 +237,7 @@ def check_every_entry_point_reaches_a_live_server(failures):
                     f"{name} exited {result.returncode} against a live server:"
                     f" {result.stderr!r}"
                 )
-            if result.stdout != _LIVE_SERVER_MARKER:
+            elif result.stdout != _LIVE_SERVER_MARKER:
                 failures.append(
                     f"{name} did not print the live server's reply verbatim"
                     f" (fell back instead?): {result.stdout!r}"
@@ -280,13 +267,7 @@ def _directory_cases():
     values through STATUSLINE_PLATFORM, the same four through the argv flag,
     the two state-directory overrides, and the two Antigravity signals
     base.app_dir() falls back on when no platform was resolved at all."""
-    base = _client_environment(
-        STATUSLINE_PLATFORM=None,
-        CLAUDE_STATE_DIR=None,
-        ANTIGRAVITY_STATE_DIR=None,
-        ANTIGRAVITY_AGENT=None,
-        ANTIGRAVITY_CONVERSATION_ID=None,
-    )
+    base = _client_environment(CLAUDE_STATE_DIR=None)
     cases = []
     for platform in _PLATFORMS:
         cases.append(({**base, "STATUSLINE_PLATFORM": platform}, []))
@@ -306,21 +287,10 @@ def check_the_client_resolves_the_same_directories_as_the_package(failures):
     two ever drift, the client looks for server.json somewhere the server
     never writes it, and every render silently falls back forever."""
     for environment, arguments in _directory_cases():
-        printed = (
-            subprocess.run(
-                [sys.executable, _CLIENT, "--print-directories", *arguments],
-                capture_output=True,
-                text=True,
-                encoding=_ENCODING,
-                errors=_DECODE_ERRORS,
-                timeout=_HARD_TIMEOUT_SECONDS,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                check=False,
-            )
-            .stdout.strip()
-            .splitlines()
+        result = _run_client_arguments(
+            ["--print-directories", *arguments], environment=environment
         )
+        printed = result.stdout.strip().splitlines()
         with _patched_environment(environment, arguments):
             expected = [app_dir(), state_dir()]
         if printed != expected:
@@ -329,36 +299,42 @@ def check_the_client_resolves_the_same_directories_as_the_package(failures):
             )
 
 
-def _timeout_for(client, preferences, environment_value):
-    """The timeout the client resolves with `preferences` in its prefs file
-    and `environment_value` in the environment. Either may be None, meaning
-    absent."""
+def _timeout_for(preferences, environment_value):
+    """Resolve one timeout case in a fresh client-module process."""
     path = os.path.join(_HOME, "client-timeout-prefs.json")
     if preferences is None:
-        os.environ["STATUSLINE_PREFS_PATH"] = os.devnull
+        preferences_path = os.devnull
     else:
-        with open(path, "w", encoding=_ENCODING) as f:
-            json.dump(preferences, f)
-        os.environ["STATUSLINE_PREFS_PATH"] = path
-    if environment_value is None:
-        os.environ.pop(_TIMEOUT_PREFERENCE, None)
-    else:
-        os.environ[_TIMEOUT_PREFERENCE] = environment_value
-    try:
-        return client._client_timeout_seconds()
-    finally:
-        os.environ["STATUSLINE_PREFS_PATH"] = os.devnull
-        os.environ.pop(_TIMEOUT_PREFERENCE, None)
+        with open(path, "w", encoding=_ENCODING) as preference_file:
+            json.dump(preferences, preference_file)
+        preferences_path = path
+    environment = _client_environment(
+        STATUSLINE_PREFS_PATH=preferences_path,
+        **{_TIMEOUT_PREFERENCE: environment_value},
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import statusline_client; print(statusline_client._client_timeout_seconds())",
+        ],
+        cwd=_REPO,
+        capture_output=True,
+        text=True,
+        encoding=_ENCODING,
+        errors=_DECODE_ERRORS,
+        timeout=_HARD_TIMEOUT_SECONDS,
+        env=environment,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"timeout probe failed: {result.stderr!r}")
+    return float(result.stdout.strip())
 
 
 def check_the_client_timeout_is_overridable(failures):
-    """150 ms is the default, and the prefs file outranks the environment the
-    same way statusline_lib.prefs does. Resolution only: nothing here waits on
-    a clock. Imported in-process rather than run, since the value under test
-    never reaches stdout."""
-    import statusline_client
-
-    default = statusline_client.CLIENT_TIMEOUT_SECONDS
+    """The default and preference precedence, resolved in fresh processes."""
+    default = 0.150
     for preferences, environment_value, expected in (
         (None, None, default),
         (None, "50", 0.05),
@@ -367,15 +343,36 @@ def check_the_client_timeout_is_overridable(failures):
         ({_TIMEOUT_PREFERENCE: 25}, "50", 0.025),
         ({_TIMEOUT_PREFERENCE: None}, "50", 0.05),
     ):
-        resolved = _timeout_for(statusline_client, preferences, environment_value)
+        resolved = _timeout_for(preferences, environment_value)
         if resolved != expected:
             failures.append(
                 f"prefs {preferences!r} plus environment {environment_value!r} "
                 f"resolved {resolved}, expected {expected}"
             )
+    if "statusline_client" in sys.modules:
+        failures.append("the timeout check imported statusline_client in-process")
+
+
+def check_the_client_environment_excludes_ambient_settings(failures):
+    names = ("STATUSLINE_CLIENT_TIMEOUT_MS", "STATUSLINE_PLATFORM", "HTTPS_PROXY")
+    saved = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ[name] = "ambient-value-must-not-leak"
+        environment = _client_environment()
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    leaked = [name for name in names if name in environment]
+    if leaked:
+        failures.append(f"client environment inherited ambient settings: {leaked}")
 
 
 def check(failures):
+    check_the_client_environment_excludes_ambient_settings(failures)
     check_a_live_server_answers_the_client(failures)
     check_the_client_prints_the_reply_verbatim(failures)
     check_an_empty_reply_prints_nothing(failures)

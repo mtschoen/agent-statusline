@@ -32,6 +32,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 import install
+from scripts._server_wait_helpers import server_json_appeared
 from statusline_lib.claude_family_install import (
     desired_statusline_entries,
     merge_statusline_family_settings,
@@ -306,8 +307,6 @@ def _check_installed_wrapper_resolves_shim(failures):
     # Executes the real statusline-command.sh (not a copy) from its repo
     # location -- proves the sourced interpreter-probe.sh shim actually
     # resolves relative to the sourcing script and the wrapper still renders.
-    from scripts.verify_interpreter_probe import _server_json_appeared
-
     bash = shutil.which("bash")
     if bash is None:
         print("SKIP: bash not on PATH -- cannot exercise the shell wrapper here")
@@ -323,7 +322,7 @@ def _check_installed_wrapper_resolves_shim(failures):
             check=False,
         )
         server_info_path = os.path.join(state_directory, "server.json")
-        if _server_json_appeared(server_info_path):
+        if server_json_appeared(server_info_path):
             failures.append(
                 f"statusline-command.sh should not have spawned a real server "
                 f"(the spawn lock should have blocked it): {server_info_path} appeared"

@@ -32,6 +32,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
+from scripts._server_wait_helpers import server_json_appeared
 from statusline_lib.server_socket import SPAWN_LOCK_FILENAME
 
 _ENCODING = "utf-8"
@@ -39,26 +40,6 @@ _ENCODING = "utf-8"
 # Mirrors statusline_client._PLATFORM_APP_DIR_PARTS["qwen"]: the platform
 # app_dir() resolves to under a HOME this suite controls.
 _QWEN_APP_DIR_PARTS = (".qwen",)
-
-
-# A leaked server is a real detached process (interpreter startup, imports,
-# a socket bind) before it writes server.json, so it can lag the parent
-# subprocess's own return by a beat (~100ms, measured); checking once
-# immediately can miss a leak that is still in flight. Polling a bounded
-# window rather than sleeping a fixed amount: the loop returns the instant
-# server.json appears, and only pays the full window when it correctly never
-# does.
-_SERVER_JSON_POLL_SECONDS = 0.5
-_SERVER_JSON_POLL_INTERVAL_SECONDS = 0.02
-
-
-def _server_json_appeared(path):
-    deadline = time.monotonic() + _SERVER_JSON_POLL_SECONDS
-    while time.monotonic() < deadline:
-        if os.path.exists(path):
-            return True
-        time.sleep(_SERVER_JSON_POLL_INTERVAL_SECONDS)
-    return os.path.exists(path)
 
 
 def _state_dir(tmp_home):
@@ -100,7 +81,7 @@ def _run_qwen(failures, payload_raw, tmp_home):
         check=False,
     )
     server_info_path = os.path.join(_state_dir(tmp_home), "server.json")
-    if _server_json_appeared(server_info_path):
+    if server_json_appeared(server_info_path):
         failures.append(
             f"qwen_statusline.py should not have spawned a real server "
             f"(the spawn lock should have blocked it): {server_info_path} appeared"

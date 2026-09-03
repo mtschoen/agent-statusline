@@ -25,6 +25,7 @@ import os
 import socket
 import sys
 import time
+from unittest import mock
 
 # The scripts directory, so the protocol suite next door is importable. That
 # import is also what installs the temporary HOME and CLAUDE_STATE_DIR this
@@ -197,6 +198,20 @@ def check_a_stale_last_render_file_is_not_used(failures):
         failures.append("the minimal line must never be empty")
 
 
+def check_the_fallback_age_override_can_accept_an_older_render(failures):
+    with _silent_server() as context:
+        _write_last_render(context, "accepted older line", age_seconds=120)
+        context.environment = _client_environment(
+            STATUSLINE_FALLBACK_MAXIMUM_AGE_SECONDS="300"
+        )
+        result = _run_client(context, "claude", _claude_payload())
+    if result.stdout.strip() != "accepted older line":
+        failures.append(
+            "a 300s fallback-age override did not accept a 120s-old render: "
+            f"{result.stdout!r}"
+        )
+
+
 def check_an_empty_last_render_file_falls_through(failures):
     """A zero-length file is a render that legitimately produced no text. It
     is a real answer for the server to have written and a blank line for the
@@ -250,6 +265,10 @@ def check_the_minimal_line_handles_every_payload_shape(failures):
             failures.append(f"minimal line was {line!r}, expected {expected!r}")
     if not statusline_client_support.minimal_line({}).strip():
         failures.append("an empty payload must still produce a non-blank line")
+    with mock.patch.object(statusline_client_support.os, "getcwd", return_value="/"):
+        line = statusline_client_support.minimal_line({})
+    if line != "/":
+        failures.append(f"an empty payload at the filesystem root returned {line!r}")
 
 
 def check_no_server_file_at_all_still_prints_a_line(failures):
@@ -271,6 +290,22 @@ def check_a_malformed_server_file_still_prints_a_line(failures):
         failures.append("a corrupt server.json must not make the client exit non-zero")
 
 
+def check_the_client_last_render_path_uses_its_state_directory(failures):
+    import statusline_client
+
+    expected = last_render_path("direct-shim-session", _STATE_DIR)
+    original_state_directory = statusline_client.state_directory
+    statusline_client.state_directory = lambda: _STATE_DIR
+    try:
+        actual = statusline_client.last_render_path("direct-shim-session")
+    finally:
+        statusline_client.state_directory = original_state_directory
+    if actual != expected:
+        failures.append(
+            f"client last_render_path resolved {actual!r}, expected {expected!r}"
+        )
+
+
 def check_the_kimi_kind_prints_exactly_one_line_on_fallback(failures):
     """Kimi's TUI renders only the first stdout line and requires it to be
     non-empty; a multi-line fallback there would be a regression."""
@@ -279,10 +314,10 @@ def check_the_kimi_kind_prints_exactly_one_line_on_fallback(failures):
             context, "first line\nsecond line", session_id=_KIMI_SESSION_ID
         )
         result = _run_client(context, "kimi", _kimi_payload())
-    if result.stdout.count("\n") > 0:
-        failures.append(f"the kimi fallback must be one line: {result.stdout!r}")
-    if not result.stdout.strip():
-        failures.append("the kimi fallback line must never be empty")
+    if result.stdout != "first line":
+        failures.append(
+            f"the kimi fallback must be exactly the cached first line: {result.stdout!r}"
+        )
 
 
 def check_every_session_id_spelling_finds_its_last_render(failures):
@@ -325,8 +360,10 @@ def check_the_subagent_fallback_never_prints_a_claude_line(failures):
 
 
 def check(failures):
+    check_the_client_last_render_path_uses_its_state_directory(failures)
     check_a_timeout_falls_back_to_the_last_render_file(failures)
     check_a_stale_last_render_file_is_not_used(failures)
+    check_the_fallback_age_override_can_accept_an_older_render(failures)
     check_an_empty_last_render_file_falls_through(failures)
     check_the_minimal_line_carries_the_payload_basics(failures)
     check_the_minimal_line_handles_every_payload_shape(failures)

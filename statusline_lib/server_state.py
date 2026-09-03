@@ -133,7 +133,6 @@ class SessionEntry:
         self.seen_ids = set()
         self.parent_cost = 0.0
         self.last_seen = clock()
-        self.last_reply = ""
         self.rewalk_count = 0
 
 

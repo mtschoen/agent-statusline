@@ -220,6 +220,9 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
         output = result.stdout.strip()
         session_badge = f"concurrency-{index:04d}"[:8]
         if output == fallback:
+            failures.append(
+                f"render {index} fell back during the burst instead of receiving a server reply"
+            )
             continue
         if session_badge in output and "opus" in output:
             server_replies += 1

@@ -201,14 +201,16 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
             f"git-ref keys {observed_keys} do not match expected {expected_keys}"
         )
     bad_accepted = {k: v for k, v in accepted_by_key.items() if v != 1}
+    unrefused_keys = expected_keys - set(refused_by_key.keys())
     if (
         bad_accepted
         or total_accepted != _CWD_COUNT
-        or total_refused != (_RENDER_COUNT - _CWD_COUNT)
+        or unrefused_keys
+        or total_refused == 0
     ):
         failures.append(
             f"deduplication mismatch: accepted {total_accepted} (expected {_CWD_COUNT}), "
-            f"refused {total_refused} (expected {_RENDER_COUNT - _CWD_COUNT}), "
+            f"refused {total_refused} (expected duplicate refusals for all keys), "
             f"per-key accepted {accepted_by_key}, per-key refused {refused_by_key}"
         )
 

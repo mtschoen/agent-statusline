@@ -357,7 +357,7 @@ def check_a_subagent_row_never_opens_the_transcript(failures):
         agent = subagent_module._agent_jsonl_path(transcript, "task-1")
         with _Loud():
             parts, model_id = subagent_module._metrics_for_task(
-                task, transcript, "sid", False, 1000.0
+                task, transcript, "sid", False
             )
         if parts or model_id:
             failures.append(f"a cold subagent row must render bare: {parts} {model_id}")
@@ -366,7 +366,7 @@ def check_a_subagent_row_never_opens_the_transcript(failures):
         server_jobs.run_refresh(_WALK, agent)
         with _Loud():
             parts, model_id = subagent_module._metrics_for_task(
-                task, transcript, "sid", False, 1000.0
+                task, transcript, "sid", False
             )
         if not parts or model_id != "claude-sonnet-4-5":
             failures.append(f"the pool's walk must fill the row: {parts} {model_id}")

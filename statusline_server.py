@@ -8,7 +8,7 @@ spawns it by its literal path.
 
 import sys
 
-from statusline_lib.server import serve
+from statusline_lib.server_entry import serve
 
 if __name__ == "__main__":
     sys.exit(serve(sys.argv[1:]))

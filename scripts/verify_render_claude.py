@@ -279,6 +279,31 @@ def check_line1_badges_two_or_more_sessions(failures):
         )
 
 
+def check_render_claude_statusline_accepts_preloaded_session_count(failures):
+    def _raising_count(cwd):
+        raise AssertionError(
+            "count_active_sessions must not be called when session_count is passed"
+        )
+
+    saved_count = render_claude_mod.count_active_sessions
+    saved_debounce = render_claude_mod.debounce_session_count
+    render_claude_mod.count_active_sessions = _raising_count
+    render_claude_mod.debounce_session_count = lambda count, cwd: count
+    try:
+        with tempfile.TemporaryDirectory() as state:
+            rendered = render_claude_mod.render_claude_statusline(
+                {}, _REPO, _walk(), 1000.0, state_directory=state, session_count=2
+            )
+    finally:
+        render_claude_mod.count_active_sessions = saved_count
+        render_claude_mod.debounce_session_count = saved_debounce
+
+    if "[2 sessions]" not in rendered:
+        failures.append(
+            f"render_claude_statusline with session_count=2 should render badge: {rendered!r}"
+        )
+
+
 def check_line1_shows_the_agent_state_tag(failures):
     with tempfile.TemporaryDirectory() as state:
         rendered = _line1(
@@ -383,6 +408,7 @@ def main():
     check_format_cwd_cross_drive_falls_back_to_absolute(failures)
     check_format_cwd_ancestor_hop_shows_absolute(failures)
     check_line1_badges_two_or_more_sessions(failures)
+    check_render_claude_statusline_accepts_preloaded_session_count(failures)
     check_line1_shows_the_agent_state_tag(failures)
     check_beacon_line_appends_the_calibrated_eta(failures)
     check_beacon_line_without_a_positive_eta_returns_the_bare_summary(failures)

@@ -15,11 +15,11 @@ refresher costs one stale field rather than every render on the machine.
 
 The socket half lives here too: bind() publishes a random localhost UDP port
 in server.json, serve_forever() is the receive loop (and the idle exit that
-ends a server nobody is rendering against), close() gives back everything
-bind() took, and serve() is the entry point body statusline_server.py calls.
+ends a server nobody is rendering against), and close() gives back everything
+bind() took.
 
 Imports:
-  base          -- app_dir, log_line, log_traceback, platform_name, state_dir
+  base          -- app_dir, log_line, log_traceback, platform_name
   server_info   -- code_version, and the server.json read/write helpers
   server_jobs   -- WorkerPool, set_refresh_sink
   server_socket -- the transport: constants, the socket, the wire format
@@ -33,12 +33,11 @@ import json
 import os
 import time
 
-from .base import app_dir, log_line, log_traceback, platform_name, state_dir
+from .base import app_dir, log_line, log_traceback, platform_name
 from .server_info import (
     code_version,
     read_server_info,
     remove_server_info,
-    server_info_path,
     write_server_info,
 )
 from .server_jobs import WORKER_POOL_SIZE, WorkerPool, set_refresh_sink
@@ -58,6 +57,7 @@ from .server_socket import (
     IDLE_EXIT_SECONDS,
     MAXIMUM_DATAGRAM_BYTES,
     DepartedClientResetCounter,
+    ReceiveErrorLogLimiter,
     clear_spawn_lock,
     open_datagram_socket,
     parse_request,
@@ -73,7 +73,7 @@ from .transcript_summaries import reset_transcript_summaries
 # last_render_path and write_last_render are re-exported rather than defined
 # here: they live beside the renders that write them, but this module is the
 # server's documented surface, so both names resolve from it.
-__all__ = ["REQUEST_KINDS", "Server", "last_render_path", "serve", "write_last_render"]
+__all__ = ["REQUEST_KINDS", "Server", "last_render_path", "write_last_render"]
 
 # Request kind -> the name of the Server method that serves it. Names rather
 # than function objects, so an attribute set on one instance (a test's
@@ -141,13 +141,14 @@ class Server:
         self._socket = None
         self._port = None
         self._closed = False
-        self._info_path = server_info_path(state_directory)
+        self._info_path = os.path.join(state_directory, "server.json")
         # Set only once write_server_info has actually returned, so close()
         # can tell "this server published server.json" from "this server never
         # got that far", and never removes a file it did not write.
         self._info_published = False
         self.stop_requested = False
         self._skipped_resets = DepartedClientResetCounter()
+        self._receive_error_log_limiter = ReceiveErrorLogLimiter(clock)
         # Every cache reader in the package asks for recomputation through
         # server_jobs.request_refresh, which is a no-op until something
         # installs a sink. This is the process that has one. The displaced
@@ -202,7 +203,10 @@ class Server:
                     self.stop_requested = True
                 continue
             except OSError as error:
-                if not self._skipped_resets.note(error):
+                if (
+                    not self._skipped_resets.note(error)
+                    and self._receive_error_log_limiter.should_log()
+                ):
                     log_traceback(self._error_log_path)
                 continue
             try:
@@ -289,7 +293,7 @@ class Server:
         self._last_request_at = self._clock()
         payload = request.get("payload") or {}
         try:
-            self._maybe_housekeep()
+            self.maybe_housekeep()
             write_debug_input_log(kind, payload)
             started = time.perf_counter() if kind in _TIMED_KINDS else None
             with columns_environment(request.get("columns")):
@@ -348,7 +352,7 @@ class Server:
     def _render_qwen(self, payload):
         return render_qwen_request(payload, self._tables, self._state_directory)
 
-    def _maybe_housekeep(self):
+    def maybe_housekeep(self):
         """Sweep aged per-session state files and drop idle table entries, at
         most once every HOUSEKEEPING_INTERVAL_SECONDS. Both are the price of a
         process that outlives its sessions: a render process left its state
@@ -361,40 +365,14 @@ class Server:
         self._housekeeper(self._state_directory, now)
         self._tables.drop_idle()
 
+    def log_exception(self):
+        """Record the exception currently being handled in this server's log."""
+        log_traceback(self._error_log_path)
+
     def _log_job_error(self, error):
         """Record a pool job's traceback in this server's error log. Correct
         only from inside the except block still handling `error`, which is how
         WorkerPool calls it: log_traceback reads the live exception context
         rather than `error` itself."""
         del error
-        log_traceback(self._error_log_path)
-
-
-def serve(argv=None):
-    """The entry point body statusline_server.py calls. Returns an exit code.
-
-    One housekeeping sweep runs before the loop rather than waiting for the
-    first request: the spec's "on start and hourly", and the reason a state
-    directory can accumulate thousands of stale per-session caches that no
-    process ever came back for.
-    """
-    del argv  # No options yet; the shape is fixed so adding one is additive.
-    repository_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    server = Server(state_dir(), repository_root)
-    try:
-        server.bind()
-        # _last_housekeeping starts at zero, so this first call always
-        # sweeps; every later one is the hourly schedule.
-        server._maybe_housekeep()
-        server.serve_forever()
-    except Exception:
-        # This process is a detached spawn with nowhere to print, so an
-        # escaping traceback is a server that dies invisibly and a client that
-        # spawns another one just like it. Log, and say so in the exit code.
-        log_traceback(server._error_log_path)
-        return 1
-    finally:
-        # Inside the finally so a bind that failed half way still gives back
-        # the refresh sink and the pool it took on the way in.
-        server.close()
-    return 0
+        self.log_exception()

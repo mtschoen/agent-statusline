@@ -49,7 +49,7 @@ _FIXTURE_STATE_DIRECTORY = os.environ["CLAUDE_STATE_DIR"]
 from statusline_lib.base import log_line
 from statusline_lib.server_jobs import WorkerPool, request_refresh, set_refresh_sink
 from statusline_lib.server_render import SESSION_COUNT_CACHE_TTL_SECONDS
-from statusline_lib.sessions import _SESSION_COUNT_CACHE_PATH
+from statusline_lib.sessions import session_count_cache_path
 
 _GATE_CWD = "/repo-under-the-gate"
 
@@ -65,7 +65,7 @@ def _session_count_submits(pool):
 def _seed_session_count_cache(cwd, timestamp):
     """Write the cache entry a completed refresh job would have written, so
     the age gate can be driven without running a real psutil walk."""
-    with open(_SESSION_COUNT_CACHE_PATH, "w", encoding=_ENCODING) as f:
+    with open(session_count_cache_path(), "w", encoding=_ENCODING) as f:
         json.dump({os.path.normcase(cwd): {"count": 1, "ts": timestamp}}, f)
 
 
@@ -74,10 +74,9 @@ def check_the_fixture_home_is_isolated(failures):
     before the sibling script installed the fixture home, every check here
     would quietly run against the real ~/.claude and seed a cache there."""
     fixture_home = os.path.dirname(_FIXTURE_STATE_DIRECTORY)
-    if not _SESSION_COUNT_CACHE_PATH.startswith(fixture_home):
-        failures.append(
-            f"the session-count cache escaped the fixture: {_SESSION_COUNT_CACHE_PATH}"
-        )
+    cache_path = session_count_cache_path()
+    if not cache_path.startswith(fixture_home):
+        failures.append(f"the session-count cache escaped the fixture: {cache_path}")
 
 
 def check_stopping_a_server_restores_the_refresh_sink(failures):
@@ -192,11 +191,49 @@ def check_the_pool_starts_every_worker_under_its_lock(failures):
         failures.append(f"every worker must be started under the pool lock: {held}")
 
 
+def check_claude_server_render_loads_session_count_once(failures):
+    """A Claude server render loads the session-count cache entry once, uses
+    it for staleness, and passes the value into rendering."""
+    import statusline_lib.render_claude as render_claude_mod
+    import statusline_lib.server_render as server_render
+
+    clock = _FakeClock()
+    pool = _RecordingPool()
+    server = _server(clock=clock, pool=pool)
+    payload = _claude_payload(cwd=_GATE_CWD)
+
+    loads = []
+    saved_loader = server_render.load_session_count_entry
+    server_render.load_session_count_entry = lambda cwd: (
+        loads.append(cwd) or {"count": 2, "ts": clock.now}
+    )
+    saved_debounce = render_claude_mod.debounce_session_count
+    render_claude_mod.debounce_session_count = lambda count, cwd: count
+    try:
+        reply = server.handle_request({"kind": "claude", "payload": payload})
+    finally:
+        server_render.load_session_count_entry = saved_loader
+        render_claude_mod.debounce_session_count = saved_debounce
+        server.stop_refresh_sink()
+
+    if loads != [_GATE_CWD]:
+        failures.append(
+            f"expected exactly one cache load for {_GATE_CWD!r}, got {loads!r}"
+        )
+    if _session_count_submits(pool) != 0:
+        failures.append(
+            f"fresh cache entry must not submit refresh: {_submitted_kinds(pool)}"
+        )
+    if reply is None or "[2 sessions]" not in reply:
+        failures.append(f"expected [2 sessions] in reply, got {reply!r}")
+
+
 def check(failures):
     check_the_fixture_home_is_isolated(failures)
     check_stopping_a_server_restores_the_refresh_sink(failures)
     check_the_session_count_refresh_is_gated_on_cache_age(failures)
     check_a_render_without_a_cwd_submits_no_session_count(failures)
+    check_claude_server_render_loads_session_count_once(failures)
     check_the_log_line_helper_survives_an_unwritable_path(failures)
     check_the_pool_starts_every_worker_under_its_lock(failures)
 

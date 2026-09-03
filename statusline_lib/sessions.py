@@ -28,11 +28,22 @@ import time
 from .base import app_dir
 from .process_snapshot import _LazySnapshot, _resolve_psutil
 
-_SESSION_COUNT_CACHE_PATH = os.path.join(
-    app_dir(), ".statusline-sessioncount-cache.json"
-)
+_SESSION_COUNT_CACHE_FILENAME = ".statusline-sessioncount-cache.json"
 _SESSION_COUNT_CACHE_MAX_AGE_SECONDS = 86400  # prune entries older than a day
+_CACHE_ENTRY_UNSET = object()
 _TEXT_ENCODING = "utf-8"
+
+
+def session_count_cache_path():
+    return os.path.join(app_dir(), _SESSION_COUNT_CACHE_FILENAME)
+
+
+def load_session_count_entry(cwd, *, cache_path=None):
+    if not cwd:
+        return None
+    path = cache_path or session_count_cache_path()
+    entry = _load_session_count_cache(path).get(os.path.normcase(cwd))
+    return entry if isinstance(entry, dict) else None
 
 
 def _load_session_count_cache(path):
@@ -60,7 +71,7 @@ def _save_session_count_cache(path, cache, now):
         pass
 
 
-def count_active_sessions(cwd, *, cache_path=None):
+def count_active_sessions(cwd, *, cache_path=None, cache_entry=_CACHE_ENTRY_UNSET):
     """Return how many supported interactive agent sessions run in `cwd` --
     whatever the cache holds, stale included, never a synchronous psutil
     scan.
@@ -81,10 +92,10 @@ def count_active_sessions(cwd, *, cache_path=None):
     """
     if not cwd:
         return 0
-    path = cache_path or _SESSION_COUNT_CACHE_PATH
-    entry = _load_session_count_cache(path).get(os.path.normcase(cwd))
-    if isinstance(entry, dict):
-        return int(entry.get("count", 0))
+    if cache_entry is _CACHE_ENTRY_UNSET:
+        cache_entry = load_session_count_entry(cwd, cache_path=cache_path)
+    if isinstance(cache_entry, dict):
+        return int(cache_entry.get("count", 0))
     return 0
 
 
@@ -102,7 +113,7 @@ def refresh_session_count_cache(cwds, *, cache_path=None):
     either way, so the render serves an honest 0 rather than a stale count.
     """
     now = time.time()
-    path = cache_path or _SESSION_COUNT_CACHE_PATH
+    path = cache_path or session_count_cache_path()
     targets = [cwds] if isinstance(cwds, str) else list(cwds)
     _reset_process_scan_counter()
     if not targets:

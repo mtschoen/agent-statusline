@@ -5,9 +5,9 @@ sends them, which is the point of the split: server.py stayed under the
 repository's 400-line ceiling, and the parts that can be reasoned about
 without a running server are testable without one.
 
-`Server.bind`, `Server.serve_forever`, `Server.close` and `serve` all still
-live in server.py and are still the public surface; these are the pieces they
-are assembled from.
+`Server.bind`, `Server.serve_forever`, and `Server.close` live in server.py
+and `serve` lives in server_entry.py; these are the pieces they are
+assembled from.
 
 Imports:
   base  -- state_dir, to locate the client's spawn lock
@@ -164,4 +164,26 @@ class DepartedClientResetCounter:
         if not is_departed_client_reset(error):
             return False
         self.count += 1
+        return True
+
+
+RECEIVE_ERROR_LOG_INTERVAL_SECONDS = 60.0
+
+
+class ReceiveErrorLogLimiter:
+    """Allow the first receive traceback, then at most one per interval."""
+
+    def __init__(self, clock, interval_seconds=RECEIVE_ERROR_LOG_INTERVAL_SECONDS):
+        self._clock = clock
+        self._interval_seconds = interval_seconds
+        self._last_logged_at = None
+
+    def should_log(self):
+        now = self._clock()
+        if (
+            self._last_logged_at is not None
+            and now - self._last_logged_at < self._interval_seconds
+        ):
+            return False
+        self._last_logged_at = now
         return True

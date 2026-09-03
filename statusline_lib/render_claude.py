@@ -104,6 +104,7 @@ def _line1(
     terminal_width_hint=None,
     turns_summary="",
     state_directory=None,
+    session_count=None,
 ):
     host = f"{_HOST_COLOR}{hostname()}{RESET}"
     line1 = (
@@ -113,7 +114,10 @@ def _line1(
     )
     # Suppress the brief 2-process overlap during a session restart (old process
     # still winding down as the new one starts) -- only badge a sustained count.
-    n_sessions = debounce_session_count(count_active_sessions(cwd), cwd)
+    active_session_count = (
+        count_active_sessions(cwd) if session_count is None else session_count
+    )
+    n_sessions = debounce_session_count(active_session_count, cwd)
     if n_sessions >= 2:
         line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
     ref = _git_ref(cwd, state_directory)
@@ -229,7 +233,9 @@ def transcript_path_for(payload):
     return _find_session_jsonl(session_id) or ""
 
 
-def render_claude_statusline(payload, cwd, walk, now, *, state_directory=None):
+def render_claude_statusline(
+    payload, cwd, walk, now, *, state_directory=None, session_count=None
+):
     """Render the Claude Code and Antigravity CLI status line from an already
     computed transcript `walk`.
 
@@ -287,6 +293,7 @@ def render_claude_statusline(payload, cwd, walk, now, *, state_directory=None):
         terminal_width_hint,
         turns_summary,
         state_directory,
+        session_count=session_count,
     )
 
     # Resolve compact verbosity (STATUSLINE_COMPACT + $COLUMNS): re-render the

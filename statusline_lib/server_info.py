@@ -52,7 +52,11 @@ _ROOT_ENTRY_POINTS = (
 
 
 def server_info_path(state_directory=None):
-    """Absolute path to the server info file under state_dir(state_directory)."""
+    """Absolute path to the server info file under state_dir(state_directory).
+
+    Resolves an optional unresolved override or falls back to the default
+    state directory.
+    """
     return os.path.join(state_dir(state_directory), SERVER_INFO_FILENAME)
 
 

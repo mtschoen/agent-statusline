@@ -47,8 +47,10 @@ from verify_server_socket import _IDLE_PREF, _WORKERS_PREF, _socket_server
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import statusline_lib.server as server_module
+import statusline_lib.server_entry as server_entry_module
 from statusline_lib.base import app_dir
-from statusline_lib.server import IDLE_EXIT_SECONDS, MAXIMUM_DATAGRAM_BYTES, serve
+from statusline_lib.server import IDLE_EXIT_SECONDS, MAXIMUM_DATAGRAM_BYTES
+from statusline_lib.server_entry import serve
 from statusline_lib.server_info import read_server_info, server_info_path
 
 # Generous, and a ceiling rather than a measurement: a healthy server replies
@@ -101,6 +103,30 @@ class _DepartedClientResetSocket:
             raise ConnectionResetError(
                 10054, "An existing connection was forcibly closed by the remote host"
             )
+        self._clock.now += IDLE_EXIT_SECONDS + 1
+        raise TimeoutError()
+
+    def close(self):
+        pass
+
+
+class _BurstingErrorSocket:
+    """A receive socket that raises three plain OSErrors at the same fake-clock
+    time, advances the clock past the rate limit interval, raises a fourth plain
+    OSError, then advances past the idle window and raises TimeoutError."""
+
+    def __init__(self, clock):
+        self._clock = clock
+        self.calls = 0
+
+    def recvfrom(self, size):
+        del size
+        self.calls += 1
+        if self.calls <= 3:
+            raise OSError(f"burst error {self.calls}")
+        if self.calls == 4:
+            self._clock.now += 61.0
+            raise OSError("burst error 4")
         self._clock.now += IDLE_EXIT_SECONDS + 1
         raise TimeoutError()
 
@@ -305,6 +331,31 @@ def check_a_departed_client_reset_is_counted_not_logged(failures):
         )
 
 
+def check_bursting_receive_errors_are_rate_limited(failures):
+    """Repeated transient receive errors within the rate-limit interval must
+    only log the first traceback; after the interval, another traceback is logged."""
+    clock = _FakeClock()
+    server = _socket_server(clock=clock)
+    server.bind()
+    real_socket = server._socket
+    server._socket = _BurstingErrorSocket(clock)
+    logged = []
+    saved_log_traceback = server_module.log_traceback
+    server_module.log_traceback = lambda path: logged.append(path)
+    try:
+        server.serve_forever()
+    finally:
+        server_module.log_traceback = saved_log_traceback
+        server._socket = real_socket
+        server.close()
+    if not server.stop_requested:
+        failures.append("the loop must still reach its idle exit after bursting errors")
+    if len(logged) != 2:
+        failures.append(
+            f"bursting receive errors must log exactly 2 tracebacks, got {len(logged)}"
+        )
+
+
 def check_serve_runs_a_server_and_returns_zero(failures):
     """The entry point body end to end: resolve the directories, bind, sweep
     once, run the receive loop, tear everything down, return 0. The idle
@@ -337,17 +388,48 @@ def check_a_failing_bind_is_logged_and_returns_one(failures):
     would keep spawning a server that keeps dying with no record anywhere."""
     log = os.path.join(app_dir(), ".statusline-error.log")
     os.makedirs(os.path.dirname(log), exist_ok=True)
-    saved = server_module.Server.bind
-    server_module.Server.bind = _bind_that_fails
+    saved = server_entry_module.Server.bind
+    server_entry_module.Server.bind = _bind_that_fails
     try:
         code = serve([])
     finally:
-        server_module.Server.bind = saved
+        server_entry_module.Server.bind = saved
     if code != 1:
         failures.append(f"a failing bind must make serve return 1, got {code!r}")
     with open(log, encoding=_ENCODING) as f:
         if "this bind was always going to fail" not in f.read():
             failures.append("a failing bind must log its traceback")
+
+
+def check_server_exposes_startup_housekeeping(failures):
+    clock = _FakeClock()
+    server = _socket_server(clock=clock)
+    sweeps = []
+    server._housekeeper = lambda directory, now: sweeps.append((directory, now)) or 0
+    server.maybe_housekeep()
+    server.close()
+    if sweeps != [(_STATE_DIR, clock.now)]:
+        failures.append(f"public startup housekeeping must sweep once: {sweeps!r}")
+
+
+def check_server_exposes_exception_logging(failures):
+    clock = _FakeClock()
+    server = _socket_server(clock=clock)
+    logged_paths = []
+    saved_log_traceback = server_module.log_traceback
+    server_module.log_traceback = lambda path: logged_paths.append(path)
+    try:
+        try:
+            raise RuntimeError("synthetic exception")
+        except RuntimeError:
+            server.log_exception()
+    finally:
+        server_module.log_traceback = saved_log_traceback
+        server.close()
+    if logged_paths != [server._error_log_path]:
+        failures.append(
+            f"log_exception must log to server error log path: {logged_paths!r}"
+        )
 
 
 class _ScriptedSocket:
@@ -436,6 +518,8 @@ def check_a_deeply_nested_datagram_does_not_end_the_loop(failures):
 
 
 def check(failures):
+    check_server_exposes_startup_housekeeping(failures)
+    check_server_exposes_exception_logging(failures)
     check_serve_forever_exits_when_idle(failures)
     check_serve_forever_exits_on_shutdown(failures)
     check_a_render_kind_answers_over_the_wire(failures)
@@ -443,6 +527,7 @@ def check(failures):
     check_a_malformed_datagram_is_ignored(failures)
     check_only_a_recognized_kind_refreshes_the_idle_timer(failures)
     check_a_transient_receive_error_is_logged_and_survived(failures)
+    check_bursting_receive_errors_are_rate_limited(failures)
     check_a_departed_client_reset_is_counted_not_logged(failures)
     check_serve_runs_a_server_and_returns_zero(failures)
     check_a_failing_bind_is_logged_and_returns_one(failures)

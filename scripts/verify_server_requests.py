@@ -300,6 +300,7 @@ def check_housekeeping_runs_at_most_hourly(failures):
     sweeps = []
     server = _server(clock=clock)
     server._housekeeper = lambda directory, now: sweeps.append(now) or 0
+    server.maybe_housekeep()
     server.handle_request({"kind": "claude", "payload": _claude_payload()})
     clock.now += 60
     server.handle_request({"kind": "claude", "payload": _claude_payload()})

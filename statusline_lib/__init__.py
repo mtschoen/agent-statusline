@@ -271,6 +271,8 @@ from .sessions import (
     _save_session_count_cache,
     count_active_sessions,
     debounce_session_count,
+    load_session_count_entry,
+    session_count_cache_path,
 )
 from .teams import (
     IDLE_THRESHOLD_SECONDS,
@@ -350,6 +352,7 @@ __all__ = [
     "hostname",
     "is_local_mode",
     "load_prefs",
+    "load_session_count_entry",
     "log_traceback",
     "platform_name",
     "pref",
@@ -363,6 +366,7 @@ __all__ = [
     "resolve_flags",
     "safe_write",
     "sanitize_state_key",
+    "session_count_cache_path",
     "spinner_frame",
     "state_dir",
     "terminal_columns",

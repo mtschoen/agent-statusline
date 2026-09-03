@@ -27,6 +27,7 @@ from verify_server_requests import (
     _ENCODING,
     _REPO,
     _STATE_DIR,
+    _FakeClock,
     _RecordingPool,
     _server,
 )
@@ -44,8 +45,10 @@ from statusline_lib.server_info import read_server_info, server_info_path
 from statusline_lib.server_jobs import WORKER_POOL_SIZE, set_refresh_sink
 from statusline_lib.server_socket import (
     RECEIVE_BUFFER_BYTES,
+    RECEIVE_ERROR_LOG_INTERVAL_SECONDS,
     SPAWN_LOCK_FILENAME,
     DepartedClientResetCounter,
+    ReceiveErrorLogLimiter,
     _disable_windows_connection_reset,
     is_departed_client_reset,
 )
@@ -518,6 +521,27 @@ def check_departed_client_reset_counter_notes_and_counts(failures):
         failures.append(f"the counter must accumulate across resets: {counter.count}")
 
 
+def check_receive_error_log_limiter_rate_limits(failures):
+    """The limiter allows the first traceback immediately, suppresses repeated
+    calls within the interval, and allows another traceback after the interval."""
+    clock = _FakeClock()
+    limiter = ReceiveErrorLogLimiter(clock.read)
+    if not limiter.should_log():
+        failures.append("first receive error must log immediately")
+    if limiter.should_log():
+        failures.append("second error at the same timestamp must be suppressed")
+    clock.now += RECEIVE_ERROR_LOG_INTERVAL_SECONDS - 0.1
+    if limiter.should_log():
+        failures.append("error before interval elapsed must be suppressed")
+    clock.now += 0.2
+    if not limiter.should_log():
+        failures.append("error after interval elapsed must be logged")
+    if limiter.should_log():
+        failures.append(
+            "immediate subsequent error after logging must be suppressed again"
+        )
+
+
 def check(failures):
     check_bind_writes_the_info_file(failures)
     check_bind_starts_the_pool_and_close_stops_it(failures)
@@ -536,6 +560,7 @@ def check(failures):
     check_disabling_connection_reset_swallows_a_missing_windll(failures)
     check_is_departed_client_reset_classifies_connection_reset_only(failures)
     check_departed_client_reset_counter_notes_and_counts(failures)
+    check_receive_error_log_limiter_rate_limits(failures)
 
 
 def main():

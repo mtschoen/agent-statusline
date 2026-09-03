@@ -28,7 +28,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.sessions as sessions_mod
-from statusline_lib import _process_matches, count_active_sessions
+from statusline_lib import (
+    _process_matches,
+    count_active_sessions,
+    load_session_count_entry,
+    session_count_cache_path,
+)
 from statusline_lib.server_jobs import set_refresh_sink
 
 _ENCODING = "utf-8"
@@ -198,26 +203,84 @@ def check_refresh_writes_cache(failures):
     path when no cache_path is given."""
     real_count = sessions_mod._count_via_psutil
     sessions_mod._count_via_psutil = lambda cwd, ps, scan=None: 7
-    saved_path = sessions_mod._SESSION_COUNT_CACHE_PATH
+    saved_app_dir = sessions_mod.app_dir
     sink = _SinkRecorder()
     previous = set_refresh_sink(sink)
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            cache_path = os.path.join(tmp, "cache.json")
+            sessions_mod.app_dir = lambda: tmp
             cwd = os.path.join(tmp, "proj")
-            sessions_mod._SESSION_COUNT_CACHE_PATH = cache_path
             returned = sessions_mod.refresh_session_count_cache(cwd)
-            served = count_active_sessions(cwd, cache_path=cache_path)
+            served = count_active_sessions(cwd)
     finally:
         set_refresh_sink(previous)
         sessions_mod._count_via_psutil = real_count
-        sessions_mod._SESSION_COUNT_CACHE_PATH = saved_path
+        sessions_mod.app_dir = saved_app_dir
     if returned != 7:
         failures.append(f"refresh return: expected 7, got {returned!r}")
     if served != 7:
         failures.append(f"refresh then read: expected 7, got {served!r}")
     if sink.calls:
         failures.append(f"fresh read after refresh submitted: {sink.calls!r}")
+
+
+def check_dynamic_session_count_cache_path_and_preloaded_entry(failures):
+    with tempfile.TemporaryDirectory() as dir_a, tempfile.TemporaryDirectory() as dir_b:
+        saved_app_dir = sessions_mod.app_dir
+        try:
+            sessions_mod.app_dir = lambda: dir_a
+            path_a = session_count_cache_path()
+            expected_a = os.path.join(dir_a, ".statusline-sessioncount-cache.json")
+            if path_a != expected_a:
+                failures.append(f"expected {expected_a!r}, got {path_a!r}")
+
+            sessions_mod.app_dir = lambda: dir_b
+            path_b = session_count_cache_path()
+            expected_b = os.path.join(dir_b, ".statusline-sessioncount-cache.json")
+            if path_b != expected_b:
+                failures.append(f"expected {expected_b!r}, got {path_b!r}")
+        finally:
+            sessions_mod.app_dir = saved_app_dir
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_file = os.path.join(tmp, "test-cache.json")
+        cwd = os.path.join(tmp, "my_repo")
+        with open(cache_file, "w", encoding=_ENCODING) as f:
+            json.dump({os.path.normcase(cwd): {"count": 42, "ts": 100}}, f)
+
+        entry = load_session_count_entry(cwd, cache_path=cache_file)
+        if entry != {"count": 42, "ts": 100}:
+            failures.append(
+                f"load_session_count_entry: expected {{'count': 42, 'ts': 100}}, got {entry!r}"
+            )
+
+        if load_session_count_entry("", cache_path=cache_file) is not None:
+            failures.append("load_session_count_entry on empty cwd should return None")
+
+        if load_session_count_entry("/missing-dir", cache_path=cache_file) is not None:
+            failures.append("load_session_count_entry on miss should return None")
+
+    def _exploding_loader(path):
+        raise AssertionError("loader must not be called when cache_entry is passed")
+
+    saved_loader = sessions_mod._load_session_count_cache
+    sessions_mod._load_session_count_cache = _exploding_loader
+    try:
+        count_from_dict = count_active_sessions(
+            "/any/cwd", cache_entry={"count": 7, "ts": 100}
+        )
+        if count_from_dict != 7:
+            failures.append(
+                f"preloaded entry count: expected 7, got {count_from_dict!r}"
+            )
+
+        count_from_none = count_active_sessions("/any/cwd", cache_entry=None)
+        if count_from_none != 0:
+            failures.append(
+                f"preloaded None entry count: expected 0, got {count_from_none!r}"
+            )
+    finally:
+        sessions_mod._load_session_count_cache = saved_loader
 
 
 def check_refresh_psutil_unavailable(failures):
@@ -313,6 +376,7 @@ def main():
     check_refresh_count_via_psutil_exception(failures)
     check_save_session_count_cache_oserror(failures)
     check_load_session_count_cache_non_dict(failures)
+    check_dynamic_session_count_cache_path_and_preloaded_entry(failures)
 
     if failures:
         for f in failures:

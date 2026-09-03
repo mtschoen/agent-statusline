@@ -40,7 +40,7 @@ from .render_claude import context_usage, render_claude_statusline, transcript_p
 from .render_subagent import _MAIN_INPUT_LOG, render_subagent_rows
 from .rendertimer import record_render
 from .server_jobs import request_refresh
-from .sessions import _SESSION_COUNT_CACHE_PATH, _load_session_count_cache
+from .sessions import count_active_sessions, load_session_count_entry
 
 # subagent_statusline.py's own input-log path, distinct from _MAIN_INPUT_LOG
 # above (the main claude render's payload). Never read by any lib code
@@ -110,7 +110,7 @@ def columns_environment(columns):
             os.environ["COLUMNS"] = previous
 
 
-def session_count_is_stale(cwd, now):
+def session_count_is_stale(cwd, now, cache_entry):
     """True when `cwd` has no cached session count, or its entry has aged past
     SESSION_COUNT_CACHE_TTL_SECONDS.
 
@@ -122,12 +122,9 @@ def session_count_is_stale(cwd, now):
     """
     if not cwd:
         return False
-    entry = _load_session_count_cache(_SESSION_COUNT_CACHE_PATH).get(
-        os.path.normcase(cwd)
-    )
-    if not isinstance(entry, dict):
+    if not isinstance(cache_entry, dict):
         return True
-    return now - entry.get("ts", 0) >= SESSION_COUNT_CACHE_TTL_SECONDS
+    return now - cache_entry.get("ts", 0) >= SESSION_COUNT_CACHE_TTL_SECONDS
 
 
 def last_render_path(session_id, state_directory=None):
@@ -254,14 +251,21 @@ def render_claude_request(payload, tables, clock, state_directory):
     )
     tables.touch_cwd(cwd)
     now = clock()
-    if session_count_is_stale(cwd, now):
+    cache_entry = load_session_count_entry(cwd)
+    if session_count_is_stale(cwd, now, cache_entry):
         request_refresh("session-count", tuple(tables.known_cwds()))
+    session_count = count_active_sessions(cwd, cache_entry=cache_entry)
     context_used, window_size = context_usage(payload)
     write_ctx_state(
         session_id, context_used, window_size, now, state_dir=state_directory
     )
     text = render_claude_statusline(
-        payload, cwd, walk, now, state_directory=state_directory
+        payload,
+        cwd,
+        walk,
+        now,
+        state_directory=state_directory,
+        session_count=session_count,
     )
     write_last_render(session_id, text, state_directory)
     return text

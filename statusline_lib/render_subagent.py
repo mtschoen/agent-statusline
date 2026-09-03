@@ -20,7 +20,8 @@ Agent JSONL discovery (teammates):
   under `<parent_transcript_path - ".jsonl">/subagents/`. Verified against
   existing files where the meta + JSONL header carries `agentId == filename id`.
 
-Every task is rendered independently: a task that raises anywhere in its own
+Every task is rendered independently: malformed non-dictionary task entries are
+silently ignored, and a valid task dictionary that raises anywhere in its own
 row build is logged and skipped so one bad row never takes down the rest of
 the panel.
 """
@@ -287,8 +288,10 @@ def _log_error():
 def render_subagent_rows(payload, now):
     """One JSON row string per renderable task, in payload order.
 
-    A task that cannot be rendered at all is logged and skipped: one bad row
-    must never take down the rest of the panel."""
+    Malformed non-dictionary task entries are silently skipped. A valid task
+    dictionary that cannot be rendered is logged and skipped: one bad row must
+    never take down the rest of the panel.
+    """
     session_id = payload.get("session_id") or payload.get("conversation_id") or ""
     parent = payload.get("transcript_path") or ""
     if not parent and session_id:
@@ -296,6 +299,8 @@ def render_subagent_rows(payload, now):
     prefix = f"{ORANGE}LOCAL{RESET} | " if is_local_mode() else ""
     rows = []
     for task in payload.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
         try:
             row = _row_for_task(task, parent, session_id, now)
         except Exception:

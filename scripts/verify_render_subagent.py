@@ -6,16 +6,18 @@ Drives render_subagent_rows in-process against a payload carrying a running
 task, a completed task, a lead task, and a task whose agent transcript is
 missing from disk -- all four are renderable and each produces one JSON row.
 Two more entries are deliberately not renderable: a task with no id (returns
-None, silently dropped) and a malformed entry that is not even a dict (raises
-inside _row_for_task before either of its own internal guards, caught and
-skipped by render_subagent_rows rather than aborting the whole list).
+None, silently dropped) and a malformed entry that is not even a dict (silently
+skipped by render_subagent_rows rather than logging a traceback or aborting the
+whole list).
 
 The remaining checks call the module's private helpers directly (matching the
 existing verify_subagent_agent_jsonl_path.py / verify_subagent_elapsed_hardening.py
 style) to reach branches that a single realistic payload cannot: the
-transcript_path-missing fallback to _find_session_jsonl, and the two internal
+transcript_path-missing fallback to _find_session_jsonl, the two internal
 try/except guards inside _row_for_task (a metrics failure or a beacon failure
-must each degrade just its own segment, not drop the row).
+must each degrade just its own segment, not drop the row), and the outer
+try/except guard inside render_subagent_rows (a failure in a valid task record
+is logged and isolated).
 
 Run from anywhere; imports from agent-statusline by path.
 """
@@ -99,7 +101,7 @@ def _build_payload(tmp):
             "startTime": (_NOW - 2) * 1000,
         },
         {"id": "", "description": "no id, dropped without raising"},
-        "not-a-task-dict",  # raises inside _row_for_task; must be skipped
+        "not-a-task-dict",  # malformed task entry; must be silently skipped
     ]
 
     return {
@@ -112,7 +114,23 @@ def _build_payload(tmp):
 def _check_renders_expected_rows_and_skips_the_rest(failures):
     with tempfile.TemporaryDirectory() as tmp:
         payload = _build_payload(tmp)
-        rows = render.render_subagent_rows(payload, _NOW)
+        log_calls = []
+        original_log_traceback = render.log_traceback
+
+        def fake_log_traceback(path):
+            log_calls.append(path)
+
+        render.log_traceback = fake_log_traceback
+        try:
+            rows = render.render_subagent_rows(payload, _NOW)
+        finally:
+            render.log_traceback = original_log_traceback
+
+        if log_calls:
+            failures.append(
+                "a non-dict task should be skipped without logging a traceback; "
+                f"got {log_calls!r}"
+            )
 
         if len(rows) != 4:
             failures.append(f"expected 4 renderable rows, got {len(rows)}: {rows!r}")
@@ -301,12 +319,51 @@ def _check_live_payload_for_session(failures):
             render._MAIN_INPUT_LOG = original_log
 
 
+def _check_render_subagent_rows_logs_and_skips_when_row_for_task_raises(failures):
+    original_row_for_task = render._row_for_task
+    original_log_traceback = render.log_traceback
+    log_calls = []
+
+    def fake_log_traceback(path):
+        log_calls.append(path)
+
+    def fake_row_for_task(task, parent, session_id, now):
+        if task.get("id") == "bad-task":
+            raise RuntimeError("synthetic failure in valid task dict")
+        return {"id": task["id"], "content": "valid"}
+
+    render._row_for_task = fake_row_for_task
+    render.log_traceback = fake_log_traceback
+    try:
+        payload = {
+            "tasks": [
+                {"id": "good-1"},
+                {"id": "bad-task"},
+                {"id": "good-2"},
+            ]
+        }
+        rows = render.render_subagent_rows(payload, _NOW)
+    finally:
+        render._row_for_task = original_row_for_task
+        render.log_traceback = original_log_traceback
+
+    if not log_calls:
+        failures.append(
+            "render_subagent_rows should log a traceback when _row_for_task raises"
+        )
+    if len(rows) != 2:
+        failures.append(
+            f"render_subagent_rows should render remaining valid rows when one raises; got {rows!r}"
+        )
+
+
 def check(failures):
     _check_renders_expected_rows_and_skips_the_rest(failures)
     _check_missing_transcript_path_falls_back_to_find_session_jsonl(failures)
     _check_row_for_task_degrades_when_metrics_raise(failures)
     _check_row_for_task_degrades_when_beacon_raises(failures)
     _check_row_for_task_includes_a_truthy_beacon(failures)
+    _check_render_subagent_rows_logs_and_skips_when_row_for_task_raises(failures)
     _check_live_payload_for_session(failures)
 
 
@@ -319,7 +376,7 @@ def main():
         sys.exit(1)
     print(
         "OK: render_subagent_rows renders running/completed/lead/missing-transcript "
-        "rows, skips a no-id and a malformed task, and degrades gracefully on "
+        "rows, silently skips a no-id and a malformed task, and degrades gracefully on "
         "metrics/beacon failures"
     )
 

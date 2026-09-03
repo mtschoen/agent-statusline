@@ -1,8 +1,9 @@
-"""Verify subagent_statusline.py's `_agent_jsonl_path` -- the antigravity-brain
-transcript lookup named in the original task brief (diagnose+fix the
-Antigravity subagent panel) but left unexercised by the first pass of this
-fix. No verify script anywhere in the repo drove this function before this
-file (`grep -rl "_agent_jsonl_path" scripts/` found nothing).
+"""Verify statusline_lib/render_subagent.py's `_agent_jsonl_path` -- the
+antigravity-brain transcript lookup named in the original task brief
+(diagnose+fix the Antigravity subagent panel) but left unexercised by the
+first pass of this fix. No verify script anywhere in the repo drove this
+function before this file (`grep -rl "_agent_jsonl_path" scripts/` found
+nothing).
 
 `_agent_jsonl_path` has its own, third, independently-implemented antigravity
 detection gate (`"antigravity-cli" in parent_transcript_path or
@@ -17,6 +18,13 @@ depend on the routing bug that motivated the argv-flag fix.
 Uses a synthetic `brain/<task_id>/.system_generated/logs/transcript.jsonl`
 fixture under a faked HOME (never live `~/.gemini` data).
 
+Also covers the Claude-layout (non-antigravity) branches that the original
+pass of this file never reached: a non-`.jsonl` parent path, the
+directory-scan fallback matching a drifted filename, and the directory-scan
+fallback finding nothing at all -- all three moved from unreachable to
+reachable once `_agent_jsonl_path` fell under the statusline_lib coverage
+gate (Task 6, resident-server plan).
+
 Run from anywhere; imports from agent-statusline by path.
 """
 
@@ -26,7 +34,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import subagent_statusline as sub
+from statusline_lib import render_subagent as sub
 
 _TASK_ID = "agent-task-0001"
 _TEXT_ENCODING = "utf-8"
@@ -168,6 +176,59 @@ def _check_non_antigravity_path_falls_through_to_claude_layout(failures):
     _with_fake_home(run)
 
 
+def _check_non_jsonl_extension_returns_empty(failures):
+    # No antigravity signal, and the parent path doesn't even end in
+    # ".jsonl" -- the Claude-layout branch bails before touching disk at all.
+    def run(tmp):
+        parent = os.path.join(tmp, "projects", "proj", "lead.txt")
+        result = sub._agent_jsonl_path(parent, _TASK_ID)
+        if result != "":
+            failures.append(f"non-.jsonl parent path should yield ''; got {result!r}")
+
+    _with_fake_home(run)
+
+
+def _check_claude_layout_substring_fallback_match(failures):
+    # The exact agent-<task_id>.jsonl filename is absent, but a file whose
+    # name merely contains task_id is present -- same id-drift insurance as
+    # the antigravity glob fallback, for the Claude on-disk layout.
+    def run(tmp):
+        parent = os.path.join(tmp, "projects", "proj", "lead.jsonl")
+        base, _ext = os.path.splitext(parent)
+        sub_dir = base + "/subagents"
+        os.makedirs(sub_dir, exist_ok=True)
+        drifted = os.path.join(sub_dir, f"agent-{_TASK_ID}-extra.jsonl")
+        with open(drifted, "w", encoding=_TEXT_ENCODING) as f:
+            f.write("{}\n")
+        result = sub._agent_jsonl_path(parent, _TASK_ID)
+        if result != drifted:
+            failures.append(
+                f"Claude-layout substring fallback: expected {drifted!r}, got {result!r}"
+            )
+
+    _with_fake_home(run)
+
+
+def _check_claude_layout_no_match_returns_empty(failures):
+    # subagents/ dir exists but nothing in it -- direct nor substring --
+    # matches task_id, so the scan falls all the way through to "".
+    def run(tmp):
+        parent = os.path.join(tmp, "projects", "proj", "lead.jsonl")
+        base, _ext = os.path.splitext(parent)
+        sub_dir = base + "/subagents"
+        os.makedirs(sub_dir, exist_ok=True)
+        unrelated = os.path.join(sub_dir, "agent-someone-else.jsonl")
+        with open(unrelated, "w", encoding=_TEXT_ENCODING) as f:
+            f.write("{}\n")
+        result = sub._agent_jsonl_path(parent, _TASK_ID)
+        if result != "":
+            failures.append(
+                f"Claude-layout no-match scan should yield ''; got {result!r}"
+            )
+
+    _with_fake_home(run)
+
+
 def check(failures):
     _check_direct_mapping_via_path_substring(failures)
     _check_direct_mapping_via_antigravity_agent_env(failures)
@@ -175,6 +236,9 @@ def check(failures):
     _check_no_match_returns_empty(failures)
     _check_empty_parent_path_returns_empty(failures)
     _check_non_antigravity_path_falls_through_to_claude_layout(failures)
+    _check_non_jsonl_extension_returns_empty(failures)
+    _check_claude_layout_substring_fallback_match(failures)
+    _check_claude_layout_no_match_returns_empty(failures)
 
 
 def main():

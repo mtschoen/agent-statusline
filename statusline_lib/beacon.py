@@ -1,22 +1,24 @@
-"""Beacon scanning, format_beacon, format_calibrated_eta.
+"""The beacon column: format_beacon, format_calibrated_eta, session timing.
 
 Imports:
-  base         -- for color constants, _json_loads
-  walker       -- for _walker_subcommand (beacons-history)
-  beacon_cache -- for _beacons_latest_cached (the beacons-latest TTL cache;
-                  split out to stay under the file-size complexity gate)
-  refresh      -- for maybe_spawn_refresh (detached cache recompute)
+  base                 -- for color constants
+  walker               -- for _walker_subcommand (beacons-history)
+  beacon_cache         -- for _beacons_latest_cached (the beacons-latest TTL
+                          cache; split out to stay under the file-size gate)
+  server_jobs          -- for request_refresh (in-process cache recompute)
+  transcript_summaries -- for summary_for, which serves the anchor scan from
+                          memory and recomputes it on the worker pool
 """
 
 import glob
 import json
 import os
-import re as _re
 from datetime import UTC, datetime
 
-from .base import GREEN, RED, RESET, YELLOW, _json_loads, app_dir
+from .base import GREEN, RED, RESET, YELLOW, app_dir
 from .beacon_cache import _beacons_latest_cached
-from .refresh import maybe_spawn_refresh
+from .server_jobs import request_refresh
+from .transcript_summaries import summary_for
 from .walker import _walker_subcommand
 
 _BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
@@ -69,11 +71,6 @@ def _compute_objective_drift(begin_ts, begin_eta_seconds, current_eta_seconds):
     return "nominal"
 
 
-_BEACON_BLOCK_RE = _re.compile(
-    r"<progress-beacon>\s*(\{.*?\})\s*</progress-beacon>", _re.DOTALL
-)
-
-
 def _find_session_jsonl(session_id):
     """Locate the JSONL transcript for `session_id` across project dirs."""
     if not session_id:
@@ -100,75 +97,6 @@ def _find_session_jsonl(session_id):
     return None
 
 
-def _iter_beacons_in_text(text):
-    """Yield parsed beacon dicts embedded in one assistant text chunk."""
-    if "<progress-beacon>" not in text:
-        return
-    for match in _BEACON_BLOCK_RE.finditer(text):
-        try:
-            beacon = _json_loads(match.group(1))
-        except (ValueError, TypeError):
-            continue
-        if isinstance(beacon, dict):
-            yield beacon
-
-
-def _iter_assistant_beacons(entry):
-    """Yield (timestamp, beacon_dict) for every progress-beacon in a JSONL
-    assistant entry. No-op for non-assistant / malformed entries."""
-    if not isinstance(entry, dict) or entry.get("type") != "assistant":
-        return
-    ts = entry.get("timestamp")
-    if not ts:
-        return
-    content = (entry.get("message") or {}).get("content") or []
-    if not isinstance(content, list):
-        return
-    for chunk in content:
-        if not isinstance(chunk, dict) or chunk.get("type") != "text":
-            continue
-        for beacon in _iter_beacons_in_text(chunk.get("text") or ""):
-            yield ts, beacon
-
-
-def _apply_beacon(beacon, ts, state):
-    """Fold one beacon into the (begin_ts, report_ts, begin_eta) anchor state."""
-    kind = beacon.get("kind")
-    if kind == "begin":
-        state["begin_ts"] = ts
-        # New begin resets the step anchor -- any reports before this begin
-        # belonged to a closed lifecycle.
-        state["report_ts"] = None
-        eta = beacon.get("eta_seconds")
-        try:
-            eta_val = float(eta) if eta is not None else 0.0
-        except (TypeError, ValueError):
-            eta_val = 0.0
-        state["begin_eta"] = eta_val if eta_val > 0 else None
-    elif kind == "report":
-        # Only track reports within the current begin's lifecycle.
-        if state["begin_ts"] is not None:
-            state["report_ts"] = ts
-    elif kind == "end":
-        state["begin_ts"] = None
-        state["report_ts"] = None
-        state["begin_eta"] = None
-
-
-def _scan_beacon_anchors(path):
-    """One forward pass over the JSONL, folding every beacon into anchor state."""
-    state = {"begin_ts": None, "report_ts": None, "begin_eta": None}
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                evt = _json_loads(line)
-            except (ValueError, TypeError):
-                continue
-            for ts, beacon in _iter_assistant_beacons(evt):
-                _apply_beacon(beacon, ts, state)
-    return state
-
-
 def _find_beacon_anchors(session_id):
     """Scan the session's JSONL for the active lifecycle's anchors.
 
@@ -188,17 +116,18 @@ def _find_beacon_anchors(session_id):
         is in flight or it carried a non-positive eta.
 
     Walker only exposes the LATEST beacon, but for the status line we want
-    wall-clock anchors. Doing the scan in Python keeps walker's surface
-    stable; the cost is one forward pass over the JSONL per render. JSONLs
-    cap at single-digit MB in practice, so the scan is sub-100ms even on
-    big sessions.
+    wall-clock anchors, so the scan happens here rather than growing walker's
+    surface. It is a forward pass over a whole JSONL, which is too much to do
+    on the resident server's receive thread, so the value comes from
+    transcript_summaries: memory on the render, a worker-pool job when the
+    transcript has grown. A session whose scan has not landed yet renders
+    without anchors for one render rather than waiting for one.
     """
     path = _find_session_jsonl(session_id)
     if not path:
         return (None, None, None)
-    try:
-        state = _scan_beacon_anchors(path)
-    except OSError:
+    state = summary_for("beacon-anchors", path)
+    if state is None:
         return (None, None, None)
     return (state["begin_ts"], state["report_ts"], state["begin_eta"])
 
@@ -307,8 +236,8 @@ def _bias_factor_cached(period_seconds):
     value, stale included, never a synchronous walker call. A fresh entry is
     served as-is; a stale or missing entry is served too ((0, None) on a true
     miss, which format_calibrated_eta already treats as "not enough data yet
-    -- hide the field") and hands recomputation to a detached child via
-    maybe_spawn_refresh, same as every other walker/git lookup in this
+    -- hide the field") and hands recomputation to the server's worker pool
+    via request_refresh, same as every other walker/git lookup in this
     package (render-perf ratchet, PLAN.md: this inline walker call was the
     last one left on the render path). See refresh_bias_factor_cache for the
     actual walk.
@@ -325,19 +254,19 @@ def _bias_factor_cached(period_seconds):
         n_pairs, bias = entry.get("n_pairs", 0), entry.get("bias_factor")
         if _bias_entry_fresh(entry):
             return n_pairs, bias
-        maybe_spawn_refresh("bias-factor", period_seconds)
+        request_refresh("bias-factor", period_seconds)
         return n_pairs, bias
-    maybe_spawn_refresh("bias-factor", period_seconds)
+    request_refresh("bias-factor", period_seconds)
     return 0, None
 
 
 def refresh_bias_factor_cache(period_seconds):
     """Recompute one period's bias factor and persist it for the render's
-    cached read. Runs in the detached refresh child (refresh.run_refresh),
-    never on the render path. Failures are negative-cached under the longer
-    _BIAS_FAILURE_TTL_SECONDS so a slow/unreachable walker degrades the
-    calibrated ETA (which is optional) instead of respawning a refresh child
-    on every single render.
+    cached read. Runs on the resident server's worker pool
+    (server_jobs.run_refresh), never on the render path. Failures are
+    negative-cached under the longer _BIAS_FAILURE_TTL_SECONDS so a
+    slow/unreachable walker degrades the calibrated ETA (which is optional)
+    instead of requesting a fresh refresh on every single render.
 
     --no-config keeps this walk off the walker-roots.json extra roots: the
     SMB mount measured 8-38s against this call's 5s timeout, so every cache
@@ -354,9 +283,9 @@ def refresh_bias_factor_cache(period_seconds):
         "--win-start",
         "0",
         "--no-config",
-        # 2s cap per the render-budget invariant (verify_render_budget.py).
-        # Only the detached refresh child ever waits on this now -- the
-        # render itself never blocks on it.
+        # 2s cap per the render-budget invariant, enforced by
+        # verify_render_budget_static.py. Only the server's worker pool ever
+        # waits on this now -- the render itself never blocks on it.
         timeout=2,
     )
     entry = {

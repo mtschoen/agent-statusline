@@ -5,19 +5,22 @@ spawn-per-render Python harnesses.
 
 Covers the env gate, the read/record round-trip, per-session-file peak
 tracking (and its natural reset on a session change), the no-session-id
-shared-key fallback, corrupt/absent state, and end-to-end renders of
-``statusline.py`` and ``qwen_statusline.py`` via subprocess with
-``CLAUDE_STATE_DIR`` pointed at a temp dir.
+shared-key fallback, and corrupt/absent state.
 
-PhaseTimer (a separate, much cheaper concern also living in rendertimer.py)
-has its own verify_phase_timer.py.
+There is no entry-point end-to-end coverage (statusline.py /
+qwen_statusline.py via subprocess) because those wrappers never call
+record_render: they forward one datagram to the resident server and print
+its reply, and the server is what records the duration.
+format_render_suffix's own call site inside
+render_claude_statusline / render_qwen_statusline is still reached (and
+covered) by scripts/verify_render_claude.py and scripts/verify_qwen_-
+render.py, which is where the resident server actually calls it now.
 
 Run from anywhere; imports from agent-statusline by path.
 """
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 
@@ -189,122 +192,6 @@ def check_record_render_bad_elapsed(failures):
             )
 
 
-def _run_statusline(tmp_home, payload):
-    env = dict(os.environ)
-    env["HOME"] = tmp_home
-    env["USERPROFILE"] = tmp_home
-    return subprocess.run(
-        [sys.executable, os.path.join(REPO, "statusline.py")],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        encoding=TEXT_ENCODING,
-        env=env,
-        timeout=30,
-        check=False,
-    )
-
-
-def check_statusline_end_to_end(failures):
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        payload = {
-            "session_id": "e2e-session",
-            "cwd": REPO,
-            "workspace": {"current_dir": REPO, "project_dir": REPO},
-            "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
-        }
-        first = _run_statusline(tmp, payload)
-        if first.returncode != 0:
-            failures.append(
-                f"first statusline render should exit 0 (got {first.returncode})"
-            )
-        if "ui " in first.stdout and "peak" in first.stdout:
-            failures.append(
-                "the first render has no prior data, so it should show no timing suffix"
-            )
-
-        second = _run_statusline(tmp, payload)
-        if "ui " not in second.stdout or "peak" not in second.stdout:
-            failures.append(
-                f"the second render should show the first render's timing; got {second.stdout!r}"
-            )
-
-
-def check_statusline_timing_disabled_end_to_end(failures):
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        payload = {
-            "session_id": "e2e-session-disabled",
-            "cwd": REPO,
-            "workspace": {"current_dir": REPO, "project_dir": REPO},
-            "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
-        }
-        env = dict(os.environ)
-        env["HOME"] = tmp
-        env["USERPROFILE"] = tmp
-        env[RENDER_TIMING_ENV_VAR] = "0"
-        for _ in range(2):
-            result = subprocess.run(
-                [sys.executable, os.path.join(REPO, "statusline.py")],
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                encoding=TEXT_ENCODING,
-                env=env,
-                timeout=30,
-                check=False,
-            )
-        if "ui " in result.stdout and "peak" in result.stdout:
-            failures.append("STATUSLINE_RENDER_TIMING=0 should suppress the suffix")
-        state_dir = os.path.join(tmp, ".claude", "state")
-        if os.path.isdir(state_dir) and any(
-            name.startswith("render-timer-") for name in os.listdir(state_dir)
-        ):
-            failures.append(
-                "STATUSLINE_RENDER_TIMING=0 should skip writing state entirely"
-            )
-
-
-def _run_qwen(tmp_home, payload):
-    env = dict(os.environ)
-    env["HOME"] = tmp_home
-    env["USERPROFILE"] = tmp_home
-    return subprocess.run(
-        [sys.executable, os.path.join(REPO, "qwen_statusline.py")],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        encoding=TEXT_ENCODING,
-        env=env,
-        timeout=30,
-        check=False,
-    )
-
-
-def check_qwen_end_to_end(failures):
-    # A cold render starts detached refresh children that may still be writing
-    # beneath .qwen after the render process exits. Windows cannot remove that
-    # directory during the race, so let its temp cleaner handle any stragglers.
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        payload = {
-            "workspace": {"current_dir": REPO},
-            "model": {"display_name": "Qwen3-Coder"},
-            "context_window": {"context_window_size": 128000, "current_usage": 1000},
-        }
-        first = _run_qwen(tmp, payload)
-        if first.returncode != 0:
-            failures.append(f"first qwen render should exit 0 (got {first.returncode})")
-        if "ui " in first.stdout and "peak" in first.stdout:
-            failures.append(
-                "qwen's first render has no prior data, so no timing suffix"
-            )
-
-        second = _run_qwen(tmp, payload)
-        if "ui " not in second.stdout or "peak" not in second.stdout:
-            failures.append(
-                f"qwen's second render should show the first render's timing; got {second.stdout!r}"
-            )
-
-
 def main():
     failures = []
     for check in (
@@ -318,9 +205,6 @@ def main():
         check_corrupt_state_file,
         check_record_render_oserror,
         check_record_render_bad_elapsed,
-        check_statusline_end_to_end,
-        check_statusline_timing_disabled_end_to_end,
-        check_qwen_end_to_end,
     ):
         check(failures)
     if failures:

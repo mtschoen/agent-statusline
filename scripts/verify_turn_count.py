@@ -7,35 +7,36 @@ fixture style as verify_cache_cost_split.py), so every guard in
 _accumulate_user_prompt is exercised: tool results (all-`tool_result` block
 lists), isMeta / isSidechain bookkeeping, empty content, missing content,
 non-text blocks, and <local-command-...> wrappers must NOT count; plain typed
-strings and content-block lists carrying typed `text` blocks must. A bounded
-subprocess smoke test runs the real statusline.py entry point against a
-fixture transcript so removing the format_turn_count call or its _line1
-wiring in main() cannot leave the suite green.
+strings and content-block lists carrying typed `text` blocks must. A wiring
+smoke test calls render_claude_statusline directly against a fixture
+transcript so removing the format_turn_count call or its _line1 wiring
+cannot leave the suite green -- the resident server reaches that same
+function, not statusline.py, which is a thin client wrapper now (PLAN.md's
+resident-server redesign).
 
 Run from anywhere; imports from agent-statusline by path.
 """
 
-import importlib.util
 import json
 import os
 import re
 import sys
 import tempfile
+import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
+# The scripts directory, so the shared fixture helper is importable, and the
+# home redirection it installs before the first statusline_lib import.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _render_fixture_helpers import isolate_home
+
+_HOME = isolate_home("verify-turn-count-")
+
 from statusline_lib import format_turn_count
 from statusline_lib.cost import walk_transcript
-from statusline_lib.process_safe import ProcessTimeout, run_captured
-
-# statusline.py is the entry script (not a package module), so load it by path.
-# Importing under a name other than "__main__" skips its main() guard.
-_spec = importlib.util.spec_from_file_location(
-    "statusline", os.path.join(_ROOT, "statusline.py")
-)
-statusline = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(statusline)
+from statusline_lib.render_claude import _append_turn_count, render_claude_statusline
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -181,40 +182,25 @@ def _check_format_turn_count(failures):
 
 
 def _check_append_turn_count(failures):
-    rendered = _strip(statusline._append_turn_count("base", "7 turns"))
+    rendered = _strip(_append_turn_count("base", "7 turns"))
     if rendered != "base 7 turns":
         failures.append(f"_append_turn_count should append; got {rendered!r}")
-    noop = statusline._append_turn_count("base", "")
+    noop = _append_turn_count("base", "")
     if noop != "base":
         failures.append(f"_append_turn_count with '' should be a no-op; got {noop!r}")
 
 
-# Runs the real statusline.py entry point as __main__ with stdin fed from a
-# payload file, so the smoke test can go through process_safe.run_captured
-# (which deliberately exposes no stdin parameter) instead of a raw
-# subprocess.run (TID251-banned). sys.argv[0] under `-c` is "-c", so the
-# snippet's own arguments start at index 1.
-_RUN_AS_MAIN_SNIPPET = (
-    "import runpy, sys;"
-    " sys.stdin = open(sys.argv[1], encoding='utf-8');"
-    " runpy.run_path(sys.argv[2], run_name='__main__')"
-)
-
-
-def _check_subprocess_smoke(failures):
-    """Run the real statusline.py entry point against a fixture transcript and
-    assert the first output line carries the turn count. The in-process checks
-    above stop at the _append_turn_count helper; without this, deleting the
-    format_turn_count call or its _line1 wiring in main() would stay green.
-
-    HOME/USERPROFILE point at a temp dir (same isolation as
-    verify_render_budget.py's cold render) so app_dir()-routed state and log
-    writes land in the fixture, not the real ~/.claude. The subprocess call
-    carries a bounded timeout per the render-budget invariant.
+def _check_wiring_reaches_line1(failures):
+    """render_claude_statusline must actually call _append_turn_count while
+    building line 1. The in-process checks above stop at the
+    _append_turn_count helper itself; without this, deleting the
+    format_turn_count call or its _line1 wiring from render_claude.py would
+    stay green. Calls render_claude_statusline directly (the function the
+    resident server reaches, not statusline.py, which is a thin client
+    wrapper now -- PLAN.md's resident-server redesign) against a fixture
+    transcript walked for real.
     """
-    tmp = tempfile.mkdtemp(prefix="turn-count-smoke-")
-    home = os.path.join(tmp, "home")
-    os.makedirs(home)
+    tmp = tempfile.mkdtemp(prefix="turn-count-wiring-")
     transcript = os.path.join(tmp, "sess.jsonl")
     _write_jsonl(
         transcript,
@@ -231,43 +217,16 @@ def _check_subprocess_smoke(failures):
             _assistant("m2"),
         ],
     )
-    env = dict(os.environ)
-    env["HOME"] = home
-    env["USERPROFILE"] = home
-    env.pop("CLAUDE_WALKER_BIN", None)
-    payload_path = os.path.join(tmp, "payload.json")
-    with open(payload_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "session_id": "turn-count-smoke",
-                "transcript_path": transcript,
-                "cwd": tmp,
-                "workspace": {"current_dir": tmp, "project_dir": tmp},
-                "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
-            },
-            f,
-        )
-    try:
-        result = run_captured(
-            [
-                sys.executable,
-                "-c",
-                _RUN_AS_MAIN_SNIPPET,
-                payload_path,
-                os.path.join(_ROOT, "statusline.py"),
-            ],
-            env=env,
-            timeout=30,
-        )
-    except ProcessTimeout:
-        failures.append("smoke render exceeded the 30s timeout")
-        return
-    if result.returncode != 0:
-        failures.append(
-            f"smoke render exited {result.returncode}: {result.stderr.strip()!r}"
-        )
-        return
-    first_line = _strip(result.stdout.splitlines()[0]) if result.stdout else ""
+    payload = {
+        "session_id": "turn-count-wiring",
+        "transcript_path": transcript,
+        "cwd": tmp,
+        "workspace": {"current_dir": tmp, "project_dir": tmp},
+        "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
+    }
+    walk = walk_transcript(transcript, include_subagents=True)
+    rendered = render_claude_statusline(payload, tmp, walk, time.time())
+    first_line = _strip(rendered.splitlines()[0]) if rendered else ""
     if "2 turns" not in first_line:
         failures.append(f"line 1 should contain '2 turns'; got {first_line!r}")
 
@@ -278,7 +237,7 @@ def check(failures):
     _check_missing_transcript(failures)
     _check_format_turn_count(failures)
     _check_append_turn_count(failures)
-    _check_subprocess_smoke(failures)
+    _check_wiring_reaches_line1(failures)
 
 
 def main():

@@ -30,9 +30,12 @@ import os
 import sys
 
 from statusline_lib.claude_family_install import (
+    build_server_hook,
+    describe_statusline_family,
     desired_statusline_entries,
     merge_statusline_family_settings,
     missing_required_scripts,
+    resident_server_script_targets,
     statusline_family_already_current,
 )
 from statusline_lib.codex_install import codex_config_current, merge_codex_config
@@ -115,30 +118,17 @@ def main():
     # JSON value stays readable across platforms.
     repo = os.path.abspath(args.repo).replace("\\", "/")
 
-    install_claude = platform in ("claude", "both")
-    install_qwen = platform in ("qwen", "both")
-    install_antigravity = platform == "antigravity"
-    install_pi = platform == "pi"
-
-    if install_claude:
-        result = _install_claude(repo, args.dry_run)
-        if result != 0:
-            return result
-
-    if install_qwen:
-        result = _install_qwen(repo, args.dry_run)
-        if result != 0:
-            return result
-
-    if install_antigravity:
-        result = _install_antigravity(repo, args.dry_run)
-        if result != 0:
-            return result
-
-    if install_pi:
-        result = _install_pi(repo, args.dry_run)
-        if result != 0:
-            return result
+    installers = (
+        (platform in ("claude", "both"), _install_claude),
+        (platform in ("qwen", "both"), _install_qwen),
+        (platform == "antigravity", _install_antigravity),
+        (platform == "pi", _install_pi),
+    )
+    for enabled, installer in installers:
+        if enabled:
+            result = installer(repo, args.dry_run)
+            if result != 0:
+                return result
 
     if platform in ("codex", "kimi"):
         result = _install_toml_platform(repo, args.dry_run, platform)
@@ -248,17 +238,23 @@ def _install_pi(repo, dry_run):
 def _install_claude_family(
     repo, dry_run, platform, settings_path, session_label, on_installed=None
 ):
-    """Install statusLine + subagentStatusLine + nudge hook for a
-    Claude-settings.json-shaped platform (Claude Code or Antigravity CLI --
-    see statusline_lib.claude_family_install for why the merge logic itself
-    lives there instead of here)."""
+    """Install statusLine + subagentStatusLine + nudge hook + SessionStart
+    ensure-server hook for a Claude-settings.json-shaped platform (Claude
+    Code or Antigravity CLI -- see statusline_lib.claude_family_install for
+    why the merge logic itself lives there instead of here)."""
     main_target, subagent_target, main_command, subagent_command = (
         _commands_for_platform(repo, platform=platform)
     )
     nudge_target, nudge_command = _nudge_command(repo, platform=platform)
     nudge_markers = _nudge_markers(nudge_target)
-
-    missing = missing_required_scripts(main_target, subagent_target, nudge_target)
+    server_command, server_markers = build_server_hook(repo, platform=platform)
+    hook_args = (nudge_markers, nudge_command, server_markers, server_command)
+    missing = missing_required_scripts(
+        main_target,
+        subagent_target,
+        nudge_target,
+        *resident_server_script_targets(repo),
+    )
     if missing:
         print(f"error: expected file not found: {missing[0]}", file=sys.stderr)
         print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
@@ -282,7 +278,10 @@ def _install_claude_family(
         main_command, subagent_command, STATUSLINE_REFRESH_SECONDS
     )
     already_current = statusline_family_already_current(
-        settings, desired_statusline, desired_subagent, nudge_markers, nudge_command
+        settings, desired_statusline, desired_subagent, *hook_args
+    )
+    description = describe_statusline_family(
+        main_command, subagent_command, nudge_command, server_command
     )
 
     if already_current:
@@ -290,16 +289,13 @@ def _install_claude_family(
             print(f"# {settings_path} already current -- nothing to write")
         else:
             print(f"already current: {settings_path}")
-            print(
-                f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
-            )
-            print(f"  subagentStatusLine: {subagent_command}")
-            print(f"  UserPromptSubmit:   {nudge_command}")
+            for line in description:
+                print(line)
             print("Nothing to do.")
         return 0
 
     merge_statusline_family_settings(
-        settings, desired_statusline, desired_subagent, nudge_markers, nudge_command
+        settings, desired_statusline, desired_subagent, *hook_args
     )
 
     if dry_run:
@@ -309,11 +305,8 @@ def _install_claude_family(
 
     atomic_write_settings(settings_path, settings)
     print(f"updated {settings_path}")
-    print(
-        f"  statusLine:         {main_command}  (refresh {STATUSLINE_REFRESH_SECONDS}s)"
-    )
-    print(f"  subagentStatusLine: {subagent_command}")
-    print(f"  UserPromptSubmit:   {nudge_command}")
+    for line in description:
+        print(line)
 
     if on_installed is not None:
         on_installed()

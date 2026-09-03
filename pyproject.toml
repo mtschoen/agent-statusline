@@ -50,12 +50,16 @@ select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF", "TID251"]
 # fake child behavior) that the wrapper deliberately doesn't expose.
 "scripts/verify_install_settings_merge.py" = ["TID251"]
 "scripts/verify_kimi_statusline_entry.py" = ["TID251"]
-"scripts/verify_cold_start.py" = ["TID251"]
 "scripts/verify_process_safe.py" = ["TID251"]
 "scripts/verify_qwen_statusline_entry.py" = ["TID251"]
 "scripts/verify_render_budget.py" = ["TID251"]
 "scripts/verify_render_timer.py" = ["TID251"]
 "scripts/verify_wrap_nudge.py" = ["TID251"]
+# Same shape, for the resident server's client: statusline_client.py is entry
+# glue outside the coverage gate, so the only way to test it is to run the
+# real file as a subprocess against a real server, with a per-case env and a
+# hard timeout that process_safe deliberately does not expose.
+"scripts/verify_server_protocol.py" = ["TID251"]
 
 [tool.ruff.format]
 # ruff format defaults: double quotes, 88-column wrap, trailing commas.

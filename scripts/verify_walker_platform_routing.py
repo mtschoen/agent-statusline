@@ -7,7 +7,7 @@ _walker_root_list()'s coverage (config parsing, dedup, filtering, the
 STATUSLINE_PLATFORM env branches, and the ANTIGRAVITY_AGENT/
 ANTIGRAVITY_CONVERSATION_ID env auto-detect fallback).
 
-Why this exists: _walker_root_list() used to carry its own independent copy
+Why this exists: _walker_root_list() must not carry its own separate copy
 of app_dir()'s platform if/elif chain (a prior fix, dccc87e, had to update
 both in lockstep -- see TEST-REPORT.md). When app_dir() gained argv-flag
 support (install.py now injects `--statusline-platform antigravity` into the

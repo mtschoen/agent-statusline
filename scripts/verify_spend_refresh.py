@@ -1,10 +1,9 @@
 """Verify the stale-while-revalidate contract for
 burnrate._window_spend_cached: it must never rescan transcript roots inline -
 it serves the cache (stale entries and the neighboring grid cell of a
-trailing window included) and delegates recomputation to a detached child via
-refresh.maybe_spawn_refresh. Siblings: verify_pace_refresh.py (the pace
-hourly cache's identical contract) and verify_refresh_spawner.py (the
-spawner).
+trailing window included) and delegates recomputation to the resident
+server's worker pool via server_jobs.request_refresh. Sibling:
+verify_pace_refresh.py (the pace hourly cache's identical contract).
 
 Run from anywhere; imports from `agent-statusline` by path.
 """
@@ -23,7 +22,7 @@ _TEXT_ENCODING = "utf-8"
 
 
 class _SpawnRecorder:
-    """Stands in for refresh.maybe_spawn_refresh; records (kind, argument)."""
+    """Stands in for server_jobs.request_refresh; records (kind, argument)."""
 
     def __init__(self):
         self.calls = []
@@ -52,12 +51,12 @@ def _pin_spend(tmp, now, spawn, cache_payload=None):
     saved = (
         burnrate._SPEND_CACHE_PATH,
         burnrate._now_unix,
-        burnrate.maybe_spawn_refresh,
+        burnrate.request_refresh,
         burnrate._sum_window_spend,
     )
     burnrate._SPEND_CACHE_PATH = cache_path
     burnrate._now_unix = lambda: now
-    burnrate.maybe_spawn_refresh = spawn
+    burnrate.request_refresh = spawn
 
     def inline_walk_forbidden(_win_start):
         raise AssertionError("render path walked transcripts inline")
@@ -70,7 +69,7 @@ def _restore_spend(saved):
     (
         burnrate._SPEND_CACHE_PATH,
         burnrate._now_unix,
-        burnrate.maybe_spawn_refresh,
+        burnrate.request_refresh,
         burnrate._sum_window_spend,
     ) = saved
 
@@ -188,10 +187,10 @@ def _check_spend_refresh_writes_cache(failures):
         try:
             returned = burnrate.refresh_window_spend_cache(win_q)
             spawn = _SpawnRecorder()
-            saved_spawn = burnrate.maybe_spawn_refresh
-            burnrate.maybe_spawn_refresh = spawn
+            saved_spawn = burnrate.request_refresh
+            burnrate.request_refresh = spawn
             served = burnrate._window_spend_cached(_WIN_START)
-            burnrate.maybe_spawn_refresh = saved_spawn
+            burnrate.request_refresh = saved_spawn
             with open(cache_path, encoding=_TEXT_ENCODING) as f:
                 sums = json.load(f)["sums"]
         finally:

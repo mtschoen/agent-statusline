@@ -404,22 +404,23 @@ def _check_week_used(failures):
 
 
 class _SpawnRecorder:
-    """Swap qwen_quota.maybe_spawn_refresh for a recorder so cache tests can
-    assert spawn behavior without launching detached children."""
+    """Swap qwen_quota.request_refresh for a recorder so cache tests can
+    assert refresh-request behavior without triggering an actual worker-pool
+    job."""
 
     def __init__(self):
         self.calls = []
         self._original = None
 
     def __enter__(self):
-        self._original = qwen_quota.maybe_spawn_refresh
-        qwen_quota.maybe_spawn_refresh = lambda kind, argument: self.calls.append(
+        self._original = qwen_quota.request_refresh
+        qwen_quota.request_refresh = lambda kind, argument: self.calls.append(
             (kind, argument)
         )
         return self
 
     def __exit__(self, *_exc_info):
-        qwen_quota.maybe_spawn_refresh = self._original
+        qwen_quota.request_refresh = self._original
 
 
 def _check_cache_swr_contract(failures):

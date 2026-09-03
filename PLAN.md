@@ -38,6 +38,23 @@
 
 ## Done
 
+- Render-perf ratchet retargeted at the resident-server client CLOSED
+  (2026-09-02): the ratchet's warm-core (<=10ms) and cold-end-to-end (<=8s)
+  tiers are superseded by a fixed two-part budget under the resident-server
+  architecture. A client render (`statusline_client.py`) pays a fixed cost --
+  roughly 65ms of interpreter and import, plus at most 150ms of socket wait
+  before it falls back -- and a server render (`statusline_lib/server.py`,
+  served inline on its receive loop from warm in-memory state) is
+  single-digit milliseconds from payload to string.
+  `scripts/verify_render_budget.py` now measures the client's round trip
+  against a live server (median of nine runs, best of three attempts, a
+  200ms budget overridable via `STATUSLINE_TEST_CLIENT_BUDGET_MS`, measured
+  at roughly 40ms on the development machine) rather than a synthetic
+  cold-cache fixture; the static half of the same invariant (bounded
+  subprocess timeouts, an import-free client, one datagram out and one in)
+  lives in `scripts/verify_render_budget_static.py`. See AGENTS.md's
+  render-budget invariant section for the full architecture and the incident
+  this branch fixed.
 - Cold-start check dedupe CLOSED (2026-08-03): the e22f841 split landed
   mid-flight and left verify_render_budget.py still carrying (and running)
   the two checks that moved to verify_cold_start.py --

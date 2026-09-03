@@ -1,10 +1,11 @@
 """Entry-level regression tests for the agy-specific dispatch inside
-statusline.py::main()/_render_line2 -- the cross-field interactions unit
-tests on statusline_lib.agy alone cannot exercise.
+statusline_lib/render_claude.py's render_claude_statusline()/_render_line2
+-- the cross-field interactions unit tests on statusline_lib.agy alone
+cannot exercise.
 
-Drives statusline.main() in-process (stdin/stdout patched, log paths
-redirected into a tempdir), mirroring verify_qwen_statusline_entry.py's
-pattern for the qwen entry point.
+Calls render_claude_statusline directly with a synthetic payload and walk.
+statusline.py is a thin resident-server client wrapper that renders nothing
+itself, and the resident server reaches this exact function the same way.
 
 Covers the reviewer's reproduction of the cache-truthfulness Critical: the
 per-turn cache fallback (statusline_lib.agy.format_agy_cache) must fire ONLY
@@ -20,36 +21,35 @@ per-horizon selection rule end-to-end, since format_agy_quota's own unit tests
 Run from anywhere; imports from agent-statusline by path.
 """
 
-import io
-import json
 import os
 import sys
-import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import statusline
+
+# The scripts directory, so the shared fixture helper is importable, and the
+# home redirection it installs before the first statusline_lib import.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _render_fixture_helpers import isolate_home
+
+_HOME = isolate_home("verify-agy-dispatch-")
+
+from statusline_lib import walk_transcript
+from statusline_lib.render_claude import render_claude_statusline, transcript_path_for
 
 
-def _run_main(payload, tmp_dir):
-    """Run statusline.main() with `payload` (a dict) on stdin, log paths
-    redirected into `tmp_dir`. Returns (stdout_text, exception_or_None)."""
-    real_input_log, real_error_log = statusline._INPUT_LOG, statusline._ERROR_LOG
-    statusline._INPUT_LOG = os.path.join(tmp_dir, "input.log")
-    statusline._ERROR_LOG = os.path.join(tmp_dir, "error.log")
-
-    real_stdin, real_stdout = sys.stdin, sys.stdout
-    sys.stdin = io.StringIO(json.dumps(payload))
-    sys.stdout = io.StringIO()
+def _run_main(payload):
+    """Render `payload` (a dict) through render_claude_statusline directly.
+    Returns (rendered_text, exception_or_None)."""
     real_columns = os.environ.get("COLUMNS")
     os.environ.pop("COLUMNS", None)  # deterministic: no host-terminal width leaks in
     try:
-        statusline.main()
-        return sys.stdout.getvalue(), None
+        walk = walk_transcript(transcript_path_for(payload), include_subagents=True)
+        cwd = (payload.get("workspace") or {}).get("current_dir") or ""
+        return render_claude_statusline(payload, cwd, walk, time.time()), None
     except Exception as exc:
-        return sys.stdout.getvalue(), exc
+        return "", exc
     finally:
-        sys.stdin, sys.stdout = real_stdin, real_stdout
-        statusline._INPUT_LOG, statusline._ERROR_LOG = real_input_log, real_error_log
         if real_columns is None:
             os.environ.pop("COLUMNS", None)
         else:
@@ -120,8 +120,7 @@ def _check_claude_payload_broken_walk_renders_no_cache_field(failures):
     # Critical reproduction: a Claude Code payload whose transcript walk finds
     # nothing must render NO cache field at all, not the agy per-turn
     # fallback's plausible-looking numbers.
-    with tempfile.TemporaryDirectory() as tmp:
-        out, exc = _run_main(_claude_payload(), tmp)
+    out, exc = _run_main(_claude_payload())
     if exc is not None:
         failures.append(f"Claude payload with broken walk must not crash, got {exc!r}")
     if "turn" in out:
@@ -136,8 +135,7 @@ def _check_claude_payload_broken_walk_renders_no_cache_field(failures):
 
 
 def _check_agy_payload_renders_turn_marked_cache(failures):
-    with tempfile.TemporaryDirectory() as tmp:
-        out, exc = _run_main(_agy_payload(), tmp)
+    out, exc = _run_main(_agy_payload())
     if exc is not None:
         failures.append(f"agy payload must not crash, got {exc!r}")
     if "turn" not in out:
@@ -177,8 +175,7 @@ def _check_agy_quota_never_hides_hottest_5h_window(failures):
             "reset_in_seconds": 999_999_999,
         },
     }
-    with tempfile.TemporaryDirectory() as tmp:
-        out, exc = _run_main(_agy_payload(quota=quota), tmp)
+    out, exc = _run_main(_agy_payload(quota=quota))
     if exc is not None:
         failures.append(f"agy quota payload must not crash, got {exc!r}")
     if "5h: " not in out:
@@ -204,8 +201,8 @@ def main():
             print(f"FAIL: {failure}")
         sys.exit(1)
     print(
-        "OK: statusline.py gates the agy cache fallback to agy payloads and "
-        "never hides the hottest per-horizon quota window"
+        "OK: render_claude_statusline gates the agy cache fallback to agy "
+        "payloads and never hides the hottest per-horizon quota window"
     )
 
 

@@ -1,7 +1,8 @@
-"""Verify beacon.py internal helpers: _compute_objective_drift,
-_find_session_jsonl, _iter_beacons_in_text, _iter_assistant_beacons,
-_apply_beacon, _scan_beacon_anchors, _find_beacon_anchors, and
-_format_clock_and_elapsed.
+"""Verify the beacon column's internal helpers: _compute_objective_drift,
+_find_session_jsonl, _find_beacon_anchors and _format_clock_and_elapsed from
+beacon.py, plus _iter_beacons_in_text, _iter_assistant_beacons, _apply_beacon
+and _scan_beacon_anchors from beacon_anchors.py, which is where the pass over
+a whole transcript lives.
 
 Walker-dependent paths (format_beacon, _bias_factor_cached,
 format_calibrated_eta) live in verify_beacon_walker.py.
@@ -21,10 +22,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import contextlib
 
 import statusline_lib.beacon as _beacon_mod
+import statusline_lib.beacon_anchors as _anchors_mod
 from statusline_lib.beacon import (
     _compute_objective_drift,
     _find_beacon_anchors,
     _format_clock_and_elapsed,
+)
+from statusline_lib.beacon_anchors import (
     _iter_assistant_beacons,
     _iter_beacons_in_text,
 )
@@ -222,7 +226,7 @@ def _check_iter_assistant_beacons(failures):
 
 def _check_apply_beacon_eta_parse(failures):
     state = {"begin_ts": None, "report_ts": None, "begin_eta": None}
-    _beacon_mod._apply_beacon(
+    _anchors_mod._apply_beacon(
         {"kind": "begin", "eta_seconds": "not-a-number"}, "2026-01-01T00:00:00Z", state
     )
     if state["begin_ts"] != "2026-01-01T00:00:00Z":
@@ -232,7 +236,7 @@ def _check_apply_beacon_eta_parse(failures):
             f"_apply_beacon begin: bad eta should yield None begin_eta, got {state['begin_eta']!r}"
         )
     state2 = {"begin_ts": None, "report_ts": None, "begin_eta": None}
-    _beacon_mod._apply_beacon({"kind": "report"}, "ts", state2)
+    _anchors_mod._apply_beacon({"kind": "report"}, "ts", state2)
     if state2["report_ts"] is not None:
         failures.append("_apply_beacon report with no begin_ts must not set report_ts")
 
@@ -248,7 +252,7 @@ def _check_scan_beacon_anchors_bad_json(failures):
         )
         tmp_path = tmp.name
     try:
-        state = _beacon_mod._scan_beacon_anchors(tmp_path)
+        state = _anchors_mod._scan_beacon_anchors(tmp_path)
         if state["begin_ts"] != "2026-05-01T10:00:00.000Z":
             failures.append(
                 f"_scan_beacon_anchors: bad line skipped, begin_ts wrong; got {state['begin_ts']!r}"

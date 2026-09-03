@@ -6,8 +6,8 @@ _bias_factor_cached follows the same stale-while-revalidate contract as
 _git_ref_raw_cached (gitref.py) and _beacons_latest_cached (beacon_cache.py,
 below): the render never walks the fleet inline. A fresh entry is served, a
 stale/missing entry is served too (neutral (0, None) on a true miss) while a
-detached refresh is requested via refresh.maybe_spawn_refresh, and
-refresh_bias_factor_cache (the detached child's entry point) actually runs
+refresh is requested via server_jobs.request_refresh, and
+refresh_bias_factor_cache (the worker pool's entry point) actually runs
 the walker and persists the result.
 
 Patches _walker_subcommand and _find_beacon_anchors in-process so no real
@@ -21,7 +21,6 @@ import os
 import re
 import sys
 import tempfile
-import time
 from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -162,12 +161,12 @@ def _check_bias_cache_fresh_hit_skips_spawn(failures, tmpdir):
     calls = []
     _beacon_mod._walker_subcommand = lambda *_a, **_kw: calls.append(1)
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_mod.maybe_spawn_refresh
-    _beacon_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_mod.request_refresh
+    _beacon_mod.request_refresh = spawn
     try:
         n, bias = _beacon_mod._bias_factor_cached(period)
     finally:
-        _beacon_mod.maybe_spawn_refresh = original_spawn
+        _beacon_mod.request_refresh = original_spawn
     if (n, bias) != (8, 0.8):
         failures.append(f"fresh hit: expected (8, 0.8), got ({n!r}, {bias!r})")
     if calls:
@@ -178,7 +177,7 @@ def _check_bias_cache_fresh_hit_skips_spawn(failures, tmpdir):
 
 def _check_bias_cache_stale_serves_and_spawns(failures, tmpdir):
     """A stale entry (validly keyed, TTL expired) is still served, and a
-    detached refresh is requested -- the render must never recompute inline."""
+    refresh is requested -- the render must never recompute inline."""
     cache_path = os.path.join(tmpdir, "bias-cache-stale.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path
     period = 604800
@@ -199,12 +198,12 @@ def _check_bias_cache_stale_serves_and_spawns(failures, tmpdir):
     calls = []
     _beacon_mod._walker_subcommand = lambda *_a, **_kw: calls.append(1)
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_mod.maybe_spawn_refresh
-    _beacon_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_mod.request_refresh
+    _beacon_mod.request_refresh = spawn
     try:
         n, bias = _beacon_mod._bias_factor_cached(period)
     finally:
-        _beacon_mod.maybe_spawn_refresh = original_spawn
+        _beacon_mod.request_refresh = original_spawn
     if (n, bias) != (5, 0.5):
         failures.append(f"stale serve: expected (5, 0.5), got ({n!r}, {bias!r})")
     if calls:
@@ -249,12 +248,12 @@ def _check_bias_cache_miss_and_wrong_period_serve_neutral_and_spawn(failures, tm
             1
         )
         spawn = _SpawnRecorder()
-        original_spawn = _beacon_mod.maybe_spawn_refresh
-        _beacon_mod.maybe_spawn_refresh = spawn
+        original_spawn = _beacon_mod.request_refresh
+        _beacon_mod.request_refresh = spawn
         try:
             n, bias = _beacon_mod._bias_factor_cached(period)
         finally:
-            _beacon_mod.maybe_spawn_refresh = original_spawn
+            _beacon_mod.request_refresh = original_spawn
         if (n, bias) != (0, None):
             failures.append(f"{label}: expected (0, None), got ({n!r}, {bias!r})")
         if calls:
@@ -264,11 +263,11 @@ def _check_bias_cache_miss_and_wrong_period_serve_neutral_and_spawn(failures, tm
 
 
 def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
-    """refresh_bias_factor_cache (the detached child's entry point) runs the
+    """refresh_bias_factor_cache (the worker pool's entry point) runs the
     walker and persists the result where the render's cached read can serve
     it, merging into (not clobbering) other periods' entries. A walker
     failure is negative-cached (failed=True) under the longer TTL so a
-    slow/unreachable walker doesn't respawn a refresh child every render."""
+    slow/unreachable walker doesn't trigger a fresh refresh every render."""
     cache_path = os.path.join(tmpdir, "bias-cache-refresh.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path
     # Seed an unrelated period's entry that must survive the write.
@@ -317,34 +316,35 @@ def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
 
 
 def _check_bias_cache_never_waits_on_slow_walker(failures, tmpdir):
-    """The decisive regression proof for the 2026-07-26 fix: with an
-    artificially slow walker (simulating the real incident -- a
+    """The decisive regression proof for the 2026-07-26 fix: with a walker
+    that costs 1.5 simulated seconds (the real incident was a
     beacons-history call stuck near its 2s timeout under contention) and a
-    completely cold/absent bias cache, _bias_factor_cached must still return
-    in well under a second. Before the fix this call inlined the walker and
-    would have taken >= the sleep below; proving that decisively (rather
-    than relying on this machine's real claude-walker.exe happening to be
-    fast, which would pass even against the old, buggy code) is the point of
-    this check specifically -- see also
-    scripts/verify_cold_start.py's check_bias_factor_cold_cache_stays_fast
-    for the real-subprocess end-to-end version of this same scenario."""
+    completely cold/absent bias cache, _bias_factor_cached must return
+    without paying that cost.
+
+    The cost is charged to a fake clock rather than slept, so the elapsed
+    figure below is a pure function of whether the walker ran inline: no
+    wall clock is read, and a loaded machine cannot change the answer. The
+    fake walker also means this never depends on the real
+    claude-walker.exe happening to be fast, which would pass either way."""
     cache_path = os.path.join(tmpdir, "bias-cache-slow-walker.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path
+    clock = [0.0]
 
     def slow_walker(*_a, **_kw):
-        time.sleep(1.5)
+        clock[0] += 1.5
         return {"n_pairs": 25, "bias_factor": 1.4}
 
     _beacon_mod._walker_subcommand = slow_walker
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_mod.maybe_spawn_refresh
-    _beacon_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_mod.request_refresh
+    _beacon_mod.request_refresh = spawn
     try:
-        started = time.monotonic()
+        started = clock[0]
         n, bias = _beacon_mod._bias_factor_cached(604800)
-        elapsed = time.monotonic() - started
+        elapsed = clock[0] - started
     finally:
-        _beacon_mod.maybe_spawn_refresh = original_spawn
+        _beacon_mod.request_refresh = original_spawn
     if (n, bias) != (0, None):
         failures.append(
             f"cold cache with a slow walker must still serve neutral (0, None)"
@@ -352,14 +352,14 @@ def _check_bias_cache_never_waits_on_slow_walker(failures, tmpdir):
         )
     if elapsed >= 1.0:
         failures.append(
-            f"_bias_factor_cached took {elapsed:.2f}s despite a cold cache --"
-            f" it must never wait on the walker inline (regression to the"
-            f" 2026-07-26 bug); the 1.5s sleep in the fake walker should"
-            f" never be observed by the caller"
+            f"_bias_factor_cached charged {elapsed:.2f}s of walker time despite"
+            f" a cold cache -- it must never run the walker inline (regression"
+            f" to the 2026-07-26 bug); the fake walker's 1.5s cost should never"
+            f" be paid by the caller"
         )
     if spawn.calls != [("bias-factor", 604800)]:
         failures.append(
-            f"the slow walker must be handed to a detached refresh, not"
+            f"the slow walker must be handed to a requested refresh, not"
             f" called synchronously; spawn calls: {spawn.calls!r}"
         )
 
@@ -442,8 +442,8 @@ def _check_bias_cache_alternating_periods(failures, tmpdir):
         json.dump(seeded, f)
 
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_mod.maybe_spawn_refresh
-    _beacon_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_mod.request_refresh
+    _beacon_mod.request_refresh = spawn
     try:
         n_a1, bias_a1 = _beacon_mod._bias_factor_cached(period_a)
         n_b1, bias_b1 = _beacon_mod._bias_factor_cached(period_b)
@@ -452,7 +452,7 @@ def _check_bias_cache_alternating_periods(failures, tmpdir):
         n_a2, bias_a2 = _beacon_mod._bias_factor_cached(period_a)
         n_b2, bias_b2 = _beacon_mod._bias_factor_cached(period_b)
     finally:
-        _beacon_mod.maybe_spawn_refresh = original_spawn
+        _beacon_mod.request_refresh = original_spawn
 
     if spawn.calls:
         failures.append(
@@ -496,13 +496,13 @@ def _check_bias_cache_stale_period_spawns_only_its_own_key(failures, tmpdir):
         json.dump(seeded, f)
 
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_mod.maybe_spawn_refresh
-    _beacon_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_mod.request_refresh
+    _beacon_mod.request_refresh = spawn
     try:
         n_a, bias_a = _beacon_mod._bias_factor_cached(period_a)
         n_b, bias_b = _beacon_mod._bias_factor_cached(period_b)
     finally:
-        _beacon_mod.maybe_spawn_refresh = original_spawn
+        _beacon_mod.request_refresh = original_spawn
 
     if (n_a, bias_a) != (5, 0.5):
         failures.append(
@@ -583,7 +583,7 @@ def _check_format_calibrated_eta(failures):
 
 def _check_bias_history_walk_is_local_only(failures):
     """The beacons-history walk -- now only reachable via
-    refresh_bias_factor_cache, the detached child's entry point; the render
+    refresh_bias_factor_cache, the worker pool's entry point; the render
     path itself (_bias_factor_cached) never calls the walker at all -- must
     pass --no-config so it never touches the SMB extra roots from
     walker-roots.json: measured 8-38s over the network mount vs 0.5s local,
@@ -625,7 +625,7 @@ class _SpawnRecorder:
 
 
 def _check_beacons_latest_walk_is_local_only(failures):
-    """refresh_beacon_latest_cache (the detached child's entry point) must
+    """refresh_beacon_latest_cache (the worker pool's entry point) must
     pass --no-config for the same reason the bias walk does: the session
     transcript it looks up always lives on THIS machine, and the SMB extra
     roots measured 170-190ms per render vs ~55ms local-only -- paid on EVERY
@@ -695,14 +695,14 @@ def _check_beacons_latest_cache_hit_skips_spawn(failures, tmpdir):
         calls.append(1) or {"beacon": {"kind": "report"}, "age_seconds": 999}
     )
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_cache_mod.maybe_spawn_refresh
-    _beacon_cache_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_cache_mod.request_refresh
+    _beacon_cache_mod.request_refresh = spawn
     try:
         data = _beacon_cache_mod._beacons_latest_cached(
             "cache-hit-session", state_dir=tmpdir
         )
     finally:
-        _beacon_cache_mod.maybe_spawn_refresh = original_spawn
+        _beacon_cache_mod.request_refresh = original_spawn
     if calls:
         failures.append(
             f"a fresh cache hit must not call the walker; got {len(calls)} calls"
@@ -732,14 +732,14 @@ def _check_beacons_latest_cache_expiry_serves_stale_and_spawns(failures, tmpdir)
         json.dump({"cached_at_unix": stale_ts, "data": stale_data}, f)
 
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_cache_mod.maybe_spawn_refresh
-    _beacon_cache_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_cache_mod.request_refresh
+    _beacon_cache_mod.request_refresh = spawn
     try:
         data = _beacon_cache_mod._beacons_latest_cached(
             "expiring-session", state_dir=tmpdir
         )
     finally:
-        _beacon_cache_mod.maybe_spawn_refresh = original_spawn
+        _beacon_cache_mod.request_refresh = original_spawn
     if data != stale_data:
         failures.append(f"an expired entry must still be served stale; got {data!r}")
     if spawn.calls != [("beacon-latest", "expiring-session")]:
@@ -755,14 +755,14 @@ def _check_beacons_latest_cache_corrupt_file_degrades(failures, tmpdir):
         f.write("not-json")
 
     spawn = _SpawnRecorder()
-    original_spawn = _beacon_cache_mod.maybe_spawn_refresh
-    _beacon_cache_mod.maybe_spawn_refresh = spawn
+    original_spawn = _beacon_cache_mod.request_refresh
+    _beacon_cache_mod.request_refresh = spawn
     try:
         data = _beacon_cache_mod._beacons_latest_cached(
             "corrupt-session", state_dir=tmpdir
         )
     finally:
-        _beacon_cache_mod.maybe_spawn_refresh = original_spawn
+        _beacon_cache_mod.request_refresh = original_spawn
     if data is not None:
         failures.append(
             f"a corrupt cache file must degrade to None (hidden column), not crash;"
@@ -775,7 +775,7 @@ def _check_beacons_latest_cache_corrupt_file_degrades(failures, tmpdir):
 
 
 def _check_refresh_beacon_latest_cache_writes(failures, tmpdir):
-    """refresh_beacon_latest_cache (the detached child's entry point) runs
+    """refresh_beacon_latest_cache (the worker pool's entry point) runs
     the walker and persists the result where the render's cached read can
     serve it. It resolves state_dir internally (matches gitref's
     refresher), so isolation goes through CLAUDE_STATE_DIR."""

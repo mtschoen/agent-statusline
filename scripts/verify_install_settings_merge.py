@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
@@ -37,6 +38,7 @@ from statusline_lib.claude_family_install import (
     missing_required_scripts,
     statusline_family_already_current,
 )
+from statusline_lib.server_socket import SPAWN_LOCK_FILENAME
 from statusline_lib.settings_io import atomic_write_settings, load_settings
 
 _TEXT_ENCODING = "utf-8"
@@ -284,22 +286,48 @@ def _check_install_antigravity_smoke(failures):
             )
 
 
+@contextlib.contextmanager
+def _isolated_state_spawn_lock_held():
+    """Hold a fresh spawn lock in an isolated temp state directory, routed
+    there via CLAUDE_STATE_DIR -- the env var base.state_dir() and
+    statusline_client.py's state_directory() both check first, ahead of any
+    ~/.claude resolution, so the real ~/.claude/state is never touched.
+    Yields (environment, state_directory) for the caller's subprocess."""
+    with tempfile.TemporaryDirectory(prefix="statusline-real-home-state-") as state_dir:
+        lock_path = os.path.join(state_dir, SPAWN_LOCK_FILENAME)
+        with open(lock_path, "w", encoding=_TEXT_ENCODING) as f:
+            json.dump({"pid": os.getpid(), "at": time.time()}, f)
+        environment = dict(os.environ)
+        environment["CLAUDE_STATE_DIR"] = state_dir
+        yield environment, state_dir
+
+
 def _check_installed_wrapper_resolves_shim(failures):
     # Executes the real statusline-command.sh (not a copy) from its repo
     # location -- proves the sourced interpreter-probe.sh shim actually
     # resolves relative to the sourcing script and the wrapper still renders.
+    from scripts.verify_interpreter_probe import _server_json_appeared
+
     bash = shutil.which("bash")
     if bash is None:
         print("SKIP: bash not on PATH -- cannot exercise the shell wrapper here")
         return
-    result = subprocess.run(
-        [bash, os.path.join(REPO, "statusline-command.sh")],
-        input="{}",
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    with _isolated_state_spawn_lock_held() as (environment, state_directory):
+        result = subprocess.run(
+            [bash, os.path.join(REPO, "statusline-command.sh")],
+            input="{}",
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=environment,
+            check=False,
+        )
+        server_info_path = os.path.join(state_directory, "server.json")
+        if _server_json_appeared(server_info_path):
+            failures.append(
+                f"statusline-command.sh should not have spawned a real server "
+                f"(the spawn lock should have blocked it): {server_info_path} appeared"
+            )
     if result.returncode != 0:
         failures.append(
             f"statusline-command.sh should exit 0 via the sourced shim, "

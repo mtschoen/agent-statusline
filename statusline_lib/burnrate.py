@@ -32,7 +32,7 @@ from .pace import (
     weekly_sustainable_rate,
 )
 from .prefs import pref
-from .refresh import maybe_spawn_refresh
+from .server_jobs import request_refresh
 from .walker import _walker_root_list
 
 # Neutral grey for the rate number; the needle glyph carries the verdict color.
@@ -53,8 +53,8 @@ def _rate_color(rate, target):
 
 _SPEND_CACHE_TTL_SECONDS = 15
 # v2: per-entry computed_at ({win_start: {computed_at_unix, total}}) so a
-# stale entry can be served while a detached child recomputes it; v1 shared
-# one computed_at across all windows and is abandoned in place.
+# stale entry can be served while the server's worker pool recomputes it;
+# v1 shared one computed_at across all windows and is abandoned in place.
 _SPEND_CACHE_PATH = os.path.join(app_dir(), ".statusline-burnrate-cache-v2.json")
 _SPEND_CACHE_MAX_ENTRIES = 16
 # Trailing windows (now-300, midnight, now-86400) move one TTL grid step per
@@ -144,9 +144,10 @@ def _nearest_spend(entries, win_start):
 
 def _window_spend_cached(win_start):
     """Serve the window's spend total from the cache - stale included - and
-    hand recomputation to a detached child when the entry is stale or missing
-    (stale-while-revalidate; the full-fleet rescan never runs on the render
-    path - see refresh.py for why an inline walk freezes the statusline).
+    hand recomputation to the server's worker pool when the entry is stale or
+    missing (stale-while-revalidate; the full-fleet rescan never runs on the
+    render path - see server_jobs.py for why an inline walk freezes the
+    statusline).
 
     A render asks for up to three windows (5-min, 24h, midnight); one cache
     file holds all of them so they don't evict each other.
@@ -163,17 +164,17 @@ def _window_spend_cached(win_start):
     if entry is not None:
         if _now_unix() - entry.get("computed_at_unix", 0) < _SPEND_CACHE_TTL_SECONDS:
             return entry.get("total", 0.0)
-        maybe_spawn_refresh("window-spend", win_start)
+        request_refresh("window-spend", win_start)
         return entry.get("total", 0.0)
-    maybe_spawn_refresh("window-spend", win_start)
+    request_refresh("window-spend", win_start)
     return _nearest_spend(entries, win_start)
 
 
 def refresh_window_spend_cache(win_start_unix):
     """Recompute one window's spend total and persist it for the render's
-    cached read. Runs in the detached refresh child (refresh.run_refresh),
+    cached read. Runs on the server's worker pool (server_jobs.run_refresh),
     never on the render path. `win_start_unix` arrives already quantized (the
-    render quantizes before spawning). Keeps the newest
+    render quantizes before requesting the refresh). Keeps the newest
     _SPEND_CACHE_MAX_ENTRIES entries so concurrent windows don't evict each
     other."""
     total = _sum_window_spend(win_start_unix)

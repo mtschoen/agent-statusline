@@ -10,7 +10,7 @@ does not set those (confirmed empirically: ~/.gemini/antigravity-cli's
 .statusline-input.log stayed empty while the CLI was in active use, and every
 render's state/logs landed in ~/.claude instead). The fix makes the
 `--statusline-platform antigravity` flag part of the installed command
-string itself, so routing no longer depends on the host CLI's env-var
+string itself, so routing does not depend on the host CLI's env-var
 behavior. See scripts/verify_prefs.py's `_check_app_dir_argv_override` for
 the app_dir() half of this contract.
 

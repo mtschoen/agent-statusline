@@ -56,10 +56,10 @@ def _walker_root_list():
     into the result. Realpath-deduped.
 
     The platform/root-dir decision is delegated to app_dir() rather than
-    duplicated here -- a prior fix (dccc87e) had to update this function and
-    app_dir() in lockstep because they used to encode the same routing
-    decision independently; routing through app_dir() means there is only
-    one place left to get it right (env > argv > ANTIGRAVITY_* auto-detect).
+    duplicated here -- a fix (dccc87e) had to update this function and
+    app_dir() in lockstep back when each encoded the same routing decision
+    independently. Routing through app_dir() leaves exactly one place to get
+    it right (env > argv > ANTIGRAVITY_* auto-detect).
     """
     base = app_dir()
     subdir = (

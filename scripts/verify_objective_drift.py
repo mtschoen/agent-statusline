@@ -1,7 +1,7 @@
 """Verify `_compute_objective_drift` classifies drift from observed elapsed
 + current eta vs original begin eta, not from the agent's self-report.
 
-Replaces the old beacon["drift"] passthrough — historical data showed
+The drift figure is derived rather than read from beacon["drift"]:
 agents never self-reported moderate/material even when reality diverged
 2-10x from the begin estimate.
 """

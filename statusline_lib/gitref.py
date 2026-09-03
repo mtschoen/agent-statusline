@@ -8,18 +8,15 @@ payload).
 
 Render-perf ratchet step 1 (PLAN.md) TTL-cached this, but a cache miss still
 paid the ~9ms git cost inline. Render-perf ratchet step 3 moves the miss/
-stale path onto the same detached-refresher pattern as the pace/spend walks
-(statusline_lib/refresh.py): the render always serves whatever the cache
+stale path onto the same in-process refresh pattern as the pace/spend walks
+(statusline_lib/server_jobs.py): the render always serves whatever the cache
 holds -- an empty ref beats a blocked render -- and a stale/missing entry
-spawns a detached child to recompute, debounced by refresh.py's inflight
-marker. A local git call is fast, not walk-priced, but every render still
-paying it inline on each TTL expiry was exactly the class of "residual
-per-render work" the <10ms warm-core budget can't afford.
+hands recomputation to the resident server's worker pool via request_refresh.
 
 Imports:
   base         -- for state_dir
   process_safe -- for run_captured, ProcessTimeout
-  refresh      -- for maybe_spawn_refresh (detached cache recompute)
+  server_jobs  -- for request_refresh (in-process cache recompute)
   ttlcache     -- for read_raw_cache / write_ttl_cache mechanics
 """
 
@@ -29,7 +26,7 @@ import time
 
 from .base import state_dir as _resolve_state_dir
 from .process_safe import ProcessTimeout, run_captured
-from .refresh import maybe_spawn_refresh
+from .server_jobs import request_refresh
 from .ttlcache import read_raw_cache, write_ttl_cache
 
 _GIT_REF_CACHE_TTL_SECONDS = 2.5
@@ -58,7 +55,7 @@ def _git_ref_raw_cached(cwd, state_dir=None):
     """Return (branch, short_hash) for cwd -- the cache's raw value, stale
     included, never a synchronous git call. A fresh entry is served as-is; a
     stale or missing entry is served too (stale beats blank beats blocked)
-    and hands recomputation to a detached child via maybe_spawn_refresh."""
+    and hands recomputation to the server's worker pool via request_refresh."""
     path = _git_ref_cache_path(cwd, state_dir)
     cached = read_raw_cache(path)
     if cached is not None:
@@ -66,9 +63,9 @@ def _git_ref_raw_cached(cwd, state_dir=None):
         age = _cache_age(cached)
         if age < _GIT_REF_CACHE_TTL_SECONDS:
             return branch, short_hash
-        maybe_spawn_refresh("git-ref", cwd)
+        request_refresh("git-ref", cwd)
         return branch, short_hash
-    maybe_spawn_refresh("git-ref", cwd)
+    request_refresh("git-ref", cwd)
     return "", ""
 
 
@@ -91,19 +88,19 @@ def git_working_tree_cached(cwd, state_dir=None):
     cache -- same stale-while-revalidate contract as _git_ref_raw_cached:
     never a synchronous git call, stale beats blank beats blocked. An entry
     predating the badge counters (keys absent) is served as zeros and
-    backfilled by the detached refresh it triggers."""
+    backfilled by the refresh it requests."""
     if not cwd:
         return 0, 0, 0, 0
     path = _git_ref_cache_path(cwd, state_dir)
     cached = read_raw_cache(path)
     if cached is None:
-        maybe_spawn_refresh("git-ref", cwd)
+        request_refresh("git-ref", cwd)
         return 0, 0, 0, 0
     stats = tuple(_count(cached.get(key)) for key in _GIT_STAT_KEYS)
     if _cache_age(cached) >= _GIT_REF_CACHE_TTL_SECONDS or any(
         key not in cached for key in _GIT_STAT_KEYS
     ):
-        maybe_spawn_refresh("git-ref", cwd)
+        request_refresh("git-ref", cwd)
     return stats
 
 
@@ -139,8 +136,8 @@ def _parse_ahead_behind(text):
 
 def refresh_git_ref_cache(cwd):
     """Recompute cwd's git ref and working-tree counters and persist them
-    for the render's cached read. Runs in the detached refresh child
-    (refresh.run_refresh), never on the render path. The numstat and
+    for the render's cached read. Runs on the resident server's worker pool
+    (server_jobs.run_refresh), never on the render path. The numstat and
     rev-list calls fail harmlessly ("" -> zeros) on an unborn HEAD or a
     branch with no upstream."""
     state_dir = _resolve_state_dir(None)

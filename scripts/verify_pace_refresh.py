@@ -1,8 +1,8 @@
 """Verify the stale-while-revalidate contract for pace._pace_hourly_cached:
 it must never walk transcript roots inline - it serves the cache, stale
-included, and delegates recomputation to a detached child via
-refresh.maybe_spawn_refresh. Siblings: verify_spend_refresh.py (the burnrate
-spend cache's identical contract) and verify_refresh_spawner.py (the spawner).
+included, and delegates recomputation to the resident server's worker pool
+via server_jobs.request_refresh. Sibling: verify_spend_refresh.py (the
+burnrate spend cache's identical contract).
 
 Run from anywhere; imports from `agent-statusline` by path.
 """
@@ -21,7 +21,7 @@ _TEXT_ENCODING = "utf-8"
 
 
 class _SpawnRecorder:
-    """Stands in for refresh.maybe_spawn_refresh; records (kind, argument)."""
+    """Stands in for server_jobs.request_refresh; records (kind, argument)."""
 
     def __init__(self):
         self.calls = []
@@ -53,12 +53,12 @@ def _pin_pace(tmp, now, spawn, cache_payload=None):
     saved = (
         pace._PACE_HOURLY_CACHE_PATH,
         pace._now_unix,
-        pace.maybe_spawn_refresh,
+        pace.request_refresh,
         pace._walk_pace_hourly,
     )
     pace._PACE_HOURLY_CACHE_PATH = cache_path
     pace._now_unix = lambda: now
-    pace.maybe_spawn_refresh = spawn
+    pace.request_refresh = spawn
 
     def inline_walk_forbidden(_win_start):
         raise AssertionError("render path walked transcripts inline")
@@ -71,7 +71,7 @@ def _restore_pace(saved):
     (
         pace._PACE_HOURLY_CACHE_PATH,
         pace._now_unix,
-        pace.maybe_spawn_refresh,
+        pace.request_refresh,
         pace._walk_pace_hourly,
     ) = saved
 
@@ -93,7 +93,7 @@ def _check_pace_fresh_hit(failures):
 
 
 def _check_pace_stale_serves_and_spawns(failures):
-    """A stale entry is still served, and a detached refresh is requested."""
+    """A stale entry is still served, and a refresh is requested."""
     spawn = _SpawnRecorder()
     with tempfile.TemporaryDirectory() as tmp:
         payload = _pace_cache_entry(_WIN_START, _NOW - 60, [3.0, 4.0])
@@ -155,10 +155,10 @@ def _check_pace_refresh_writes_cache(failures):
         try:
             returned = pace.refresh_pace_hourly_cache(_WIN_START)
             spawn = _SpawnRecorder()
-            saved_spawn = pace.maybe_spawn_refresh
-            pace.maybe_spawn_refresh = spawn
+            saved_spawn = pace.request_refresh
+            pace.request_refresh = spawn
             served = pace._pace_hourly_cached(_WIN_START)
-            pace.maybe_spawn_refresh = saved_spawn
+            pace.request_refresh = saved_spawn
             with open(cache_path, encoding=_TEXT_ENCODING) as f:
                 entries = json.load(f)["entries"]
         finally:

@@ -49,8 +49,8 @@ overridable via STATUSLINE_QWEN_QUOTA_5H / STATUSLINE_QWEN_QUOTA_WEEKLY
 
 Counting the local delta walks the monthly usage files (walk-priced at up to
 ~90k records/month), so the render path reads a small SWR cache and hands
-recomputation to a detached "qwen-quota" refresh child
-(refresh._REFRESHER_MODULES) - the same stale-while-revalidate shape as
+recomputation to the resident server's worker pool as a "qwen-quota" job
+(server_jobs.REFRESHER_MODULES) - the same stale-while-revalidate shape as
 pace-hourly. The cache entry is keyed to the anchor string, so re-anchoring
 invalidates a stale entry instead of serving numbers computed against the
 old anchor.
@@ -65,7 +65,7 @@ from datetime import datetime, timedelta, timezone
 from .base import app_dir, color_high_bad, platform_name
 from .pace import _fmt_delta, _fmt_local_clock, _project_pace
 from .prefs import load_prefs, pref
-from .refresh import maybe_spawn_refresh
+from .server_jobs import request_refresh
 from .ttlcache import read_raw_cache, write_ttl_cache
 
 _FIVE_HOUR_SECONDS = 5 * 3600
@@ -180,11 +180,11 @@ def _count_window_calls(now_unix, since_anchor):
 
 
 def refresh_qwen_quota_cache(_argument):
-    """Detached-child recompute for refresh.py's "qwen-quota" kind: count the
+    """Worker-pool recompute for server_jobs.py's "qwen-quota" kind: count the
     local deltas against the current anchor and persist the small cache the
-    render path reads. Runs out of process, so the jsonl walk never blocks a
-    render. No anchor -> nothing to count; no cache is written and the field
-    stays hidden."""
+    render path reads. Runs on the server's worker pool, so the jsonl walk
+    never blocks a render. No anchor -> nothing to count; no cache is written
+    and the field stays hidden."""
     anchor = _anchor()
     if anchor is None:
         return
@@ -204,8 +204,8 @@ def refresh_qwen_quota_cache(_argument):
 
 def _qwen_quota_cached(now_unix, anchor_key):
     """SWR cache read: serve the entry stale-or-fresh and hand recomputation
-    to a detached child when it is missing or past the TTL. None on a true
-    miss - the field degrades away for a render or two until the write lands,
+    to the server's worker pool when it is missing or past the TTL. None on
+    a true miss - the field degrades away for a render or two until the write lands,
     same contract as the pace/spend caches. An entry computed against a
     DIFFERENT anchor string is served as a miss: numbers keyed to the old
     anchor would be wrong, not stale."""
@@ -213,7 +213,7 @@ def _qwen_quota_cached(now_unix, anchor_key):
     if entry is not None and entry.get("anchor_key") != anchor_key:
         entry = None
     if entry is None or now_unix - entry.get("cached_at_unix", 0) >= _QUOTA_TTL_SECONDS:
-        maybe_spawn_refresh("qwen-quota", 0)
+        request_refresh("qwen-quota", 0)
     return entry
 
 

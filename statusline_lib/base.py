@@ -238,3 +238,16 @@ def log_traceback(path):
         # The logger itself must never raise; if the log file is unwritable
         # there is nothing useful left to do.
         pass
+
+
+def log_line(path, message):
+    """Best-effort append of one timestamped line to `path`. Same contract as
+    log_traceback: the logger itself must never raise, so an unwritable log
+    path costs the line rather than the caller that wanted it recorded."""
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        # The logger itself must never raise; if the log file is unwritable
+        # there is nothing useful left to do.
+        pass

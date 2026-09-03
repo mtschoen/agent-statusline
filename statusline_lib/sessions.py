@@ -26,27 +26,11 @@ import os
 import time
 
 from .base import app_dir
-from .refresh import maybe_spawn_refresh
-
-_psutil = None  # cached module handle within a process; None if unavailable.
-
-
-def _resolve_psutil():
-    """Import psutil on first use; return the module, or None if unavailable."""
-    global _psutil
-    if _psutil is None:
-        try:
-            import psutil as module
-        except ImportError:
-            return None
-        _psutil = module
-    return _psutil
-
+from .process_snapshot import _LazySnapshot, _resolve_psutil
 
 _SESSION_COUNT_CACHE_PATH = os.path.join(
     app_dir(), ".statusline-sessioncount-cache.json"
 )
-_SESSION_COUNT_CACHE_TTL_SECONDS = 8
 _SESSION_COUNT_CACHE_MAX_AGE_SECONDS = 86400  # prune entries older than a day
 _TEXT_ENCODING = "utf-8"
 
@@ -76,62 +60,75 @@ def _save_session_count_cache(path, cache, now):
         pass
 
 
-def count_active_sessions(
-    cwd, *, now=None, cache_path=None, ttl=_SESSION_COUNT_CACHE_TTL_SECONDS
-):
+def count_active_sessions(cwd, *, cache_path=None):
     """Return how many supported interactive agent sessions run in `cwd` --
-    the cache's raw value, stale included, never a synchronous psutil scan.
+    whatever the cache holds, stale included, never a synchronous psutil
+    scan.
 
     Render-perf ratchet step 3 (PLAN.md): a cold psutil process-tree walk
     measured ~120ms on a machine with a few hundred processes, well past the
-    <10ms warm-core budget, uncached. A fresh entry is served as-is; a stale
-    or missing entry is served too (0 on a true miss, same as the old
-    psutil-unavailable degrade) and hands recomputation to a detached child
-    via maybe_spawn_refresh (statusline_lib/refresh.py), debounced there.
-    Returns 0 immediately when `cwd` is empty -- no key to cache or refresh
-    by. Never raises -- statusline rendering must not crash.
+    <10ms warm-core budget, uncached. So this is a pure read: any entry is
+    served as-is, and a missing one reads 0, the same honest degrade as a
+    machine without psutil.
+
+    Nothing here judges the entry's age, because nothing here can act on the
+    answer. Recomputation belongs to the resident server, the only process
+    that knows the whole set of live directories -- and since one process
+    walk answers every directory at once, it schedules that walk for the
+    whole set rather than reacting to whichever render noticed a stale entry
+    first. Returns 0 immediately when `cwd` is empty -- no key to cache by.
+    Never raises -- statusline rendering must not crash.
     """
     if not cwd:
         return 0
-    now = time.time() if now is None else now
     path = cache_path or _SESSION_COUNT_CACHE_PATH
-    key = os.path.normcase(cwd)
-
-    cache = _load_session_count_cache(path)
-    entry = cache.get(key)
+    entry = _load_session_count_cache(path).get(os.path.normcase(cwd))
     if isinstance(entry, dict):
-        # Clock-skew guard: a future-stamped entry (now - ts < 0) reads as
-        # stale (not fresh) so a backwards clock jump can't pin a stale
-        # count indefinitely, but the value is still served -- stale beats
-        # blocked.
-        age = now - entry.get("ts", 0)
-        if 0 <= age < ttl:
-            return int(entry.get("count", 0))
-        maybe_spawn_refresh("session-count", cwd)
         return int(entry.get("count", 0))
-    maybe_spawn_refresh("session-count", cwd)
     return 0
 
 
-def refresh_session_count_cache(cwd):
-    """Recompute `cwd`'s active-session count and persist it for the
-    render's cached read. Runs in the detached refresh child
-    (refresh.run_refresh), never on the render path. Returns 0 (and still
-    writes the cache) when psutil is unavailable."""
+def refresh_session_count_cache(cwds, *, cache_path=None):
+    """Recompute the active-session count for `cwds` -- one directory or a
+    sequence of them -- and persist every result for the render's cached
+    read. Runs on the resident server's worker pool (server_jobs.run_refresh),
+    never on the render path.
+
+    The psutil walk is machine-wide, so the whole set is scored against ONE
+    process snapshot: six live directories cost one walk, not six. Returns
+    the count written for the last directory scored (the only one, for the
+    single-string call every pre-server caller made), and 0 when psutil is
+    unavailable or nothing was handed in -- the cache is still written
+    either way, so the render serves an honest 0 rather than a stale count.
+    """
     now = time.time()
-    path = _SESSION_COUNT_CACHE_PATH
+    path = cache_path or _SESSION_COUNT_CACHE_PATH
+    targets = [cwds] if isinstance(cwds, str) else list(cwds)
+    _reset_process_scan_counter()
+    if not targets:
+        # The server hands over whatever its cwd table holds, which is empty
+        # until the first render and again after the last session is dropped.
+        # A machine-wide walk that answers nobody is pure waste.
+        return 0
     psutil = _resolve_psutil()
-    if psutil is None:
-        count = 0
-    else:
-        try:
-            count = _count_via_psutil(cwd, psutil)
-        except Exception:
-            count = 0
+    scan = None if psutil is None else _ProcessScan(psutil)
     cache = _load_session_count_cache(path)
-    cache[os.path.normcase(cwd)] = {"count": count, "ts": now}
+    count = 0
+    for target in targets:
+        count = 0 if scan is None else _count_one(target, psutil, scan)
+        cache[os.path.normcase(target)] = {"count": count, "ts": now}
     _save_session_count_cache(path, cache, now)
     return count
+
+
+def _count_one(target_cwd, psutil, scan):
+    """`target_cwd`'s count from an already-taken process scan, degrading to
+    0 rather than propagating out of the worker pool and costing every other
+    directory in the same refresh its result."""
+    try:
+        return _count_via_psutil(target_cwd, psutil, scan)
+    except Exception:
+        return 0
 
 
 _AGENT_PROCESS_NAMES = ("claude", "claude.exe", "qwen", "qwen.exe")
@@ -189,8 +186,8 @@ def _is_excluded_by_tree(pid, snap, cmdline_of):
     excluding (observed live: a real session whose terminal host had exited
     while its shell survived). `cmdline_of(pid) -> list | None` is only
     consulted to classify node-named ancestors; None means unreadable and is
-    treated as non-agent, at worst reproducing the old overcount, never hiding
-    a real session.
+    treated as non-agent, which at worst counts a session that could have been
+    excluded, and never hides a real one.
     """
     row = snap.get(pid)
     if row is None:
@@ -254,72 +251,72 @@ def _is_child_session_env(env):
 
     None/empty/falsy values are never a marker -- unreadable environ() (e.g.
     AccessDenied) must fail OPEN here (not excluded), matching the rest of
-    this module's philosophy: at worst reproduces the old overcount, never
-    hides a real session.
+    this module's philosophy: at worst count a session that could have been
+    excluded, never hide a real one.
     """
     if not env:
         return False
     return env.get(_CHILD_SESSION_ENV_VAR, "") not in _FALSY_ENV_VALUES
 
 
-class _LazySnapshot:
-    """pid -> (ppid, name, create_time) mapping, filled on demand.
+# How many machine-wide process scans the current refresh has taken. A
+# diagnostic counter only, never read for control flow, so the worker pool
+# running two refreshes at once can interleave it harmlessly. One walk
+# answers every live directory, so a refresh of any number of them must
+# report 1; the verify suite reads this to hold that invariant mechanically
+# rather than by inspection.
+_process_scans_taken = 0
 
-    Names come from the same cheap process_iter(["name"]) pass the candidate
-    pre-filter uses (one toolhelp snapshot on Windows, ~20ms for ~600 procs);
-    ppid/create_time cost an OpenProcess per pid there (~11s observed when
-    requested as process_iter attrs), so they are fetched only for the pids
-    the tree walk actually visits -- candidates plus their ancestor chains,
-    a handful.
+
+def process_snapshots_taken():
+    """Process scans taken since the current refresh began."""
+    return _process_scans_taken
+
+
+def _reset_process_scan_counter():
+    global _process_scans_taken
+    _process_scans_taken = 0
+
+
+class _ProcessScan:
+    """One pass over the machine's process table, reusable across
+    directories.
+
+    Nothing in the enumeration depends on which directory is being counted:
+    the same candidate set and the same ancestor rows answer every one of
+    them. So the resident server takes this once per refresh and scores
+    every live directory against it, instead of walking a few hundred
+    processes once per directory. Constructing one is what
+    process_snapshots_taken counts.
     """
 
-    def __init__(self, psutil, names):
-        self._psutil = psutil
-        self._names = names
-        self._rows = {}
-
-    def get(self, pid, default=None):
-        if pid is None:
-            return default
-        if pid not in self._rows:
-            self._rows[pid] = self._fetch(pid)
-        row = self._rows[pid]
-        return default if row is None else row
-
-    def _fetch(self, pid):
-        psutil = self._psutil
-        try:
-            proc = psutil.Process(pid)
-            name = self._names.get(pid)
-            if name is None:
-                name = proc.name()
-            return (proc.ppid(), name, proc.create_time())
-        except psutil.NoSuchProcess:
-            return None  # dead pid: absent, same as a vanished parent
-        except psutil.AccessDenied:
-            # Unreadable but alive: present and non-agent, so the walk ends
-            # here without tripping the orphan rule (a candidate is only an
-            # orphan when its parent is *gone*, not merely opaque).
-            return (None, self._names.get(pid), 0.0)
+    def __init__(self, psutil):
+        global _process_scans_taken
+        _process_scans_taken += 1
+        # The enumeration pass must stay attrs=["name"]: names come from one
+        # toolhelp snapshot, while ppid/create_time force an OpenProcess per
+        # pid on Windows (measured 20ms vs 11s over ~600 processes). The tree
+        # walk gets those lazily from _LazySnapshot for the few pids it
+        # visits, which also avoids per-ancestor cmdline() calls -- those
+        # AccessDenied mid-chain and silently truncate the walk.
+        self.names = {}
+        self.candidates = []
+        for p in psutil.process_iter(["name"]):
+            self.names[p.pid] = p.info.get("name")
+            name = (p.info.get("name") or "").lower()
+            # Cheap name pre-filter -- avoids calling cmdline()/cwd() on
+            # every process (hundreds on a typical box).
+            if _is_direct_agent_runtime(name) or name in _NODE_PROCESS_NAMES:
+                self.candidates.append((p.pid, name, p))
+        self.rows = _LazySnapshot(psutil, self.names)
 
 
-def _count_via_psutil(target_cwd, psutil):
-    # The enumeration pass must stay attrs=["name"]: names come from one
-    # toolhelp snapshot, while ppid/create_time force an OpenProcess per pid
-    # on Windows (measured 20ms vs 11s over ~600 processes). The tree walk
-    # gets those lazily from _LazySnapshot for the few pids it visits, which
-    # also avoids per-ancestor cmdline() calls -- those AccessDenied
-    # mid-chain and silently truncate the walk.
-    names = {}
-    candidates = []
-    for p in psutil.process_iter(["name"]):
-        names[p.pid] = p.info.get("name")
-        name = (p.info.get("name") or "").lower()
-        # Cheap name pre-filter -- avoids calling cmdline()/cwd() on every
-        # process (hundreds on a typical box).
-        if _is_direct_agent_runtime(name) or name in _NODE_PROCESS_NAMES:
-            candidates.append((p.pid, name, p))
-    snap = _LazySnapshot(psutil, names)
+def _count_via_psutil(target_cwd, psutil, scan=None):
+    """How many interactive agent sessions `scan` shows rooted at
+    `target_cwd`, taking a fresh process scan when none is handed in."""
+    if scan is None:
+        scan = _ProcessScan(psutil)
+    snap = scan.rows
 
     def cmdline_of(pid):
         try:
@@ -328,7 +325,7 @@ def _count_via_psutil(target_cwd, psutil):
             return None
 
     count = 0
-    for pid, name, p in candidates:
+    for pid, name, p in scan.candidates:
         try:
             cmdline = p.cmdline()
             if not _is_agent_runtime(name, cmdline):

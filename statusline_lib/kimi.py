@@ -20,8 +20,8 @@ walks transcripts or renders cost. `gitBranch` comes straight from the
 payload, and the working-tree badge (`+A -B ↑x ↓y`, matching kimi-code's
 built-in footer, which computes it in-process and never puts it in the
 payload) comes from the SWR-cached gitref counters -- a cached read plus
-a detached refresh spawn, never a synchronous git subprocess, which is
-what fits the 300ms kill window.
+a request to the resident server's worker pool, never a synchronous git
+subprocess, which is what fits the 300ms kill window.
 
 The `_safe_str`/`_safe_int` type-confusion guards are shared with the Qwen
 adapter (imported from .qwen, where they were introduced for the 2026-07-19

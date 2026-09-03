@@ -12,6 +12,9 @@ Usage:
   statusline-ctl set   <key> <value>  write a live override
   statusline-ctl reset <key>          drop the override (fall back to env/default)
   statusline-ctl path                 print the prefs file path
+  statusline-ctl server status         resident server pid, port, version, uptime
+  statusline-ctl server stop           ask the resident server to shut down
+  statusline-ctl server restart        stop it, then start a fresh one
 
 Keys (friendly name -> what it controls):
   cost          on|off              show or hide every $ figure on line 2
@@ -43,6 +46,20 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from statusline_lib.prefs import load_prefs, pref, prefs_path
+from statusline_lib.process_safe import ProcessTimeout, run_captured
+from statusline_lib.server_control import (
+    request_shutdown,
+    request_status,
+    wait_until_gone,
+)
+from statusline_lib.server_info import pid_is_alive, read_server_info, server_info_path
+
+# The client's --ensure-server flag, invoked by `server restart` to start a
+# replacement after stopping the running one. Same directory as this file.
+_CLIENT_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "statusline_client.py"
+)
+_RESTART_TIMEOUT_SECONDS = 10.0
 
 
 class _Setting:
@@ -252,12 +269,113 @@ def _usage_error(form):
     return 2
 
 
+def _server_usage_error():
+    print("usage: statusline-ctl server <status|stop|restart>", file=sys.stderr)
+    return 2
+
+
+def _print_status_summary(port, summary):
+    """The server's status reply as aligned `key  value` lines, plus the
+    port (not part of the reply -- the caller already knew it from
+    server.json in order to send the request)."""
+    fields = dict(summary)
+    fields.setdefault("port", port)
+    width = max(len(key) for key in fields)
+    for key in sorted(fields):
+        print(f"  {key.ljust(width)}  {fields[key]}")
+
+
+def _cmd_server_status():
+    path = server_info_path()
+    info = read_server_info(path)
+    if info is None:
+        print("no server running")
+        return 0
+    pid = info.get("pid")
+    port = info.get("port")
+    if port is None or pid_is_alive(pid) is False:
+        print(f"stale server info (pid {pid}): {path}")
+        return 0
+    summary = request_status(port)
+    if summary is None:
+        print(f"stale server info (pid {pid} did not answer): {path}")
+        return 0
+    _print_status_summary(port, summary)
+    return 0
+
+
+def _stop_running_server():
+    """Ask any running server to stop, and report whether the port is now
+    free. True also when there was nothing to ask, since the caller's
+    question is "is a server still holding this state directory", and False
+    only when one was asked and was still there when the wait ran out."""
+    path = server_info_path()
+    info = read_server_info(path)
+    if info is None:
+        print("no server running")
+        return True
+    port = info.get("port")
+    if port is None:
+        print(f"stale server info (no port recorded): {path}")
+        return True
+    request_shutdown(port)
+    if wait_until_gone(path):
+        print("server stopped")
+        return True
+    print("shutdown requested; server did not stop within the wait")
+    return False
+
+
+def _cmd_server_stop():
+    _stop_running_server()
+    return 0
+
+
+def _cmd_server_restart():
+    if not _stop_running_server():
+        print(
+            "error: not spawning a replacement while the old server is still up",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = run_captured(
+            [sys.executable, _CLIENT_SCRIPT, "--ensure-server"],
+            timeout=_RESTART_TIMEOUT_SECONDS,
+        )
+    except ProcessTimeout as error:
+        print(f"error: failed to start a replacement server: {error}", file=sys.stderr)
+        return 1
+    if result.returncode != 0:
+        print(
+            f"error: failed to start a replacement server: {result.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return 1
+    print("server restarted")
+    return 0
+
+
+_SERVER_SUBCOMMANDS = {
+    "status": _cmd_server_status,
+    "stop": _cmd_server_stop,
+    "restart": _cmd_server_restart,
+}
+
+
+def _cmd_server(args):
+    if len(args) != 1 or args[0] not in _SERVER_SUBCOMMANDS:
+        return _server_usage_error()
+    return _SERVER_SUBCOMMANDS[args[0]]()
+
+
 _COMMANDS = {
     "list": _cmd_list,
     "get": _cmd_get,
     "set": _cmd_set,
     "reset": _cmd_reset,
     "path": _cmd_path,
+    "server": _cmd_server,
 }
 
 
@@ -269,7 +387,7 @@ def main(argv=None):
     command = _COMMANDS.get(argv[0])
     if command is None:
         print(f"error: unknown command {argv[0]!r}", file=sys.stderr)
-        return _usage_error("<list|get|set|reset|path> ...")
+        return _usage_error("<list|get|set|reset|path|server> ...")
     return command(argv[1:])
 
 

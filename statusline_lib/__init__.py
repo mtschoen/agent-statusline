@@ -29,9 +29,8 @@ Package layout (dependency order, no cycles):
   ttlcache -- generic single-value TTL disk-cache mechanics (read/write,
               plus read_raw_cache for stale-while-revalidate callers),
               shared by the git-ref and beacons-latest caches
-  refresh  -- stale-while-revalidate detached-refresher spawner
-              (maybe_spawn_refresh / run_refresh) shared by every cache that
-              can't afford a synchronous recompute in the render path
+  server_jobs  -- in-process refresh jobs (request_refresh / WorkerPool)
+                  shared by every cache that serves stale while revalidating
   gitref   -- stale-while-revalidate cache around the two git subprocess
               calls behind _git_ref (branch + short hash)
   beacon_cache -- stale-while-revalidate cache around the beacons-latest
@@ -56,7 +55,7 @@ Package layout (dependency order, no cycles):
 
 # ruff: noqa: F401
 # All imports below are intentional public/private re-exports that make the
-# package API identical to the old flat module.  Many underscore names are
+# package API one flat namespace.  Many underscore names are
 # imported by external code (verify scripts, install.py) via
 # `statusline_lib._name`, so they MUST appear as package attributes even
 # though nothing inside this file calls them.
@@ -115,7 +114,6 @@ from .base import (
     state_dir,
 )
 from .beacon import (
-    _BEACON_BLOCK_RE,
     _BEACON_DRIFT_COLOR,
     _BEACON_STALE_SECONDS,
     _BIAS_CACHE_PATH,
@@ -125,19 +123,22 @@ from .beacon import (
     _DRIFT_MATERIAL_RATIO,
     _DRIFT_MODERATE_RATIO,
     _SESSION_TIMING_COLOR,
-    _apply_beacon,
     _bias_factor_cached,
     _compute_objective_drift,
     _find_beacon_anchors,
     _find_session_jsonl,
     _fmt_duration_ms,
     _format_clock_and_elapsed,
-    _iter_assistant_beacons,
-    _iter_beacons_in_text,
-    _scan_beacon_anchors,
     format_beacon,
     format_calibrated_eta,
     format_session_timing,
+)
+from .beacon_anchors import (
+    _BEACON_BLOCK_RE,
+    _apply_beacon,
+    _iter_assistant_beacons,
+    _iter_beacons_in_text,
+    _scan_beacon_anchors,
 )
 from .burnrate import (
     RATE_COLOR,
@@ -236,6 +237,24 @@ from .qwen import (
     format_qwen_thinking,
     format_qwen_tokens,
     render_qwen_statusline,
+)
+from .render_subagent import (
+    _DEFAULT_ICON,
+    _ERROR_LOG,
+    _LEAD_TYPES,
+    _MAIN_INPUT_LOG,
+    _STATUS_ICON,
+    _TERMINAL,
+    _agent_jsonl_path,
+    _format_elapsed,
+    _is_lead_task,
+    _is_terminal,
+    _live_payload_for_session,
+    _log_error,
+    _metrics_for_task,
+    _row_for_task,
+    _status_icon,
+    render_subagent_rows,
 )
 from .sessions import (
     _SESSION_DEBOUNCE_DWELL_SECONDS,
@@ -337,6 +356,7 @@ __all__ = [
     "ramp_color_for",
     "read_ttl_cache",
     "render_qwen_statusline",
+    "render_subagent_rows",
     "resolve_flags",
     "safe_write",
     "sanitize_state_key",

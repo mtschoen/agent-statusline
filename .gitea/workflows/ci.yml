@@ -62,7 +62,7 @@ jobs:
           python-version: '3.11'
       - name: Check syntax
         if: steps.changed-files.outputs.pin_only != 'true'
-        run: python -m py_compile statusline.py subagent_statusline.py install.py wrap_nudge.py statusline_lib/*.py
+        run: python -m py_compile statusline.py subagent_statusline.py statusline_client.py statusline_client_support.py statusline_server.py install.py wrap_nudge.py statusline_lib/*.py
       - name: Lint (ruff)
         if: steps.changed-files.outputs.pin_only != 'true'
         # The validation gate. Config lives in pyproject.toml; 0 findings is
@@ -264,7 +264,7 @@ jobs:
         shell: pwsh
         run: |
           $files = Get-ChildItem statusline_lib/*.py | ForEach-Object { $_.FullName }
-          $files += 'statusline.py', 'subagent_statusline.py', 'install.py', 'wrap_nudge.py'
+          $files += 'statusline.py', 'subagent_statusline.py', 'statusline_client.py', 'statusline_client_support.py', 'statusline_server.py', 'install.py', 'wrap_nudge.py'
           python -m py_compile @files
 
       - name: Run verification scripts (coverage-gated)

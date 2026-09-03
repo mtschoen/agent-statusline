@@ -25,11 +25,11 @@ and base.py's `color_high_bad`.
 
 To obey the render-budget invariant (no inline HTTP calls in the render path),
 the render path reads a stale-while-revalidate TTL disk cache and hands
-recomputation to a detached "fable-quota" refresh child
-(statusline_lib/refresh.py, maybe_spawn_refresh), passing the session's
-`rate_limits` through as the refresh argument so the detached child can push
-it. Failures are negative-cached to avoid respawning detached children on
-every render when the endpoint is unreachable.
+recomputation to the resident server's worker pool as a "fable-quota" job
+(statusline_lib/server_jobs.py, request_refresh), passing the session's
+`rate_limits` through as the refresh argument so the job can push it.
+Failures are negative-cached to avoid requesting a fresh refresh on every
+render when the endpoint is unreachable.
 
 Host resolution:
 The quota dashboard host comes from `pref("STATUSLINE_FABLE_QUOTA_HOST")`
@@ -59,7 +59,7 @@ from datetime import datetime
 from .base import app_dir, color_high_bad
 from .pace import _project_pace
 from .prefs import pref, pref_bool
-from .refresh import maybe_spawn_refresh
+from .server_jobs import request_refresh
 from .ttlcache import read_raw_cache, write_ttl_cache
 
 _WEEK_SECONDS = 7 * 86400
@@ -325,7 +325,7 @@ def _post_quota_observed(url, rate_limits, timeout=2.0):
 def _write_failure_cache():
     """Negative-cache a failed refresh without erasing the last good value.
 
-    The failure marker only exists to bound detached-child respawns to one per
+    The failure marker only exists to bound refresh requests to one per
     _QUOTA_FAILURE_TTL_SECONDS; a stale value beats a blank field, so merge
     failed=True into the existing entry and fall back to a null marker only
     when no entry exists. write_ttl_cache re-stamps cached_at_unix, so the
@@ -337,16 +337,16 @@ def _write_failure_cache():
 
 
 def refresh_fable_quota_cache(rate_limits):
-    """Detached-child recompute for refresh.py's 'fable-quota' kind.
+    """Worker-pool recompute for server_jobs.py's 'fable-quota' kind.
     POSTs the session's rate_limits (falsy when unavailable) to the quota
     dashboard's observed endpoint and updates the local TTL cache from the
     response. Falls back to the legacy GET route when the observed endpoint
-    is missing (an older, not-yet-upgraded dashboard). Runs out of process,
-    so network latency never blocks a render. Unreachable endpoint or
-    malformed responses are negative-cached under _QUOTA_FAILURE_TTL_SECONDS
-    so off-fleet machines do not re-spawn a child on every render; the last
-    good value is preserved so the field keeps serving stale data through
-    transient dashboard failures."""
+    is missing (an older, not-yet-upgraded dashboard). Runs on the server's
+    worker pool, so network latency never blocks a render. Unreachable
+    endpoint or malformed responses are negative-cached under
+    _QUOTA_FAILURE_TTL_SECONDS so off-fleet machines do not request a fresh
+    refresh on every render; the last good value is preserved so the field
+    keeps serving stale data through transient dashboard failures."""
     host = _dashboard_host()
     if host is None or host.strip().lower() in _DISABLED_VALUES:
         return
@@ -378,16 +378,16 @@ def refresh_fable_quota_cache(rate_limits):
 
 def _fable_quota_cached(now_unix, rate_limits=None):
     """SWR cache read: serve the entry stale-or-fresh and hand recomputation
-    to a detached child when it is missing or past the TTL. `rate_limits` is
-    threaded through only to carry it to the detached refresh child (the read
-    itself never touches it). Returns None on a true miss."""
+    to the server's worker pool when it is missing or past the TTL.
+    `rate_limits` is threaded through only to carry it to the refresh job
+    (the read itself never touches it). Returns None on a true miss."""
     entry = read_raw_cache(_quota_cache_path())
     if entry is not None:
         ttl = _QUOTA_FAILURE_TTL_SECONDS if entry.get("failed") else _QUOTA_TTL_SECONDS
         if now_unix - entry.get("cached_at_unix", 0) >= ttl:
-            maybe_spawn_refresh("fable-quota", rate_limits)
+            request_refresh("fable-quota", rate_limits)
         return entry
-    maybe_spawn_refresh("fable-quota", rate_limits)
+    request_refresh("fable-quota", rate_limits)
     return None
 
 

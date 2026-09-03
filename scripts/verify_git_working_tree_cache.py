@@ -36,14 +36,14 @@ def _write_cache_entry(tmpdir, repo, payload):
 
 
 def _check_working_tree_empty_and_miss(failures, tmpdir):
-    """git_working_tree_cached: empty cwd serves zeros without spawning;
-    a cache miss serves zeros and requests a detached refresh."""
+    """git_working_tree_cached: empty cwd serves zeros without requesting a
+    refresh; a cache miss serves zeros and requests a refresh."""
     if gitref_mod.git_working_tree_cached("", state_dir=tmpdir) != (0, 0, 0, 0):
         failures.append("empty cwd must return zero counters")
 
     spawn = _SpawnRecorder()
-    original = gitref_mod.maybe_spawn_refresh
-    gitref_mod.maybe_spawn_refresh = spawn
+    original = gitref_mod.request_refresh
+    gitref_mod.request_refresh = spawn
     try:
         if gitref_mod.git_working_tree_cached("", state_dir=tmpdir) != (0, 0, 0, 0):
             failures.append("empty cwd must return zero counters under patch")
@@ -56,13 +56,13 @@ def _check_working_tree_empty_and_miss(failures, tmpdir):
         if spawn.calls != [("git-ref", "/miss/repo")]:
             failures.append(f"cache miss must spawn a refresh; got {spawn.calls!r}")
     finally:
-        gitref_mod.maybe_spawn_refresh = original
+        gitref_mod.request_refresh = original
 
 
 def _check_working_tree_fresh_and_stale(failures, tmpdir):
     """git_working_tree_cached: a fresh full entry serves its counters with
-    no spawn; an expired entry still serves the stale counters while a
-    detached refresh is requested."""
+    no refresh request; an expired entry still serves the stale counters
+    while a refresh is requested."""
     _write_cache_entry(
         tmpdir,
         "/fresh/repo",
@@ -90,8 +90,8 @@ def _check_working_tree_fresh_and_stale(failures, tmpdir):
     )
 
     spawn = _SpawnRecorder()
-    original = gitref_mod.maybe_spawn_refresh
-    gitref_mod.maybe_spawn_refresh = spawn
+    original = gitref_mod.request_refresh
+    gitref_mod.request_refresh = spawn
     try:
         stats = gitref_mod.git_working_tree_cached("/fresh/repo", state_dir=tmpdir)
         if stats != (2, 1, 58, 0):
@@ -105,7 +105,7 @@ def _check_working_tree_fresh_and_stale(failures, tmpdir):
         if spawn.calls != [("git-ref", "/stale/repo")]:
             failures.append(f"stale entry must spawn; got {spawn.calls!r}")
     finally:
-        gitref_mod.maybe_spawn_refresh = original
+        gitref_mod.request_refresh = original
 
 
 def _check_working_tree_backfill_and_tampered(failures, tmpdir):
@@ -130,8 +130,8 @@ def _check_working_tree_backfill_and_tampered(failures, tmpdir):
     )
 
     spawn = _SpawnRecorder()
-    original = gitref_mod.maybe_spawn_refresh
-    gitref_mod.maybe_spawn_refresh = spawn
+    original = gitref_mod.request_refresh
+    gitref_mod.request_refresh = spawn
     try:
         stats = gitref_mod.git_working_tree_cached("/old/repo", state_dir=tmpdir)
         if stats != (0, 0, 0, 0):
@@ -149,7 +149,7 @@ def _check_working_tree_backfill_and_tampered(failures, tmpdir):
         if spawn.calls != [("git-ref", "/old/repo")]:
             failures.append(f"tampered entry must not spawn; got {spawn.calls!r}")
     finally:
-        gitref_mod.maybe_spawn_refresh = original
+        gitref_mod.request_refresh = original
 
 
 def _check_parse_helpers(failures):

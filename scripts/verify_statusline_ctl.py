@@ -1,6 +1,12 @@
 """Verify statusline-ctl: set/reset round-trips through the prefs file, value
 normalization per key, and that the status line's resolver sees the writes.
 
+The `server status`/`server stop`/`server restart` subcommands are verified
+in the companion file scripts/verify_statusline_ctl_server.py instead of
+here (split out to keep both files under the repo's 400-line guideline);
+that file imports `ctl`, `_run` and `_ROOT` from this one rather than
+reloading statusline_ctl.py a second time.
+
 Points STATUSLINE_PREFS_PATH at a temp file so the real prefs file is untouched.
 Run from anywhere.
 """

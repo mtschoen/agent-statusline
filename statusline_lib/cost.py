@@ -8,15 +8,23 @@ accumulation. They were once one module - the split keeps each under the aislop
 callers use `statusline_lib.format_cache` / `statusline_lib.walk_transcript`
 regardless of which module defines them.
 
+The accumulator seam (new_walk_accumulator, fold_transcript_lines,
+summarize_walk, _walk_one_transcript) lives in the sibling cost_walk.py for
+the same line-budget reason; this module re-exports them so
+`from statusline_lib.cost import new_walk_accumulator` keeps working.
+walk_transcript, below, composes the three public steps.
+
 Imports:
-  base -- _json_loads (the walk's only base dependency)
+  cost_walk -- new_walk_accumulator, fold_transcript_lines, summarize_walk,
+               _walk_one_transcript (the accumulator seam)
 """
 
 import glob
 import os
 from datetime import datetime
 
-from .base import _json_loads
+from .cost_walk import _walk_one_transcript, new_walk_accumulator, summarize_walk
+from .cost_walk import fold_transcript_lines as fold_transcript_lines
 
 _RATES = {
     "fable": (10.0, 50.0),
@@ -281,23 +289,6 @@ def _accumulate_user_prompt(entry, acc):
     acc["user_prompts"] += 1
 
 
-def _walk_one_transcript(path, acc, seen_ids):
-    """Stream one JSONL transcript, folding each line into `acc`."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    entry = _json_loads(line)
-                except Exception:
-                    continue
-                _accumulate_assistant_turn(entry, acc, seen_ids)
-                _accumulate_user_prompt(entry, acc)
-    except OSError:
-        # Transcript became unreadable mid-walk; use the totals gathered so far
-        # rather than failing the whole render.
-        pass
-
-
 def walk_transcript(path, include_subagents=False):
     """Sum cache/input/output tokens, compute cost, snapshot most-recent turn.
 
@@ -319,29 +310,7 @@ def walk_transcript(path, include_subagents=False):
     <path-without-.jsonl>/subagents/agent-*.jsonl so the cache total reflects
     everything attributed to this session. The subagent script passes False.
     """
-    acc = {
-        "read": 0,
-        "write": 0,
-        "input": 0,
-        "output": 0,
-        "cost": 0.0,
-        "read_cost": 0.0,
-        "write_cost": 0.0,
-        "input_cost": 0.0,
-        "output_cost": 0.0,
-        "ttl_evictions": 0,
-        "ttl_wasted": 0.0,
-        "assistant_turns": 0,
-        "user_prompts": 0,
-        "track_evictions": False,
-        "track_user_prompts": False,
-        "last_model": "",
-        "last_input": 0,
-        "last_cache_create": 0,
-        "last_cache_read": 0,
-        "last_turn_ts": None,
-        "last_turn_ttl_seconds": None,
-    }
+    acc = new_walk_accumulator()
     seen_ids = set()
 
     parent_cost = 0.0
@@ -362,24 +331,4 @@ def walk_transcript(path, include_subagents=False):
                 for sub in glob.glob(os.path.join(sub_dir, "agent-*.jsonl")):
                     _walk_one_transcript(sub, acc, seen_ids)
 
-    return {
-        "read": acc["read"],
-        "write": acc["write"],
-        "input": acc["input"],
-        "output": acc["output"],
-        "cost": acc["cost"],
-        "read_cost": acc["read_cost"],
-        "write_cost": acc["write_cost"],
-        "input_cost": acc["input_cost"],
-        "output_cost": acc["output_cost"],
-        "ttl_evictions": acc["ttl_evictions"],
-        "ttl_wasted": acc["ttl_wasted"],
-        "parent_cost": parent_cost,
-        "subagent_cost": acc["cost"] - parent_cost,
-        "last_model_id": acc["last_model"],
-        "last_input": acc["last_input"],
-        "last_cache_create": acc["last_cache_create"],
-        "last_cache_read": acc["last_cache_read"],
-        "user_prompts": acc["user_prompts"],
-        "assistant_turns": acc["assistant_turns"],
-    }
+    return summarize_walk(acc, parent_cost)

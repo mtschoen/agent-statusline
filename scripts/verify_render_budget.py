@@ -1,425 +1,320 @@
-"""Structural guards against long-running sync work in the render path.
+"""The render-budget invariant, measured end to end against a live server.
 
-Three production incidents, one disease: a synchronous call inside a render
-that can block for many seconds (2026-07-02: SMB per-file stats + walker
-timeout stalls, 20s renders; 2026-07-10: psutil attr expansion, 11s renders;
-2026-07-11: beacons-history over an SMB root, 5s timeout stalls). These
-checks make the invariant mechanical instead of tribal:
+Four production incidents shared one disease: a synchronous call inside a
+render that can block for seconds. In the resident-server model the render
+path is statusline_client.py, plus the statusline_client_support.py it reaches
+through a lazy import, and nothing else, so this file drives the real client
+as a subprocess against a real server and holds the round trip to a budget.
 
-  - Static: every subprocess call reachable from a render must carry an
-    explicit numeric ``timeout=`` no greater than ``_MAX_SUBPROCESS_TIMEOUT``
-    seconds, whether passed at the call site or defaulted in the wrapper.
-    ``time.sleep`` is banned outright in the render path.
-  - Dynamic: a cold-cache end-to-end render against a self-built fixture
-    corpus must finish inside ``_RENDER_BUDGET_SECONDS`` wall-clock. The
-    budget is deliberately loose (healthy renders are ~10x faster) so CI
-    variance never trips it, while every historical incident (11-20s) would.
+BENCHMARK. This is the one script in the suite that reads the wall clock, and
+the tolerances are deliberately loose: the budget is roughly three times the
+measured figure on this machine, every historical incident was 5,000ms or
+worse, and the verdict is the best of three medians of nine runs, so a loaded
+CI runner costs an attempt rather than the check. Every wait on a real socket
+or a real process is bounded, and the server is shut down in a finally.
 
-The cold-start scenario checks (a brand-new session's first-ever render, and
-an ongoing session hitting bias-factor's own cold cache) live in
-verify_cold_start.py after the e22f841 split -- do not re-add them here.
+The static half of the invariant (bounded subprocesses over statusline_lib,
+the import-free client, the one-datagram exchange) lives in
+verify_render_budget_static.py and is imported and run from here too, so
+either file alone is a complete verdict. The split is for the 400-line file
+gate, not a change of scope.
 
-Run from anywhere; imports from `agent-statusline` by path.
+Run from anywhere; imports from agent-statusline by path.
 """
 
-import ast
-import json
+import contextlib
 import os
+import statistics
 import subprocess
 import sys
-import tempfile
 import time
-import uuid
 
+# The scripts directory first: the static half of this check lives next door,
+# and importing the server suite is what installs the temporary HOME and
+# CLAUDE_STATE_DIR the live checks run under. A client subprocess inherits
+# exactly that environment, so it looks for server.json where the server just
+# wrote it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from verify_render_budget_static import _TEXT_ENCODING, check_static_guards
+from verify_server_protocol import _client_environment, _Context, _run_client
+from verify_server_requests import _HOME, _REPO, _STATE_DIR, _claude_payload
+
+# Only now the repository root, and only now statusline_lib: importing the
+# suite above is what installed the isolated home, and several statusline_lib
+# modules resolve app_dir()-based paths at import time.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _render_fixture_helpers import _REPO, build_fixture_home
+# The client's own fallback builder, so the expected fallback line is the one
+# the client would actually print rather than a second guess at its format.
+import statusline_client_support
+from statusline_lib.server_control import (
+    request_shutdown,
+    request_status,
+    wait_until_gone,
+)
+from statusline_lib.server_info import read_server_info, server_info_path
 
-from statusline_lib.rendertimer import render_timer_path
+_SERVER = os.path.join(_REPO, "statusline_server.py")
 
-_TEXT_ENCODING = "utf-8"
+# The client's entire budget. Its own socket timeout is 150ms, the interpreter
+# and import floor is roughly 65ms on this machine, and Kimi kills the process
+# tree at 300ms. 200ms leaves the client no room to grow a second file read.
+_CLIENT_BUDGET_MS = float(os.environ.get("STATUSLINE_TEST_CLIENT_BUDGET_MS", "200"))
 
-# The render path: everything importable from a statusline render. install.py
-# and friends are excluded -- installers may run long.
-_RENDER_PATH_FILES = [
-    os.path.join(_REPO, "statusline.py"),
-    os.path.join(_REPO, "subagent_statusline.py"),
-    os.path.join(_REPO, "qwen_statusline.py"),
-    os.path.join(_REPO, "wrap_nudge.py"),
-]
-_RENDER_PATH_FILES += [
-    os.path.join(_REPO, "statusline_lib", f)
-    for f in sorted(os.listdir(os.path.join(_REPO, "statusline_lib")))
-    if f.endswith(".py")
-    and f
-    not in (
-        "codex_install.py",
-        "nudge_install.py",
-        # process_safe.py implements the bounded-timeout replacement for
-        # subprocess.run/Popen this scan exists to enforce elsewhere (its
-        # Popen call is the sanctioned kill-then-abandon-reader pattern, not
-        # the unbounded raw usage the ban targets) -- scanning it would flag
-        # the fix as the violation.
-        "process_safe.py",
-    )
-]
+# Nine runs per attempt, so the median is a median rather than a coin flip, and
+# the best of three attempts for the same reason the warm-core check took the
+# best of three before it: a real regression misses the budget on every
+# attempt, a scheduler blip on a shared runner spoils one. The loop stops at
+# the first attempt inside budget, so the healthy case measures nine runs once.
+_CLIENT_RUNS = 9
+_MEDIAN_ATTEMPTS = 3
 
-_MAX_SUBPROCESS_TIMEOUT = 2.0
-_RENDER_BUDGET_SECONDS = float(os.environ.get("STATUSLINE_TEST_RENDER_BUDGET", "8"))
-# Warm-core conformance: median in-process render (payload -> string, caches
-# warm, fixture corpus) must beat this. Ratchet plan lives in PLAN.md.
-# Evidence 2026-07-11 (steps 1+2, TTL-caching _git_ref and beacons-latest):
-# pre-cache median ~48-51ms -> ~2-3ms, budget lowered to 100ms for headroom.
-# Evidence 2026-07-19 (step 3, PLAN.md: git-ref/beacons-latest/session-count
-# moved from "TTL-cached but a miss still recomputes inline" onto the same
-# stale-while-revalidate + detached-refresher pattern as the pace/spend
-# walks -- statusline_lib/refresh.py -- so a cache miss or TTL expiry never
-# blocks the render on git, the walker subprocess, or a psutil process-tree
-# scan, which measured ~120ms uncached): this machine's measured median
-# across 30 repeated in-process runs is ~1-6ms (25-sample batch: min 1.09ms,
-# median 2.02ms, p90 4.60ms, max 5.95ms), with 30/30 repeated runs of this
-# exact check passing at the 10ms budget -- ~2-5x margin over the observed
-# median. Budget lowered to the Pi bridge's per-keypress target, 10ms.
-_CORE_BUDGET_MS = float(os.environ.get("STATUSLINE_TEST_CORE_BUDGET_MS", "10"))
-# One 9-render child is a single sample, and CI runners share cores with other
-# jobs: runs #113 (2026-07-19) and #115 (2026-07-28) both reported "warm core
-# median 11ms exceeds 10ms" while runs #114/#116 and every local run passed at
-# ~2-5ms. Take the BEST of this many independent child measurements instead of
-# trusting one. A real regression (blocking work back in the render path) is
-# reproducible and misses the budget on every attempt; a scheduler blip spoils
-# one. The loop stops at the first attempt inside budget, so the healthy case
-# still spawns exactly one child.
-_CORE_MEDIAN_ATTEMPTS = 3
+# Ceilings rather than measurements: a healthy server publishes server.json in
+# well under a second and goes away within one receive-loop poll of its
+# shutdown datagram, so these only elapse when something is already broken.
+_SERVER_READY_SECONDS = 20.0
+_SERVER_POLL_SECONDS = 0.05
+_SERVER_EXIT_SECONDS = 10.0
+_STATUS_TIMEOUT_SECONDS = 2.0
+
+# How fresh the client will accept its recorded last render as, in seconds,
+# while these runs are measured. Any real recorded file is at least one client
+# timeout old by the time a fallback reads it, so a thousandth of a second
+# rejects every one of them and leaves the minimal line as the only fallback
+# the client can produce. See _median_client_milliseconds for why that matters.
+_FALLBACK_AGE_PREFERENCE = "STATUSLINE_FALLBACK_MAXIMUM_AGE_SECONDS"
+_UNUSABLE_FALLBACK_AGE_SECONDS = "0.001"
+
+# RFC 5737 TEST-NET-1: guaranteed non-routable, and it drops rather than
+# refuses, so a fetch aimed at it hangs until its own timeout instead of
+# failing fast. That is the shape of the 2026-07-11 incident.
+_UNREACHABLE_QUOTA_HOST = "192.0.2.1:8001"
 
 
-def _numeric_value(node):
-    """Return the numeric value of a Constant/negated-Constant node, else None."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        return float(node.value)
+def _log_tail(path, characters=400):
+    """The end of the server's captured output, for a failure message."""
+    try:
+        with open(path, encoding=_TEXT_ENCODING, errors="replace") as f:
+            return f.read()[-characters:]
+    except OSError:
+        return ""
+
+
+def _wait_for_server(information_path, process):
+    """Poll for the server's info file, bounded. None means it never appeared,
+    or the process died first, which the caller reports rather than waiting on
+    a server that is not coming."""
+    deadline = time.monotonic() + _SERVER_READY_SECONDS
+    while time.monotonic() < deadline:
+        information = read_server_info(information_path)
+        if information is not None and isinstance(information.get("port"), int):
+            return information
+        if process.poll() is not None:
+            return None
+        time.sleep(_SERVER_POLL_SECONDS)
     return None
 
 
-def _subprocess_timeout_violations(path):
-    """Yield (lineno, message) for subprocess calls without a bounded timeout."""
-    with open(path, encoding=_TEXT_ENCODING) as f:
-        source = f.read()
-    tree = ast.parse(source, filename=path)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef):
-            # A wrapper that takes timeout as a parameter must bound its DEFAULT.
-            args = node.args
-            defaults = dict(
-                zip(
-                    [a.arg for a in args.args[len(args.args) - len(args.defaults) :]],
-                    args.defaults,
-                    strict=True,
-                )
-            )
-            kwdefaults = {
-                a.arg: d
-                for a, d in zip(args.kwonlyargs, args.kw_defaults, strict=True)
-                if d is not None
-            }
-            for name, default in {**defaults, **kwdefaults}.items():
-                if name == "timeout":
-                    val = _numeric_value(default)
-                    if val is None or val > _MAX_SUBPROCESS_TIMEOUT:
-                        yield (
-                            node.lineno,
-                            f"{node.name}() defaults timeout={ast.dump(default)}"
-                            f" (must be numeric <= {_MAX_SUBPROCESS_TIMEOUT})",
-                        )
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        is_subprocess = (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "subprocess"
-            and func.attr in ("run", "check_output", "check_call", "call", "Popen")
-        )
-        if is_subprocess and func.attr == "Popen":
-            yield (node.lineno, "subprocess.Popen is banned in the render path")
-            continue
-        timeout_kw = next((k for k in node.keywords if k.arg == "timeout"), None)
-        if is_subprocess:
-            if timeout_kw is None:
-                yield (node.lineno, f"subprocess.{func.attr} without timeout=")
-                continue
-            val = _numeric_value(timeout_kw.value)
-            # A Name (forwarded parameter) is allowed: the wrapper's default
-            # is checked above, and explicit call-site overrides are caught
-            # by the constant check below when literal.
-            if isinstance(timeout_kw.value, ast.Name):
-                continue
-            if val is None or val > _MAX_SUBPROCESS_TIMEOUT:
-                yield (
-                    node.lineno,
-                    f"subprocess.{func.attr} timeout must be numeric <="
-                    f" {_MAX_SUBPROCESS_TIMEOUT}",
-                )
-        elif timeout_kw is not None:
-            # Any other call passing a literal timeout (e.g. a walker wrapper)
-            # must also stay within the cap.
-            val = _numeric_value(timeout_kw.value)
-            if val is not None and val > _MAX_SUBPROCESS_TIMEOUT:
-                yield (
-                    node.lineno,
-                    f"call passes timeout={val} > {_MAX_SUBPROCESS_TIMEOUT}",
-                )
-        is_sleep = (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "time"
-            and func.attr == "sleep"
-        )
-        if is_sleep:
-            yield (node.lineno, "time.sleep is banned in the render path")
-
-
-def check_render_path_sync_calls(failures):
-    for path in _RENDER_PATH_FILES:
-        rel = os.path.relpath(path, _REPO)
-        for lineno, msg in _subprocess_timeout_violations(path):
-            failures.append(f"{rel}:{lineno}: {msg}")
-
-
-def check_cold_render_budget(failures):
-    """End-to-end render with cold caches and a fixture corpus must finish
-    inside the budget. Every historical incident (11-20s) violates this;
-    healthy renders are ~10x under it.
-
-    ignore_cleanup_errors: a render with cold caches spawns a detached
-    refresh child (statusline_lib/refresh.py) that briefly holds the fixture
-    transcripts open; on Windows an open file can't be unlinked, so teardown
-    racing a straggler child raises WinError 32. The leftover tempdir is a
-    few KB and the OS temp cleaner's problem; the check's assertions are
-    unaffected."""
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        home = os.path.join(tmp, "home")
-        build_fixture_home(home)
-        env = dict(os.environ)
-        env["HOME"] = home
-        env["USERPROFILE"] = home
-        env.pop("CLAUDE_WALKER_BIN", None)
-        payload = json.dumps(
-            {
-                "session_id": str(uuid.uuid4()),
-                "cwd": _REPO,
-                "workspace": {"current_dir": _REPO, "project_dir": _REPO},
-                "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
-            }
-        )
-        start = time.perf_counter()
-        try:
-            result = subprocess.run(
-                [sys.executable, os.path.join(_REPO, "statusline.py")],
-                input=payload,
-                capture_output=True,
-                text=True,
-                encoding=_TEXT_ENCODING,
-                env=env,
-                timeout=_RENDER_BUDGET_SECONDS * 3,
-            )
-        except subprocess.TimeoutExpired:
-            failures.append(
-                f"cold render exceeded {_RENDER_BUDGET_SECONDS * 3}s hard kill"
-            )
-            return
-        elapsed = time.perf_counter() - start
-        if result.returncode != 0:
-            failures.append(f"cold render exited {result.returncode}")
-        if elapsed > _RENDER_BUDGET_SECONDS:
-            failures.append(
-                f"cold render took {elapsed:.1f}s"
-                f" (budget {_RENDER_BUDGET_SECONDS}s) -- a long sync call is"
-                " back in the render path"
-            )
-
-
-_CORE_TIMER_SNIPPET = """
-import contextlib, io, json, sys, time
-sys.path.insert(0, {repo!r})
-import statusline
-payload = {payload!r}
-times = []
-for i in range(9):
-    sys.stdin = io.StringIO(payload)
-    with contextlib.redirect_stdout(io.StringIO()):
-        t0 = time.perf_counter()
-        with contextlib.suppress(SystemExit):
-            statusline.main()
-        times.append((time.perf_counter() - t0) * 1000)
-times.sort()
-print(times[len(times) // 2])
-"""
-
-
-def _measure_warm_core_median(code, env):
-    """Run one warm-core timing child and return (median_ms, error_message).
-
-    Exactly one of the two is None. Callers retry on a slow-but-valid
-    measurement (see _CORE_MEDIAN_ATTEMPTS) but abort on an error, which
-    signals a broken child rather than a loaded runner.
-    """
+def _shutdown_server(failures, process, information_path, information):
+    """Leave no server behind: a shutdown datagram, then a bounded wait, then
+    a kill. A client that had to fall back single-flight spawns a replacement
+    of its own, so anything holding server.json afterwards is stopped too."""
+    if information is not None:
+        request_shutdown(information["port"])
+        wait_until_gone(information_path, timeout=_SERVER_EXIT_SECONDS)
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            encoding=_TEXT_ENCODING,
-            env=env,
-            timeout=_RENDER_BUDGET_SECONDS * 6,
-        )
+        process.wait(timeout=_SERVER_EXIT_SECONDS)
     except subprocess.TimeoutExpired:
-        return None, "warm-core timing child exceeded its hard kill"
-    if result.returncode != 0:
-        return None, (
-            f"warm-core timing child exited {result.returncode}:"
-            f" {result.stderr[-200:]!r}"
-        )
-    return float(result.stdout.strip()), None
+        failures.append("the server ignored its shutdown and had to be killed")
+        process.kill()
+        process.wait(timeout=_SERVER_EXIT_SECONDS)
+    stray = read_server_info(information_path)
+    if stray is None:
+        return
+    request_shutdown(stray["port"])
+    wait_until_gone(information_path, timeout=_SERVER_EXIT_SECONDS)
+    failures.append(
+        f"server.json still named a server (pid {stray.get('pid')}) after"
+        " shutdown; a client fallback spawned a replacement"
+    )
 
 
-def check_warm_core_median(failures):
-    """Median warm in-process render (the 'core': payload -> rendered string,
-    interpreter+imports excluded) must beat _CORE_BUDGET_MS in the fixture
-    environment. Each child interpreter renders 9 times and reports the
-    median, so spawn/import cost and first-render cache warming are excluded
-    from the figure -- this is the number the async-refresher work ratchets.
-    The best of up to _CORE_MEDIAN_ATTEMPTS such children is the verdict; see
-    that constant for why one sample is not enough on a shared CI runner.
+@contextlib.contextmanager
+def _live_server(failures, **environment_overrides):
+    """A real statusline_server.py subprocess on a random port, against this
+    suite's isolated home, shut down over the wire on the way out. Yields its
+    info file contents, or None when it never came up.
 
-    The child calls statusline.main() directly (see _CORE_TIMER_SNIPPET), never
-    the `if __name__ == "__main__":` block -- so record_render() (which WRITES
-    the render-timer state) never runs here, on any of the 9 renders. Left
-    unaddressed, format_render_suffix()'s read always hit the "no prior state"
-    branch, so this benchmark never paid for the warm json.load() a real second
-    render does. Seeding one render-timer entry up front (using rendertimer's
-    own path function, not a re-derived path, so this can't drift from the
-    production layout) makes every one of the 9 in-process renders exercise
-    the real warm-read branch.
-
-    ignore_cleanup_errors: same detached-refresh-child teardown race as
-    check_cold_render_budget (WinError 32 on Windows; see that docstring).
+    A subprocess rather than verify_server_protocol's in-process fixture on
+    purpose: that fixture hands the server a pool that records jobs instead of
+    running them, and the whole point of the unreachable-host check is that a
+    real pool thread stuck on a dead address still cannot reach the loop that
+    answers a client.
     """
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        home = os.path.join(tmp, "home")
-        build_fixture_home(home)
-        env = dict(os.environ)
-        env["HOME"] = home
-        env["USERPROFILE"] = home
-        env.pop("CLAUDE_WALKER_BIN", None)
-
-        session_id = str(uuid.uuid4())
-        state_dir = os.path.join(home, ".claude", "state")
-        os.makedirs(state_dir, exist_ok=True)
-        seed_path = render_timer_path(session_id, state_dir=state_dir)
-        with open(seed_path, "w", encoding=_TEXT_ENCODING) as f:
-            json.dump({"last_ms": 5.0, "peak_ms": 5.0}, f)
-
-        payload = json.dumps(
-            {
-                "session_id": session_id,
-                "cwd": _REPO,
-                "workspace": {"current_dir": _REPO, "project_dir": _REPO},
-                "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
-                "context_window": {
-                    "context_window_size": 200000,
-                    "total_input_tokens": 50000,
-                    "total_output_tokens": 5000,
-                    "current_usage": {
-                        "input_tokens": 10,
-                        "output_tokens": 50,
-                        "cache_creation_input_tokens": 100,
-                        "cache_read_input_tokens": 40000,
-                    },
-                },
-                "cost": {
-                    "total_cost_usd": 1.5,
-                    "total_duration_ms": 600000,
-                    "total_api_duration_ms": 300000,
-                    "total_lines_added": 10,
-                    "total_lines_removed": 2,
-                },
-            }
+    information_path = server_info_path(_STATE_DIR)
+    with contextlib.suppress(OSError):
+        os.remove(information_path)
+    log_path = os.path.join(_HOME, "live-server.log")
+    # The child gets its own duplicate of the handle, so closing this one at
+    # the end of the with block leaves the server's output going to the file.
+    with open(log_path, "w", encoding=_TEXT_ENCODING) as log:
+        process = subprocess.Popen(
+            [sys.executable, _SERVER],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            env=_client_environment(**environment_overrides),
         )
-        code = _CORE_TIMER_SNIPPET.format(repo=_REPO, payload=payload)
-        best_ms = None
-        for _ in range(_CORE_MEDIAN_ATTEMPTS):
-            median_ms, error = _measure_warm_core_median(code, env)
-            if error is not None:
-                failures.append(error)
-                return
-            if best_ms is None or median_ms < best_ms:
-                best_ms = median_ms
-            if best_ms <= _CORE_BUDGET_MS:
+    information = None
+    try:
+        information = _wait_for_server(information_path, process)
+        if information is None:
+            failures.append(
+                f"the server never published server.json: {_log_tail(log_path)!r}"
+            )
+        yield information
+    finally:
+        _shutdown_server(failures, process, information_path, information)
+
+
+def _measure_one_attempt(information, environment, payload, fallback):
+    """One attempt: _CLIENT_RUNS real client subprocesses against the server
+    already running. Returns (median milliseconds, None) when every run printed
+    a server render, or (None, why) when the attempt has to be thrown away.
+
+    Every run is checked, rather than the outcome being inferred at the end. A
+    client that gives up on a slow server prints its fallback line quickly and
+    exits 0, so without this the measurement would be of the fallback path and
+    would pass for a fast render.
+
+    Telling the two apart needs help, because by design they are the same
+    text. The server writes its last-render file *before* it replies, so a
+    server that renders and then answers a moment too late has already left
+    this session a fallback that is character for character the reply the
+    client did not wait for. _UNUSABLE_FALLBACK_AGE_SECONDS breaks the tie: the
+    client's freshness window is set below any age a recorded file can have by
+    the time a timeout expires, so the recorded tier is always rejected and the
+    only line the client can fall back to is minimal_line(payload), which the
+    caller computes from the same payload. A run whose output equals that line
+    reached no server. The happy path is untouched, since a client holding a
+    real reply never consults a fallback at all.
+
+    _Context carries the isolated environment a client subprocess inherits;
+    _run_client reads nothing else off it, so the override rides on there.
+    """
+    context = _Context(server=None, port=information["port"])
+    context.environment = environment
+    durations = []
+    for run in range(1, _CLIENT_RUNS + 1):
+        started_at = time.perf_counter()
+        result = _run_client(context, "claude", payload)
+        durations.append((time.perf_counter() - started_at) * 1000.0)
+        printed = result.stdout.strip()
+        if result.returncode != 0:
+            return None, f"run {run} exited {result.returncode}: {result.stderr!r}"
+        if not printed:
+            return None, f"run {run} printed nothing"
+        if printed == fallback:
+            return None, (
+                f"run {run} of {_CLIENT_RUNS} printed the client's fallback line"
+                f" ({printed!r}) rather than a server render"
+            )
+    return statistics.median(durations), None
+
+
+def _measure_against_a_live_server(failures, label, server_environment):
+    """Start one server, take the best of _MEDIAN_ATTEMPTS medians against it,
+    and hold that figure to the client budget.
+
+    An attempt containing a run that fell back is thrown away rather than
+    failing the check outright, which is the same tolerance the timing verdict
+    already has and for the same reason: a one-off stall on a busy machine
+    costs an attempt, while a server chronically too slow to answer inside the
+    client's window spoils every attempt and fails here. Measured on this
+    machine, 144 consecutive runs produced no fallback at all.
+
+    The status query below is a second, independent look at the same question
+    from the server's side: a server that folded no session served none of
+    these renders.
+    """
+    with _live_server(failures, **server_environment) as information:
+        if information is None:
+            return
+        environment = _client_environment(
+            **{_FALLBACK_AGE_PREFERENCE: _UNUSABLE_FALLBACK_AGE_SECONDS}
+        )
+        payload = _claude_payload()
+        fallback = statusline_client_support.minimal_line(payload).strip()
+        best = None
+        spoiled = None
+        for _ in range(_MEDIAN_ATTEMPTS):
+            median, spoiled = _measure_one_attempt(
+                information, environment, payload, fallback
+            )
+            if median is None:
+                continue
+            best = median if best is None else min(best, median)
+            if best <= _CLIENT_BUDGET_MS:
                 break
-        if best_ms > _CORE_BUDGET_MS:
+        if best is None:
             failures.append(
-                f"warm core median {best_ms:.0f}ms (best of"
-                f" {_CORE_MEDIAN_ATTEMPTS} attempts) exceeds"
-                f" {_CORE_BUDGET_MS:.0f}ms -- blocking work crept into the"
-                " happy-path render"
-            )
-
-
-def check_unreachable_host_render_budget(failures):
-    """End-to-end render when the quota dashboard host is unreachable (non-routable IP)
-    must finish inside the cold-render budget without blocking or crashing."""
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        home = os.path.join(tmp, "home")
-        build_fixture_home(home)
-        env = dict(os.environ)
-        env["HOME"] = home
-        env["USERPROFILE"] = home
-        env["STATUSLINE_FABLE_QUOTA_HOST"] = "192.0.2.1:8001"
-        env.pop("CLAUDE_WALKER_BIN", None)
-        payload = json.dumps(
-            {
-                "session_id": str(uuid.uuid4()),
-                "cwd": _REPO,
-                "workspace": {"current_dir": _REPO, "project_dir": _REPO},
-                "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
-            }
-        )
-        start = time.perf_counter()
-        try:
-            result = subprocess.run(
-                [sys.executable, os.path.join(_REPO, "statusline.py")],
-                input=payload,
-                capture_output=True,
-                text=True,
-                encoding=_TEXT_ENCODING,
-                env=env,
-                timeout=_RENDER_BUDGET_SECONDS * 3,
-            )
-        except subprocess.TimeoutExpired:
-            failures.append(
-                f"unreachable-host render exceeded {_RENDER_BUDGET_SECONDS * 3}s hard kill"
+                f"{label}: not one of {_MEDIAN_ATTEMPTS} attempts measured a"
+                f" round trip; the last was thrown away because {spoiled}"
             )
             return
-        elapsed = time.perf_counter() - start
-        if result.returncode != 0:
-            failures.append(f"unreachable-host render exited {result.returncode}")
-        if elapsed > _RENDER_BUDGET_SECONDS:
+        status = request_status(information["port"], timeout=_STATUS_TIMEOUT_SECONDS)
+        if status is None or not status.get("sessions"):
             failures.append(
-                f"unreachable-host render took {elapsed:.1f}s"
-                f" (budget {_RENDER_BUDGET_SECONDS}s) -- an inline sync network call is"
-                " blocking the render path"
+                f"{label}: the server folded no session, so every client fell"
+                " back and the measured figure means nothing"
             )
+        print(f"{label}: median {best:.0f}ms (budget {_CLIENT_BUDGET_MS:.0f}ms)")
+        if best > _CLIENT_BUDGET_MS:
+            failures.append(
+                f"{label}: median client run {best:.0f}ms (best of"
+                f" {_MEDIAN_ATTEMPTS} attempts) exceeds {_CLIENT_BUDGET_MS:.0f}ms"
+                " -- blocking work crept back onto the render path"
+            )
+
+
+def check_live_server_render_budget(failures):
+    """End to end against a live server: the median of nine client runs must
+    beat the client budget.
+
+    This is the one benchmark in the suite that reads the wall clock, and it
+    is deliberately loose: the measured figure on this machine is roughly
+    40ms, every historical incident was 5,000ms or worse, and the median of
+    nine plus the best of three attempts absorbs a loaded CI runner.
+    """
+    _measure_against_a_live_server(failures, "live render", {})
+
+
+def check_unreachable_quota_host_render_budget(failures):
+    """The same budget with the quota dashboard host pointed at an address
+    that drops rather than refuses.
+
+    This is an end-to-end measurement of one client round trip, and
+    it is the scenario the architecture is meant to make structurally
+    impossible: the HTTP fetch is a worker-pool job now, so a pool thread
+    stuck on a dead address cannot touch the reply at all.
+    """
+    _measure_against_a_live_server(
+        failures,
+        "unreachable quota host",
+        {"STATUSLINE_FABLE_QUOTA_HOST": _UNREACHABLE_QUOTA_HOST},
+    )
 
 
 def main():
     failures = []
-    check_render_path_sync_calls(failures)
-    check_cold_render_budget(failures)
-    check_unreachable_host_render_budget(failures)
-    check_warm_core_median(failures)
+    check_static_guards(failures)
+    check_live_server_render_budget(failures)
+    check_unreachable_quota_host_render_budget(failures)
 
     if failures:
-        for f in failures:
-            print(f"FAIL: {f}")
+        for failure in failures:
+            print(f"FAIL: {failure}")
         sys.exit(1)
     print("OK: render path is free of unbounded sync calls and inside budget")
 

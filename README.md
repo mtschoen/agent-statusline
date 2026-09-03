@@ -148,16 +148,17 @@ identity); fields are omitted when their data isn't available:
 - **Fable quota** - labeled `fable:`, the Anthropic Fable weekly quota pool
   utilization and pace projection (`fable: P% ±Hh`) exposed by the fleet quota
   dashboard. Claude Code's stdin payload already carries the `default` pool's
-  own windows for free as its `rate_limits` object; the detached refresher
-  pushes that alongside the request (`POST
+  own windows for free as its `rate_limits` object; a worker-pool job pushes
+  that alongside the request (`POST
   http://<dashboard-host>:8001/api/quota/observed`), which folds it into the
   dashboard's cached `default` pool and returns the current report in the
   same round trip -- one request both feeds and reads. The `fable` pool is
   scoped separately and never present in `rate_limits`, so the request still
   has to happen to read it. A dashboard that predates the observed route
   (404/405) falls back to the legacy `GET /api/quota/providers` route. Sourced
-  via a stale-while-revalidate detached background refresher with a 300s (5
-  minute) TTL so the render never blocks on network calls. The pool is a
+  via a stale-while-revalidate cache with a 300s (5 minute) TTL, refreshed by
+  a job on the server's worker pool so the render never blocks on network
+  calls. The pool is a
   seven-day window that moves roughly 1% per 100 minutes and the endpoint
   triggers a live, metered Anthropic API call per fetch, so the TTL is set
   well above the dashboard's own 60s cache instead of chasing freshness the
@@ -389,6 +390,12 @@ showed on the last redraw and never move. This is a harness-level setting, not
 script content, so unlike editing the `.py`/`.sh` files themselves, **it
 requires a session restart (or a fresh `claude` session) to take effect.**
 
+The installer also registers a `SessionStart` hook that runs
+`statusline_client.py --ensure-server`, so a resident server for that
+configuration directory is already running (or already being spawned) before
+the session's first render. See [Architecture](#architecture) for what that
+server does and how the client falls back when it isn't reachable.
+
 ### Codex CLI
 
 Codex CLI owns its TUI footer rather than invoking a command-style statusline.
@@ -476,10 +483,12 @@ verified against the kimi-code source:
   PLAN | vX.Y.Z`.
 - **300ms kill window.** The command is spawned via `cmd /d/s/c` (Windows)
   or `sh -c` (POSIX), killed (process tree) after 300ms, and throttled to
-  one run per second. The kimi render path is payload-only plus in-process
-  helpers and SWR-cached reads — no inline git subprocess (the payload
-  carries `gitBranch`; the working-tree badge reads the gitref cache), no
-  transcript walk, no cost rendering.
+  one run per second. The window is met by `statusline_client.py`'s fixed
+  cost: one interpreter start, one UDP datagram out, one reply in, at most
+  150ms of socket wait -- the actual render, including any git or working-tree
+  lookup, happens on the resident server, not in this process. The kimi
+  payload carries `gitBranch`; the working-tree badge reads the server's
+  gitref cache. No transcript walk, no cost rendering.
 - **Sparse payload.** The stdin JSON is camelCase: `model`, `cwd`,
   `gitBranch` (nullable), `permissionMode`, `planMode`, `contextUsage`
   (float fraction: 0.047 == 4.7%), `contextTokens`, `maxContextTokens`,
@@ -622,14 +631,13 @@ The Pi footer appends the previous render duration and session peak
 starting Pi to disable this instrumentation.
 
 The same instrumentation exists on the Python harnesses (Claude Code/Antigravity's
-`statusline.py`, Qwen's `qwen_statusline.py`): each render appends the PREVIOUS
-render's duration and session peak (`ui 142.35ms peak 210.11ms`) to its last
-output line, reading and writing a small per-session state file since each
-render is a fresh process. `STATUSLINE_RENDER_TIMING=0` disables it there too.
-Because the Python harnesses spawn per render, the figure covers payload-in to
-string-out only -- it excludes interpreter startup and imports (the "warm
-core" scope `scripts/verify_render_budget.py`'s `check_warm_core_median`
-enforces), so it reads lower than the process's true wall-clock cost.
+`statusline.py`, Qwen's `qwen_statusline.py`, Kimi's `kimi_statusline.py`): each
+reply appends the PREVIOUS render's duration and session peak
+(`ui 142.35ms peak 210.11ms`) to its last output line. The resident server
+records the figure, since it does the actual rendering: it covers payload-in
+to string-out on the server's side only, not the client's round trip, so it
+excludes the client's own interpreter startup and its socket wait for the
+reply. `STATUSLINE_RENDER_TIMING=0` disables it there too.
 
 ### Per-agent status lines
 
@@ -831,8 +839,9 @@ It does **not** run `/wrap` or interrupt anything; it only nudges the agent to
 *offer* a wrap at the next natural stopping point. Wrap stays user-initiated.
 
 **How it works.** A `UserPromptSubmit` hook's payload can't see context-window
-occupancy, but the statusline's payload can. So `statusline.py` writes the live
-occupancy to a per-session file under `~/.claude/state/` on each render, and the
+occupancy, but the statusline's payload can. So `statusline_lib/server_render.py`
+writes the live occupancy to a per-session file under `~/.claude/state/` on each
+render (via `write_ctx_state`), and the
 `wrap_nudge.py` hook reads that file (no transcript walk) when you submit a
 prompt. A per-session marker file makes it fire at most once. Both files are
 keyed by session id, so concurrent sessions never cross signals.
@@ -863,12 +872,54 @@ Set `CLAUDE_STATE_DIR` to relocate the state and marker files (the test suite
 uses this to avoid touching real state). The threshold and message text live in
 `statusline_lib/nudge.py`.
 
+## Architecture
+
+Two processes cooperate per configuration directory (`~/.claude`, `~/.qwen`,
+or the platform equivalent). A thin client does the actual per-render work:
+the root-level `statusline.py`, `subagent_statusline.py`,
+`qwen_statusline.py`, and `kimi_statusline.py` entry points all forward into
+`statusline_client.py`'s `main(kind, argv)`, which reads the harness payload
+from stdin, sends one UDP datagram to `127.0.0.1:<port>` (the port read from
+`state_dir()/server.json`), waits at most 150ms for one reply, and prints it
+verbatim. The datagram carries the render kind, the payload, and the
+client's code-version digest as JSON; the reply is the rendered line, or a
+signal that the client's code disagrees with the server's.
+
+All computation happens in one resident server per configuration directory
+(`statusline_lib/server.py`, entry point `statusline_server.py`). It binds a
+random localhost UDP port, serves each render inline on its receive loop
+from in-memory per-session, per-cwd, and machine-wide state, and runs
+anything that can block (git, psutil, HTTP, the walker) on a four-thread
+worker pool that the receive loop never waits on.
+
+If the client gets no reply inside its timeout, finds no live server, or
+detects a code-version mismatch, it prints a fallback line - the last render
+it has on record if one is still fresh, otherwise a line built from the
+payload alone - and single-flight spawns a replacement server without
+waiting on it (a stale spawn-lock file keeps a herd of clients from racing
+to spawn duplicates). On a version mismatch the client asks the outdated
+server to shut down before spawning the new one, so pulling a checkout
+update takes effect on the session's next render rather than never.
+
+The `SessionStart` hook that `install.sh` / `install.bat` register runs
+`statusline_client.py --ensure-server` once per session start, so the first
+real render of a session rarely pays the cost of spawning a server itself.
+Manage a running server directly:
+
+```
+python statusline_ctl.py server status    # pid, port, version, uptime
+python statusline_ctl.py server stop      # ask it to shut down
+python statusline_ctl.py server restart   # stop it, then start a fresh one
+```
+
 ## Logs
 
-The script truncate-writes the latest stdin payload to
-`~/.claude/.statusline-input.log` and any Python errors to
-`~/.claude/.statusline-error.log`. Useful for diagnosing layout issues or
-seeing what fields a future Claude Code version starts sending.
+The resident server truncate-writes the latest stdin payload it served to
+`.statusline-input.log` (the `claude` render kind) and
+`.subagent-statusline-input.log` (the `subagent` render kind), both under the
+harness's configuration directory (`~/.claude` by default), and appends any
+Python errors to `.statusline-error.log`. Useful for diagnosing layout issues
+or seeing what fields a future Claude Code version starts sending.
 
 ## License
 

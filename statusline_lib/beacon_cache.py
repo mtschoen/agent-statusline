@@ -9,17 +9,16 @@ in front of `_walker_subcommand("beacons-latest", ...)`.
 Render-perf ratchet step 2 (PLAN.md) TTL-cached the parsed payload, but a
 cache miss still paid the walker subprocess inline (~15-60ms depending on
 session size). Render-perf ratchet step 3 moves the miss/stale path onto the
-detached-refresher pattern (statusline_lib/refresh.py), same as the pace/
+in-process refresh pattern (statusline_lib/server_jobs.py), same as the pace/
 spend transcript walks: the render always serves whatever the cache holds --
 a hidden beacon column beats a blocked render -- and a stale/missing entry
-spawns a detached child to recompute, debounced by refresh.py's inflight
-marker.
+hands recomputation to the resident server's worker pool via request_refresh.
 
 Imports:
-  base     -- for state_dir, sanitize_state_key
-  refresh  -- for maybe_spawn_refresh (detached cache recompute)
-  ttlcache -- for read_raw_cache / write_ttl_cache mechanics
-  walker   -- for _walker_subcommand
+  base        -- for state_dir, sanitize_state_key
+  server_jobs -- for request_refresh (in-process cache recompute)
+  ttlcache    -- for read_raw_cache / write_ttl_cache mechanics
+  walker      -- for _walker_subcommand
 """
 
 import os
@@ -27,7 +26,7 @@ import time
 
 from .base import sanitize_state_key
 from .base import state_dir as _resolve_state_dir
-from .refresh import maybe_spawn_refresh
+from .server_jobs import request_refresh
 from .ttlcache import read_raw_cache, write_ttl_cache
 from .walker import _walker_subcommand
 
@@ -49,8 +48,8 @@ def _beacons_latest_cached(session_id, state_dir=None):
     cache's raw value, stale included, never a synchronous walker call. A
     fresh entry is served as-is; a stale or missing entry is served too
     (None on a true miss, which format_beacon already treats as "hide the
-    column") and hands recomputation to a detached child via
-    maybe_spawn_refresh."""
+    column") and hands recomputation to the server's worker pool via
+    request_refresh."""
     path = _beacon_latest_cache_path(session_id, state_dir)
     cached = read_raw_cache(path)
     if cached is not None:
@@ -59,16 +58,16 @@ def _beacons_latest_cached(session_id, state_dir=None):
             < _BEACON_LATEST_CACHE_TTL_SECONDS
         ):
             return cached.get("data")
-        maybe_spawn_refresh("beacon-latest", session_id)
+        request_refresh("beacon-latest", session_id)
         return cached.get("data")
-    maybe_spawn_refresh("beacon-latest", session_id)
+    request_refresh("beacon-latest", session_id)
     return None
 
 
 def refresh_beacon_latest_cache(session_id):
     """Recompute `session_id`'s beacons-latest payload and persist it for the
-    render's cached read. Runs in the detached refresh child
-    (refresh.run_refresh), never on the render path.
+    render's cached read. Runs on the server's worker pool
+    (server_jobs.run_refresh), never on the render path.
 
     --no-config: this session's transcript is on THIS machine by definition;
     the SMB extra roots cost 170-190ms per render vs ~55ms local-only.

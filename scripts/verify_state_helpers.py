@@ -1,7 +1,7 @@
 """Verify statusline_lib/base.py's shared state-dir/sanitize resolver and the
 entry-script glue helpers (hostname, is_local_mode, spinner_frame, safe_write,
 log_traceback) that statusline.py / qwen_statusline.py / subagent_statusline.py
-used to each define locally.
+each define locally.
 
 Most of these are also exercised indirectly by the entry scripts' own verify
 suites (e.g. every statusline.py render calls hostname()/is_local_mode()/

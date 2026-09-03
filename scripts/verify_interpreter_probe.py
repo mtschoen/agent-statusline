@@ -5,6 +5,7 @@ TTL expiry, and graceful degradation on corrupt/unwritable cache files.
 Run from anywhere; imports / resolves from agent-statusline by path.
 """
 
+import json
 import os
 import shutil
 import sys
@@ -15,6 +16,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from statusline_lib.process_safe import run_captured
+from statusline_lib.server_socket import SPAWN_LOCK_FILENAME
 
 _TEXT_ENCODING = "utf-8"
 _MOCK_BIN_PREFIX = "statusline-mock-bin-"
@@ -215,6 +217,39 @@ def _check_corrupt_cache_degrades(failures, bash_bin, probe_path):
             )
 
 
+# A leaked server is a real detached process (interpreter startup, imports,
+# a socket bind) before it writes server.json, so it can lag the wrapper's
+# own return by a beat (~100ms, measured); checking once immediately can
+# miss a leak that is still in flight. Polling a bounded window rather than
+# sleeping a fixed amount: the loop returns the instant server.json appears,
+# and only pays the full window when it correctly never does.
+_SERVER_JSON_POLL_SECONDS = 0.5
+_SERVER_JSON_POLL_INTERVAL_SECONDS = 0.02
+
+
+def _server_json_appeared(path):
+    deadline = time.monotonic() + _SERVER_JSON_POLL_SECONDS
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return True
+        time.sleep(_SERVER_JSON_POLL_INTERVAL_SECONDS)
+    return os.path.exists(path)
+
+
+def _hold_spawn_lock(home_directory, relative_app_dir):
+    """A fresh single-flight spawn lock in the isolated home's state
+    directory, so invoking the real installed wrapper below (which now
+    forwards through statusline_client.py) finds no live server and prints
+    its fallback without single-flight spawning a real background
+    statusline_server.py process that would outlive this check."""
+    state_dir = os.path.join(home_directory, relative_app_dir, "state")
+    os.makedirs(state_dir, exist_ok=True)
+    with open(
+        os.path.join(state_dir, SPAWN_LOCK_FILENAME), "w", encoding=_TEXT_ENCODING
+    ) as f:
+        json.dump({"pid": os.getpid(), "at": time.time()}, f)
+
+
 def _clean_test_environment(home_directory):
     environment = dict(os.environ)
     environment.pop("CLAUDE_STATE_DIR", None)
@@ -294,6 +329,7 @@ def _check_wrapper_routing(failures, bash_bin):
     for label, script_command, relative_app_dir, forbidden_dirs in wrapper_cases:
         with tempfile.TemporaryDirectory(prefix=_HOME_DIR_PREFIX) as home_dir:
             env = _clean_test_environment(home_dir)
+            _hold_spawn_lock(home_dir, relative_app_dir)
             full_command = [
                 bash_bin,
                 os.path.join(REPO, script_command[0]),
@@ -311,6 +347,14 @@ def _check_wrapper_routing(failures, bash_bin):
             )
             if not os.path.exists(cache_file):
                 failures.append(f"{label} should write cache file to {cache_file}")
+            server_info_file = os.path.join(
+                home_dir, relative_app_dir, "state", "server.json"
+            )
+            if _server_json_appeared(server_info_file):
+                failures.append(
+                    f"{label} should not have spawned a real server: "
+                    f"{server_info_file} appeared"
+                )
             for forbidden in forbidden_dirs:
                 forbidden_path = os.path.join(home_dir, forbidden)
                 if os.path.exists(forbidden_path):

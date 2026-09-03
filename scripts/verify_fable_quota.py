@@ -13,13 +13,12 @@ Covers:
   - SWR cache: fresh, stale, missing, corrupt, failure negative-caching with backoff
   - Pace projection: on-target, surplus, deficit, zero utilization, boundary crossings
   - Format output: full with pace, compact without pace, disabled toggles
-  - Adapter integration: Claude (statusline.py), Qwen (qwen.py), Kimi (kimi.py)
+  - Adapter integration: Claude (render_claude.py), Qwen (qwen.py), Kimi (kimi.py)
   - Refresher dispatch: run_refresh("fable-quota", ...)
 """
 
 import contextlib
 import http.server
-import io
 import json
 import os
 import socketserver
@@ -32,9 +31,9 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import statusline
 import statusline_lib.fable_quota as fable_quota
 import statusline_lib.pace as pace
+from statusline_lib import walk_transcript
 from statusline_lib.fable_quota import (
     _dashboard_host,
     _dashboard_url,
@@ -50,7 +49,8 @@ from statusline_lib.fable_quota import (
 from statusline_lib.kimi import render_kimi_statusline
 from statusline_lib.pace import _project_pace
 from statusline_lib.qwen import render_qwen_statusline
-from statusline_lib.refresh import maybe_spawn_refresh, run_refresh
+from statusline_lib.render_claude import render_claude_statusline, transcript_path_for
+from statusline_lib.server_jobs import request_refresh, run_refresh
 
 _HTTP_OK = 200
 NOW = 1787227200.0
@@ -440,8 +440,8 @@ def _check_format_fable_quota_cold_with_configured_host(failures):
     spawned = []
     with _Fixture() as fx:
         fx.set_env(STATUSLINE_FABLE_QUOTA_HOST="testhost:8001")
-        saved_spawn = fable_quota.maybe_spawn_refresh
-        fable_quota.maybe_spawn_refresh = lambda kind, arg: spawned.append((kind, arg))
+        saved_spawn = fable_quota.request_refresh
+        fable_quota.request_refresh = lambda kind, arg: spawned.append((kind, arg))
         try:
             if format_fable_quota() != "":
                 failures.append("cold cache with configured host must render empty")
@@ -450,7 +450,7 @@ def _check_format_fable_quota_cold_with_configured_host(failures):
                     f"cold cache with configured host must spawn a refresh: {spawned!r}"
                 )
         finally:
-            fable_quota.maybe_spawn_refresh = saved_spawn
+            fable_quota.request_refresh = saved_spawn
 
 
 def _check_refresh_with_unusable_host(failures):
@@ -589,8 +589,8 @@ def _check_fetch_and_refresh_with_http_server(failures):
 
 def _check_failure_preserves_stale_value(failures):
     """Stale-beats-blank: a failed refresh over a previously good entry must
-    keep serving the stale value while the failure marker bounds detached-child
-    respawns."""
+    keep serving the stale value while the failure marker bounds how often a
+    fresh refresh is requested."""
     with socketserver.TCPServer(("127.0.0.1", 0), _TestHttpHandler) as server:
         port = server.server_address[1]
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -761,8 +761,8 @@ def _check_unreachable_endpoint_handling(failures):
 def _check_swr_cache_mechanics(failures):
     spawned = []
     with _Fixture() as fx:
-        saved_spawn = maybe_spawn_refresh
-        fable_quota.maybe_spawn_refresh = lambda kind, arg: spawned.append((kind, arg))
+        saved_spawn = request_refresh
+        fable_quota.request_refresh = lambda kind, arg: spawned.append((kind, arg))
         try:
             if _fable_quota_cached(NOW) is not None or spawned != [
                 ("fable-quota", None)
@@ -801,7 +801,7 @@ def _check_swr_cache_mechanics(failures):
             ):
                 failures.append("stale failure cache must spawn")
         finally:
-            fable_quota.maybe_spawn_refresh = saved_spawn
+            fable_quota.request_refresh = saved_spawn
 
 
 def _check_adapter_integrations(failures):
@@ -825,32 +825,27 @@ def _check_adapter_integrations(failures):
         if "fable:" not in kimi_l or "54%" not in kimi_l:
             failures.append(f"kimi statusline missing fable: {kimi_l!r}")
 
-        saved_stdin = sys.stdin
-        sys.stdin = io.StringIO(
-            json.dumps(
-                {
-                    "session_id": "s1",
-                    "cwd": "/cwd",
-                    "model": {"id": "claude-opus-4-8"},
-                    # Claude's own statusline gates fable on the session
-                    # carrying subscription rate_limits (see _render_line2);
-                    # the qwen/kimi adapters above have no such gate.
-                    "rate_limits": {
-                        "five_hour": {
-                            "used_percentage": 12.0,
-                            "resets_at": 9_999_999_999,
-                        },
-                    },
-                }
-            )
+        # Claude's own statusline gates fable on the session carrying
+        # subscription rate_limits (see _render_line2); the qwen/kimi
+        # adapters above have no such gate. Called directly against
+        # render_claude_statusline rather than through statusline.py: that
+        # entry point is a thin resident-server client wrapper that renders
+        # nothing itself, and the server reaches this exact function the
+        # same way.
+        claude_payload = {
+            "session_id": "s1",
+            "cwd": "/cwd",
+            "model": {"id": "claude-opus-4-8"},
+            "rate_limits": {
+                "five_hour": {"used_percentage": 12.0, "resets_at": 9_999_999_999},
+            },
+        }
+        walk = walk_transcript(
+            transcript_path_for(claude_payload), include_subagents=True
         )
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            statusline.main()
-        sys.stdin = saved_stdin
-        output = buf.getvalue()
+        output = render_claude_statusline(claude_payload, "/cwd", walk, time.time())
         if "fable:" not in output or "54%" not in output:
-            failures.append("statusline.py missing fable")
+            failures.append("claude statusline missing fable")
 
 
 def _check_refresher_dispatch(failures):

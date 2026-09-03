@@ -1,17 +1,66 @@
 # agent-statusline - Test Report
 
-`2026-08-06`
+`2026-09-02`
 
 | Field | Value |
 |-------|-------|
-| **Status** | PASS (Windows and Linux; the Linux job was red before this run) |
+| **Status** | PASS (Windows; ran from a Git Bash shell) |
 | **Mode** | maintain (lint AND coverage - both hard CI gates) |
-| **Tests** | 67 `scripts/verify_*.py`, all passing on Windows and on WSL Ubuntu-24.04 |
-| **Git** | `f483c74` (`main`) plus the process_safe nt-arm fix below |
-| **Coverage** | 2695/2695 statements (100%), 0 exclusion annotations |
-| **Lint** | ruff format 0 / ruff check 0; aislop ci exit 0 (6 pre-existing file-size warnings in untracked WIP files, gate failBelow 90); aislop scan --staged 100/100 Healthy (0 issues) |
+| **Tests** | 96 `scripts/verify_*.py`, all passing |
+| **Git** | `feat/resident-server`, PR 59 round-4 fix on top of `ce173c4` |
+| **Coverage** | 3937/3937 statements (100%), 0 exclusion annotations |
+| **Lint** | ruff format 0 / ruff check 0; aislop ci score 97/100 (floor 90), exit 0 |
 
-**This run (fix the red Linux job in `process_safe`'s nt arm):** the
+**This run (PR 59 round-4 fix):** closed the last arm of the spawn-lock race.
+Claiming the lock is no longer on its own a licence to spawn: the client
+re-reads `server.json` once it holds the lock and abandons the spawn when the
+file has changed since the snapshot it decided on and now names a server built
+from this checkout, so a client delayed past another client's replacement
+starts nothing. `ensure_server` takes `info_path` and `read_info` for that
+re-read, threaded through the client's own wrapper. New suite:
+`scripts/verify_client_spawn_recheck.py`, covering the published replacement,
+an unchanged file, a changed-but-stale file, and a cold start.
+
+**Prior run (PR 59 round-2 fix wave):** closed the spawn-lock race by
+publishing `server.json` before clearing the lock, so a client that finds the
+lock free always reads a port that answers rather than spawning a second
+server. Moved the three whole-transcript reads off the receive thread into a
+new `statusline_lib/transcript_summaries.py`: the beacon anchor scan (whose
+scanning half moved to a new `statusline_lib/beacon_anchors.py`), each Agent
+Teams teammate's cost walk, and each subagent row's walk now come from a
+process-wide table validated by `(size, mtime_ns)` and recomputed on the
+worker pool through two new refresh kinds, `transcript-walk` and
+`beacon-anchors`. A process with no pool computes inline, so every non-server
+render stays correct. New suite: `scripts/verify_transcript_summaries.py`
+(11 checks, including a loud seam proving no consumer opens a transcript on
+the render path). Counts above are from this run: 95 scripts, 3937
+statements.
+
+**Earlier run (final-review fix wave):** hardened the server's receive loop so
+no datagram content can end the resident process, corrected `close()` to
+leave a successor's `server.json` alone, stopped `statusline-ctl server
+restart` from spawning over a server that did not stop, moved `WorkerPool`
+thread start-up inside the pool lock, widened `positive_columns` to an
+infinite width, and redirected three render suites off the developer's real
+`~/.claude`. Counts above are from this run: 94 scripts, 3860 statements.
+
+**Before that (Task 22: documentation for the resident-server migration):**
+rewrote every prose description of the deleted detached-child refresh
+spawner to describe the two-process architecture that replaced it -- a thin
+`statusline_client.py` per render plus one resident server per configuration
+directory. AGENTS.md's render-budget invariant section, README.md
+(architecture section, fable-quota refresher description, Kimi's 300ms kill
+window, the per-render timing note, and the Logs section), and PLAN.md's
+render-perf ratchet item no longer mention `maybe_spawn_refresh`,
+`refresh.py`, the inflight marker, `spawn_timings`, or the warm-core/
+cold-end-to-end tiers; the fixed client budget (roughly 65ms of interpreter
+and import plus at most 150ms of socket wait) and the server's single-digit-
+millisecond render replace them. Measured this run:
+`scripts/verify_render_budget.py`'s live-server client round trip was 40ms
+(live render) and 40ms (unreachable quota host) against a 200ms budget.
+Documentation and comments only -- no code or test behavior changed.
+
+**Previous run (fix the red Linux job in `process_safe`'s nt arm):** the
 `Unit tests (Linux)` job had been failing with
 `AttributeError: module 'subprocess' has no attribute 'CREATE_NEW_PROCESS_GROUP'`.
 `spawn_detached` read that Windows-only constant bare, while everything

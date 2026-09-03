@@ -33,7 +33,7 @@ RENAMED_COMMAND = (
 # filename, no sentinel. Matched via the basename marker and migrated.
 PRE_SENTINEL_COMMAND = 'python3 "/repo/wrap_nudge.py" || true'
 # An entry written before the schoen-claude-status -> agent-statusline repo
-# rename: current filename, but the sentinel still carries the old repo name
+# rename: current filename, with a sentinel carrying an earlier repo name
 # literally (not derived from the live _NUDGE_SENTINEL, since that now holds
 # the new value). Matched via the basename marker, same as PRE_SENTINEL_COMMAND.
 LEGACY_REPO_SENTINEL_COMMAND = (

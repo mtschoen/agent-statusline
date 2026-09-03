@@ -46,9 +46,10 @@ def read_raw_cache(path):
 
     Pairs with write_ttl_cache for stale-while-revalidate callers (git-ref,
     beacons-latest) that need to serve a stale entry immediately while
-    handing recomputation to a detached refresher, rather than blocking the
-    render on a synchronous recompute -- read_ttl_cache's fresh-or-None
-    contract discards exactly the stale value those callers need to serve.
+    handing recomputation to the resident server's worker pool, rather than
+    blocking the render on a synchronous recompute -- read_ttl_cache's
+    fresh-or-None contract discards exactly the stale value those callers
+    need to serve.
     """
     try:
         with open(path, encoding="utf-8") as f:

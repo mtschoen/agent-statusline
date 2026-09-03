@@ -11,9 +11,10 @@ so this renders a compact summary on the main statusline instead, using only
 files Claude Code already writes.
 
 Imports:
-  badge -- format_model_badge
-  base  -- color constants
-  cost  -- walk_transcript (per-teammate context/cost)
+  badge                -- format_model_badge
+  base                 -- color constants
+  transcript_summaries -- summary_for, the per-teammate cost walk served from
+                          memory and recomputed on the worker pool
 """
 
 import json
@@ -21,7 +22,7 @@ import os
 
 from .badge import format_model_badge
 from .base import CTX_DENOM, GREEN, RESET, YELLOW
-from .cost import walk_transcript
+from .transcript_summaries import summary_for
 
 # Matches Claude Code's own idle-row-hide window (agent-teams doc).
 IDLE_THRESHOLD_SECONDS = 30
@@ -83,8 +84,12 @@ def _teammate_summary(member, subagents_dir, now):
     badge = format_model_badge(member.get("model") or "")
     cost_part = ""
     if jsonl:
-        walk = walk_transcript(jsonl, include_subagents=False)
-        if walk["cost"]:
+        # A whole teammate transcript per teammate per render is far too much
+        # for the resident server's receive thread, so the walk is served from
+        # memory and recomputed on the pool. No summary yet means the row
+        # renders without its cost and gains it on the next render.
+        walk = summary_for("transcript-walk", jsonl)
+        if walk is not None and walk["cost"]:
             cost_part = f" {YELLOW}${walk['cost']:.2f}{RESET}"
     pieces = [p for p in (icon, name, badge) if p]
     return " ".join(pieces) + cost_part

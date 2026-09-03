@@ -1,10 +1,10 @@
 """Pace walking, project_pace, format_quota.
 
 Imports:
-  base    -- for color constants, _json_loads, color_high_bad
-  cost    -- for _cost_for_turn
-  refresh -- for maybe_spawn_refresh (detached cache recompute)
-  walker  -- for _walker_root_list
+  base        -- for color constants, _json_loads, color_high_bad
+  cost        -- for _cost_for_turn
+  server_jobs -- for request_refresh (in-process cache recompute)
+  walker      -- for _walker_root_list
 """
 
 import json
@@ -15,7 +15,7 @@ from .base import GREEN, RESET, _json_loads, app_dir, color_high_bad, ramp_color
 from .cost import _cost_for_turn
 from .prefs import pref
 from .project import is_on_target, project_delta
-from .refresh import maybe_spawn_refresh
+from .server_jobs import request_refresh
 from .walker import _walker_root_list
 
 # Current-rate arrow glyphs. Up = current rate is HOTTER than cumulative pace
@@ -248,27 +248,29 @@ def _read_hourly_entries():
 
 def _pace_hourly_cached(win_start_unix):
     """Serve this window's hourly series from the cache - stale included -
-    and hand recomputation to a detached child when the entry is stale or
-    missing (stale-while-revalidate). The walk itself never runs on the
-    render path: with an SMB extra root it costs seconds, the harness kills
-    slow renders, and a killed render never reaches the cache write, which
-    freezes the statusline permanently (see refresh.py). A missing entry
-    returns [] - the pace field degrades to the util-only cumulative delta
-    for a render or two until the child's write lands."""
+    and hand recomputation to the resident server's worker pool when the
+    entry is stale or missing (stale-while-revalidate). The walk itself
+    never runs on the render path: with an SMB extra root it costs seconds,
+    the harness kills slow renders, and a killed render never reaches the
+    cache write, which freezes the statusline permanently (see
+    server_jobs.py). A missing entry returns [] - the pace field degrades to
+    the util-only cumulative delta for a render or two until the pool's
+    write lands."""
     entry = _read_hourly_entries().get(str(int(win_start_unix)))
     if entry is not None:
         if _now_unix() - entry.get("computed_at_unix", 0) < _PACE_CACHE_TTL_SECONDS:
             return entry.get("hourly", [])
-        maybe_spawn_refresh("pace-hourly", win_start_unix)
+        request_refresh("pace-hourly", win_start_unix)
         return entry.get("hourly", [])
-    maybe_spawn_refresh("pace-hourly", win_start_unix)
+    request_refresh("pace-hourly", win_start_unix)
     return []
 
 
 def refresh_pace_hourly_cache(win_start_unix):
     """Recompute one window's hourly series and persist it for the render's
-    cached read. Runs in the detached refresh child (refresh.run_refresh),
-    never on the render path. Keeps the newest _PACE_CACHE_MAX_ENTRIES
+    cached read. Runs on the resident server's worker pool
+    (server_jobs.run_refresh), never on the render path. Keeps the newest
+    _PACE_CACHE_MAX_ENTRIES
     windows so concurrent quota windows don't evict each other."""
     hourly = _walk_pace_hourly(win_start_unix)
     entries = _read_hourly_entries()
@@ -483,9 +485,9 @@ def weekly_exhaustion(rate_limits):
 def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
     """Returns ' <+-Hh>' (colored cumulative pace) or '' if not enough data.
 
-    The current-rate arrow / on-target glyph no longer live here -- they moved to
-    the burn-rate field via pace.weekly_needle. This function now renders only the
-    cumulative-pace number for both the 5h and weekly windows.
+    The current-rate arrow and on-target glyph belong to the burn-rate field
+    (pace.weekly_needle). This function renders only the cumulative-pace
+    number, for both the 5h and the weekly window.
     """
     if util is None or util <= 0 or not resets_at_unix:
         return ""

@@ -1,15 +1,23 @@
-"""Verify kimi_statusline.py's end-to-end delegation into statusline.py
-survives degenerate and wrong-typed payloads without crashing -- empty {}, a
-null top-level payload, a JSON array, wrong-typed fields (contextTokens as a
-string, model as an int, planMode as a string) -- and honors Kimi Code CLI's
-render contract: exit 0, exactly ONE stdout line (the TUI renders only the
-first line; further lines are ignored), non-empty even for {}.
+"""Verify kimi_statusline.py's own contract, separate from the client and
+the render adapter that produces the line it prints.
 
-Same test shape as scripts/verify_qwen_statusline_entry.py: the whole chain
-is driven via subprocess rather than importing kimi_statusline directly,
-with $HOME faked to a fresh temp dir so state/log writes (session-count
-debounce, render-timer peak tracking, the input/error logs) never touch the
-real ~/.kimi-code.
+Two things are this file's job now that rendering has moved to the resident
+server (statusline.py's wrapper delegation is gone -- see PLAN.md's
+resident-server redesign): the shim must inject `--statusline-platform
+kimi` into sys.argv before it imports statusline_client, since
+application_directory() reads the platform from argv when
+STATUSLINE_PLATFORM is unset; and run as a subprocess against an isolated
+home with no live server, it must survive empty/null/malformed/wrong-typed
+payloads by printing a single non-empty fallback line and exiting 0 -- the
+same contract verify_client_fallback.py pins for statusline_client.py
+directly, exercised here through the installed literal file a harness
+actually invokes.
+
+Kimi's own adapter (statusline_lib/kimi.py, wrong-typed fields, degenerate
+payloads, badge content) is covered end to end by scripts/verify_kimi_-
+adapter.py, which calls render_kimi_statusline directly. This file's
+subprocess never reaches it, since nothing here ever starts a real
+server.
 
 Run from anywhere; imports from `agent-statusline` by path.
 """
@@ -19,27 +27,90 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+
+from statusline_lib.server_socket import SPAWN_LOCK_FILENAME
+
+_ENCODING = "utf-8"
+
+# Mirrors statusline_client._PLATFORM_APP_DIR_PARTS["kimi"]: the platform
+# app_dir() resolves to under a HOME this suite controls.
+_KIMI_APP_DIR_PARTS = (".kimi-code",)
 
 
-def _run_kimi(payload_raw, tmp_home):
+# A leaked server is a real detached process (interpreter startup, imports,
+# a socket bind) before it writes server.json, so it can lag the parent
+# subprocess's own return by a beat (~100ms, measured); checking once
+# immediately can miss a leak that is still in flight. Polling a bounded
+# window rather than sleeping a fixed amount: the loop returns the instant
+# server.json appears, and only pays the full window when it correctly never
+# does.
+_SERVER_JSON_POLL_SECONDS = 0.5
+_SERVER_JSON_POLL_INTERVAL_SECONDS = 0.02
+
+
+def _server_json_appeared(path):
+    deadline = time.monotonic() + _SERVER_JSON_POLL_SECONDS
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return True
+        time.sleep(_SERVER_JSON_POLL_INTERVAL_SECONDS)
+    return os.path.exists(path)
+
+
+def _state_dir(tmp_home):
+    """The isolated home's kimi state directory, per
+    statusline_client._PLATFORM_APP_DIR_PARTS["kimi"]. Shared by
+    _hold_spawn_lock and the post-run server.json absence check below, so a
+    drift between this mirror and the client's own resolution shows up as a
+    failure rather than a silent leak."""
+    return os.path.join(tmp_home, *_KIMI_APP_DIR_PARTS, "state")
+
+
+def _hold_spawn_lock(tmp_home):
+    """A fresh single-flight spawn lock in the isolated home's kimi state
+    directory, so a subprocess that finds no live server prints its
+    fallback and does not start a real server behind this suite's back."""
+    state_dir = _state_dir(tmp_home)
+    os.makedirs(state_dir, exist_ok=True)
+    with open(
+        os.path.join(state_dir, SPAWN_LOCK_FILENAME), "w", encoding=_ENCODING
+    ) as f:
+        json.dump({"pid": os.getpid(), "at": time.time()}, f)
+
+
+def _run_kimi(failures, payload_raw, tmp_home):
     env = dict(os.environ)
     env["HOME"] = tmp_home
     env["USERPROFILE"] = tmp_home
-    return subprocess.run(
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = _ENCODING
+    _hold_spawn_lock(tmp_home)
+    result = subprocess.run(
         [sys.executable, os.path.join(REPO, "kimi_statusline.py")],
         input=payload_raw,
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding=_ENCODING,
         env=env,
         timeout=30,
         check=False,
     )
+    server_info_path = os.path.join(_state_dir(tmp_home), "server.json")
+    if _server_json_appeared(server_info_path):
+        failures.append(
+            f"kimi_statusline.py should not have spawned a real server "
+            f"(the spawn lock should have blocked it): {server_info_path} appeared"
+        )
+    return result
 
 
 def _expect_clean_single_line(failures, label, result):
+    """Kimi Code CLI's TUI renders only the first stdout line and requires
+    it to be non-empty; a fallback line must honor that same contract."""
     if result.returncode != 0:
         failures.append(
             f"{label} must not crash, got exit {result.returncode}: {result.stderr!r}"
@@ -49,30 +120,62 @@ def _expect_clean_single_line(failures, label, result):
         failures.append(
             f"{label} must render exactly one stdout line, got {result.stdout!r}"
         )
-    if "[" not in result.stdout:
+    if not result.stdout.strip():
+        failures.append(f"{label} must never print a blank fallback line")
+
+
+# The injection statement itself, not just any mention of the flag: a plain
+# substring search for "--statusline-platform" also matches this file's own
+# docstring, which would make the ordering check below vacuous (it always
+# passes, since the docstring comes first, regardless of whether the real
+# injection code exists at all below it).
+_INJECTION_MARKER = 'sys.argv += ["--statusline-platform"'
+
+
+def _check_platform_injected_before_client_import(failures):
+    """The platform flag must land in sys.argv before statusline_client is
+    imported: statusline_client's application_directory() reads it from
+    sys.argv when STATUSLINE_PLATFORM is unset, so an import that ran first
+    would resolve the wrong harness directory once inside the client."""
+    with open(os.path.join(REPO, "kimi_statusline.py"), encoding=_ENCODING) as f:
+        source = f.read()
+    injection_index = source.find(_INJECTION_MARKER)
+    import_index = source.find("import statusline_client")
+    if injection_index < 0 or import_index < 0:
         failures.append(
-            f"{label} should still render the prefix, got {result.stdout!r}"
+            "kimi_statusline.py must both inject --statusline-platform and"
+            " import statusline_client"
+        )
+        return
+    if injection_index > import_index:
+        failures.append(
+            "kimi_statusline.py must inject --statusline-platform before"
+            " importing statusline_client"
         )
 
 
 def _check_empty_object(failures):
     with tempfile.TemporaryDirectory() as tmp:
-        _expect_clean_single_line(failures, "empty {} payload", _run_kimi("{}", tmp))
+        _expect_clean_single_line(
+            failures, "empty {} payload with no server", _run_kimi(failures, "{}", tmp)
+        )
 
 
 def _check_null_top_level_payload(failures):
-    """A literal JSON `null` payload is valid JSON (json.loads succeeds), so
-    it bypasses the parse-error except and must be handled as if it were {}."""
+    """A literal JSON `null` payload is valid JSON, so it reaches the
+    client's payload parsing rather than an exception."""
     with tempfile.TemporaryDirectory() as tmp:
         _expect_clean_single_line(
-            failures, "null top-level payload", _run_kimi("null", tmp)
+            failures,
+            "null top-level payload with no server",
+            _run_kimi(failures, "null", tmp),
         )
 
 
 def _check_non_dict_top_level_payload(failures):
     """A JSON array at the top level is also valid JSON with no dict shape."""
     with tempfile.TemporaryDirectory() as tmp:
-        result = _run_kimi("[]", tmp)
+        result = _run_kimi(failures, "[]", tmp)
     if result.returncode != 0:
         failures.append(
             f"list top-level payload must not crash, got exit {result.returncode}: "
@@ -80,38 +183,22 @@ def _check_non_dict_top_level_payload(failures):
         )
 
 
-def _check_full_payload(failures):
-    """The exact contract sample (kimi-code commit 67dd03149), flipped to
-    planMode true and a non-default permissionMode so every badge renders."""
-    payload = json.dumps(
-        {
-            "model": "K3",
-            "cwd": "C:/path/to/project",
-            "gitBranch": "main",
-            "permissionMode": "yolo",
-            "planMode": True,
-            "contextUsage": 12,
-            "contextTokens": 1024,
-            "maxContextTokens": 8192,
-            "sessionId": "abc123def456",
-            "version": "0.29.2",
-        }
-    )
+def _check_malformed_json(failures):
+    """Stdin that is not valid JSON at all: statusline_client's
+    _payload_from_stdin() must degrade to an empty payload rather than
+    raise."""
     with tempfile.TemporaryDirectory() as tmp:
-        result = _run_kimi(payload, tmp)
-    _expect_clean_single_line(failures, "full payload", result)
-    for expected in ("(main)", "[abc123de]", "K3", "1.0K", "8.2K", "yolo", "PLAN"):
-        if expected not in result.stdout:
-            failures.append(
-                f"full payload should render {expected!r}, got {result.stdout!r}"
-            )
+        _expect_clean_single_line(
+            failures,
+            "malformed JSON with no server",
+            _run_kimi(failures, "{ not json", tmp),
+        )
 
 
 def _check_wrong_typed_fields(failures):
-    """The type-confusion class: wrong-typed fields degrade to honest
-    defaults at the adapter boundary instead of crashing the render (the TUI
-    falls back to its built-in layout on a non-zero exit, so a crash here is
-    a silent feature loss, not a visible error)."""
+    """Wrong-typed fields (the class of payload a render adapter is most
+    likely to crash on) must not crash the client's minimal-line fallback
+    either."""
     payload = json.dumps(
         {
             "model": 5,
@@ -123,35 +210,39 @@ def _check_wrong_typed_fields(failures):
         }
     )
     with tempfile.TemporaryDirectory() as tmp:
-        result = _run_kimi(payload, tmp)
-    _expect_clean_single_line(failures, "wrong-typed payload", result)
-    if "PLAN" in result.stdout:
-        failures.append(
-            f"string planMode must not light the PLAN badge, got {result.stdout!r}"
-        )
+        result = _run_kimi(failures, payload, tmp)
+    _expect_clean_single_line(failures, "wrong-typed payload with no server", result)
 
 
-def _check_zero_max_context_tokens(failures):
-    """maxContextTokens 0 (or absent context data with usage present) must
-    degrade to the honest '???' denominator, not a crash or a wrong 100%."""
-    payload = json.dumps({"contextTokens": 5000, "maxContextTokens": 0})
+def _check_full_payload_falls_back_with_the_model_name(failures):
+    """A well-formed payload still falls back (no server is running), and
+    the fallback line's minimal_line() reads the bare model string the same
+    way Kimi's real adapter does."""
+    payload = json.dumps(
+        {
+            "model": "K3",
+            "cwd": "C:/path/to/project",
+            "gitBranch": "main",
+            "sessionId": "abc123def456",
+        }
+    )
     with tempfile.TemporaryDirectory() as tmp:
-        result = _run_kimi(payload, tmp)
-    _expect_clean_single_line(failures, "zero maxContextTokens", result)
-    if "???" not in result.stdout:
+        result = _run_kimi(failures, payload, tmp)
+    _expect_clean_single_line(failures, "full payload with no server", result)
+    if "K3" not in result.stdout:
         failures.append(
-            f"zero maxContextTokens should render the '???' denominator, got "
-            f"{result.stdout!r}"
+            f"the fallback line should still name the model, got {result.stdout!r}"
         )
 
 
 def check(failures):
+    _check_platform_injected_before_client_import(failures)
     _check_empty_object(failures)
     _check_null_top_level_payload(failures)
     _check_non_dict_top_level_payload(failures)
-    _check_full_payload(failures)
+    _check_malformed_json(failures)
     _check_wrong_typed_fields(failures)
-    _check_zero_max_context_tokens(failures)
+    _check_full_payload_falls_back_with_the_model_name(failures)
 
 
 def main():
@@ -162,9 +253,9 @@ def main():
             print(f"FAIL: {failure}")
         sys.exit(1)
     print(
-        "OK: kimi_statusline.py survives empty/null/malformed/wrong-typed "
-        "payloads and renders exactly one line, end-to-end through the "
-        "statusline.py delegation"
+        "OK: kimi_statusline.py injects its platform flag before importing"
+        " statusline_client and falls back to one non-empty line for every"
+        " degenerate payload when no server answers"
     )
 
 

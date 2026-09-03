@@ -2,11 +2,10 @@
 keeping the non-dollar signals (cache tokens, hit%, the TTL eviction COUNT, and
 quota %/time-to-limit).
 
-Builds a _Line2 directly and renders it through statusline._render_line2 at full
+Builds a Line2Inputs directly and renders it through render_line2 at full
 verbosity, so the money master switch is exercised against the real assembly.
 """
 
-import importlib.util
 import os
 import re
 import sys
@@ -15,14 +14,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
 from statusline_lib.compact import full_flags
-
-# statusline.py is the entry script (not a package module), so load it by path.
-# Importing under a name other than "__main__" skips its main() guard.
-_spec = importlib.util.spec_from_file_location(
-    "statusline", os.path.join(_ROOT, "statusline.py")
-)
-statusline = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(statusline)
+from statusline_lib.render_line2 import Line2Inputs, render_line2
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -50,9 +42,9 @@ def _walk():
 
 
 def _line2(hide_cost):
-    inputs = statusline._Line2(
+    inputs = Line2Inputs(
         model_summary="opus4.8]",
-        ctx_used=133_500,
+        context_used=133_500,
         window_size=1_000_000,
         model_id="claude-opus-4-8",
         walk=_walk(),
@@ -62,7 +54,7 @@ def _line2(hide_cost):
         hide_cost=hide_cost,
         lines_summary="+543/-113",  # diffstat: NOT money, must survive hide_cost
     )
-    return _strip(statusline._render_line2(full_flags(), inputs))
+    return _strip(render_line2(full_flags(), inputs))
 
 
 def check(failures):

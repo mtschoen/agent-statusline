@@ -1,8 +1,8 @@
 """Verify statusline_lib/gitref.py's stale-while-revalidate disk-cache for
 _git_ref_raw_cached: the render never runs git inline. A fresh entry is
 served, a stale/missing entry is served too (blank on a true miss) while a
-detached refresh is requested via refresh.maybe_spawn_refresh, and
-refresh_git_ref_cache (the detached child's entry point) actually runs git
+refresh is requested via server_jobs.request_refresh, and
+refresh_git_ref_cache (the worker pool's entry point) actually runs git
 and persists the result -- mirrors verify_pace_refresh.py's contract for the
 walk-priced caches, applied to git-ref (render-perf ratchet step 3, PLAN.md).
 
@@ -23,8 +23,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import statusline
 import statusline_lib.gitref as gitref_mod
+import statusline_lib.render_claude as render_claude_mod
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _TEXT_ENCODING = "utf-8"
@@ -45,14 +45,14 @@ class _SpawnRecorder:
 
 def _check_cache_miss_serves_blank_and_spawns(failures, tmpdir):
     spawn = _SpawnRecorder()
-    original = gitref_mod.maybe_spawn_refresh
-    gitref_mod.maybe_spawn_refresh = spawn
+    original = gitref_mod.request_refresh
+    gitref_mod.request_refresh = spawn
     try:
         branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/some/repo", state_dir=tmpdir
         )
     finally:
-        gitref_mod.maybe_spawn_refresh = original
+        gitref_mod.request_refresh = original
 
     if (branch, short_hash) != ("", ""):
         failures.append(
@@ -77,14 +77,14 @@ def _check_cache_hit_skips_spawn(failures, tmpdir):
         )
 
     spawn = _SpawnRecorder()
-    original = gitref_mod.maybe_spawn_refresh
-    gitref_mod.maybe_spawn_refresh = spawn
+    original = gitref_mod.request_refresh
+    gitref_mod.request_refresh = spawn
     try:
         branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/cached/repo", state_dir=tmpdir
         )
     finally:
-        gitref_mod.maybe_spawn_refresh = original
+        gitref_mod.request_refresh = original
 
     if (branch, short_hash) != ("feature", "def456"):
         failures.append(
@@ -104,14 +104,14 @@ def _check_cache_expiry_serves_stale_and_spawns(failures, tmpdir):
         )
 
     spawn = _SpawnRecorder()
-    original = gitref_mod.maybe_spawn_refresh
-    gitref_mod.maybe_spawn_refresh = spawn
+    original = gitref_mod.request_refresh
+    gitref_mod.request_refresh = spawn
     try:
         branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/expired/repo", state_dir=tmpdir
         )
     finally:
-        gitref_mod.maybe_spawn_refresh = original
+        gitref_mod.request_refresh = original
 
     if (branch, short_hash) != ("old", "old123"):
         failures.append(
@@ -129,14 +129,14 @@ def _check_corrupt_cache_degrades(failures, tmpdir):
         f.write("not-json")
 
     spawn = _SpawnRecorder()
-    original = gitref_mod.maybe_spawn_refresh
-    gitref_mod.maybe_spawn_refresh = spawn
+    original = gitref_mod.request_refresh
+    gitref_mod.request_refresh = spawn
     try:
         branch, short_hash = gitref_mod._git_ref_raw_cached(
             "/corrupt/repo", state_dir=tmpdir
         )
     finally:
-        gitref_mod.maybe_spawn_refresh = original
+        gitref_mod.request_refresh = original
 
     if (branch, short_hash) != ("", ""):
         failures.append(
@@ -157,12 +157,17 @@ def _check_distinct_cwds_get_distinct_cache_entries(failures, tmpdir):
 
 
 def _check_git_ref_uses_cache(failures, tmpdir):
-    original = statusline._git_ref_raw_cached
-    statusline._git_ref_raw_cached = lambda cwd, state_dir=None: ("main", "abc123")
+    original = render_claude_mod._git_ref_raw_cached
+    render_claude_mod._git_ref_raw_cached = lambda cwd, state_dir=None: (
+        "main",
+        "abc123",
+    )
     try:
-        rendered = _strip(statusline._git_ref("/some/repo", state_dir=tmpdir))
+        rendered = _strip(
+            render_claude_mod._git_ref("/some/repo", state_directory=tmpdir)
+        )
     finally:
-        statusline._git_ref_raw_cached = original
+        render_claude_mod._git_ref_raw_cached = original
     if rendered != "main:abc123":
         failures.append(
             f"_git_ref must render branch:hash from cached raw values; got {rendered!r}"
@@ -170,7 +175,7 @@ def _check_git_ref_uses_cache(failures, tmpdir):
 
 
 def _check_git_ref_empty_cwd(failures):
-    if statusline._git_ref("") != "":
+    if render_claude_mod._git_ref("") != "":
         failures.append("_git_ref with empty cwd must return ''")
 
 

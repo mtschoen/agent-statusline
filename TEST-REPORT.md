@@ -6,7 +6,7 @@
 |-------|-------|
 | **Status** | PASS (Windows; ran from a Git Bash shell) |
 | **Mode** | maintain (lint AND coverage - both hard CI gates) |
-| **Tests** | 96 `scripts/verify_*.py`, all passing |
+| **Tests** | 97 `scripts/verify_*.py`, all passing |
 | **Git** | `feat/resident-server`, PR 59 round-4 fix on top of `ce173c4` |
 | **Coverage** | 3937/3937 statements (100%), 0 exclusion annotations |
 | **Lint** | ruff format 0 / ruff check 0; aislop ci score 97/100 (floor 90), exit 0 |

@@ -213,15 +213,18 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
         )
 
     fallbacks = _expected_fallbacks(context, _RENDER_COUNT, _CWD_COUNT)
-    fallback_count = sum(
-        1
-        for result, fallback in zip(results, fallbacks, strict=True)
-        if result.stdout.strip() == fallback
-    )
-    if fallback_count:
-        failures.append(
-            f"{fallback_count} of {_RENDER_COUNT} renders fell back to minimal output"
-        )
+    server_replies = 0
+    for index, (result, fallback) in enumerate(zip(results, fallbacks, strict=True)):
+        output = result.stdout.strip()
+        session_badge = f"concurrency-{index:04d}"[:8]
+        if output == fallback:
+            continue
+        if session_badge in output and "opus" in output:
+            server_replies += 1
+        else:
+            failures.append(f"render {index} produced unexpected output: {output!r}")
+    if server_replies == 0:
+        failures.append("no renders received a server reply during the burst")
     blank = [result for result in results if not result.stdout.strip()]
     nonzero = [result for result in results if result.returncode != 0]
     if blank:

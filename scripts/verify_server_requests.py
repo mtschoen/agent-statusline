@@ -39,6 +39,12 @@ os.environ["STATUSLINE_PREFS_PATH"] = os.devnull
 
 from _render_fixture_helpers import build_fixture_home
 
+# One real transcript in the synthetic home, so the claude kind exercises the
+# incremental fold against a file that actually exists.
+_PROJECTS = build_fixture_home(_HOME, n_sessions=1, turns_per_session=3)
+_TRANSCRIPT = glob.glob(os.path.join(_PROJECTS, "*.jsonl"))[0]
+_SESSION_ID = os.path.basename(_TRANSCRIPT)[: -len(".jsonl")]
+
 from statusline_lib.nudge import read_ctx_used
 from statusline_lib.server import (
     _HANDLER_NAMES,
@@ -53,12 +59,6 @@ _ENCODING = "utf-8"
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _STATE_DIR = os.environ["CLAUDE_STATE_DIR"]
 _ERROR_LOG = os.path.join(_HOME, "server-error.log")
-
-# One real transcript in the synthetic home, so the claude kind exercises the
-# incremental fold against a file that actually exists.
-_PROJECTS = build_fixture_home(_HOME, n_sessions=1, turns_per_session=3)
-_TRANSCRIPT = glob.glob(os.path.join(_PROJECTS, "*.jsonl"))[0]
-_SESSION_ID = os.path.basename(_TRANSCRIPT)[: -len(".jsonl")]
 
 
 class _FakeClock:
@@ -271,7 +271,15 @@ def check_status_replies_a_json_summary(failures):
     server = _server()
     server.handle_request({"kind": "claude", "payload": _claude_payload()})
     summary = json.loads(server.handle_request({"kind": "status"}))
-    for key in ("uptime_seconds", "sessions", "cwds", "queue_depth", "version", "pid"):
+    for key in (
+        "uptime_seconds",
+        "sessions",
+        "cwds",
+        "queue_depth",
+        "version",
+        "pid",
+        "departed_client_resets",
+    ):
         if key not in summary:
             failures.append(f"status reply is missing {key}")
 

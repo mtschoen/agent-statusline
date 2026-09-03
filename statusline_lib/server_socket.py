@@ -15,12 +15,20 @@ Imports:
 """
 
 import contextlib
+import ctypes
 import json
 import os
 import socket
 
 from .base import state_dir
 from .prefs import pref
+
+# WSAIoctl control code for SIO_UDP_CONNRESET (winsock2.h), passed FALSE to
+# stop Windows surfacing a departed UDP client's ICMP port-unreachable as a
+# WinError 10054 on the NEXT recvfrom. socket.ioctl only accepts SIO_RCVALL,
+# SIO_KEEPALIVE_VALS and SIO_LOOPBACK_FAST_PATH, so this needs WSAIoctl
+# directly via ctypes.
+_SIO_UDP_CONNRESET = 0x9800000C
 
 # The transport's four numbers. The idle window ends a server nobody renders
 # against any more, since the client spawns a replacement on its next render
@@ -54,6 +62,28 @@ def pref_number(name, default, cast):
     return value if value > 0 else default
 
 
+def _disable_windows_connection_reset(sock):
+    """Best-effort SIO_UDP_CONNRESET off, so a departed client's ICMP
+    port-unreachable never reaches recvfrom as WinError 10054 in the first
+    place. Purely an optimization: any failure here (no ctypes.windll on this
+    interpreter, a non-zero WSAIoctl return) is swallowed, and
+    is_departed_client_reset remains the receive loop's safety net."""
+    with contextlib.suppress(AttributeError, OSError):
+        flag = ctypes.c_ulong(0)
+        bytes_returned = ctypes.c_ulong(0)
+        ctypes.windll.ws2_32.WSAIoctl(
+            ctypes.c_size_t(sock.fileno()),
+            _SIO_UDP_CONNRESET,
+            ctypes.byref(flag),
+            ctypes.sizeof(flag),
+            None,
+            0,
+            ctypes.byref(bytes_returned),
+            None,
+            None,
+        )
+
+
 def open_datagram_socket():
     """A localhost UDP socket bound to a random port, returned with that port.
 
@@ -66,6 +96,7 @@ def open_datagram_socket():
         exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
         if exclusive is not None:
             sock.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        _disable_windows_connection_reset(sock)
     with contextlib.suppress(OSError):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECEIVE_BUFFER_BYTES)
     sock.bind(("127.0.0.1", 0))
@@ -102,3 +133,35 @@ def parse_request(data):
     except (UnicodeDecodeError, ValueError):
         return None
     return request if isinstance(request, dict) else None
+
+
+def is_departed_client_reset(error):
+    """True when `error` is the Windows ICMP-port-unreachable signature: an
+    earlier reply's sendto reached a client whose port had already closed,
+    surfaced on the NEXT recvfrom as WinError 10054 (ConnectionResetError).
+    No data is lost on this error, only a reply nobody was waiting for
+    anymore, so the receive loop skips the traceback rather than logging one
+    per departed client. _disable_windows_connection_reset above stops most
+    of these before they happen; this is the fallback for whatever it missed
+    (an interpreter without ctypes.windll, a WSAIoctl call that failed)."""
+    return isinstance(error, ConnectionResetError)
+
+
+class DepartedClientResetCounter:
+    """How many recvfrom failures the receive loop skipped as a departed
+    client's UDP reset rather than logging. Kept here, not in server.py, so
+    the loop's OSError branch stays a one-line classification instead of
+    growing the file the repository holds at a 400-line ceiling; the count
+    is what makes the skip observable, surfaced through the `status` request
+    kind."""
+
+    def __init__(self):
+        self.count = 0
+
+    def note(self, error):
+        """Record `error` and return whether it was a departed-client reset,
+        so the caller knows whether to still log it."""
+        if not is_departed_client_reset(error):
+            return False
+        self.count += 1
+        return True

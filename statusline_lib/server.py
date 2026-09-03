@@ -57,6 +57,7 @@ from .server_render import (
 from .server_socket import (
     IDLE_EXIT_SECONDS,
     MAXIMUM_DATAGRAM_BYTES,
+    DepartedClientResetCounter,
     clear_spawn_lock,
     open_datagram_socket,
     parse_request,
@@ -146,6 +147,7 @@ class Server:
         # got that far", and never removes a file it did not write.
         self._info_published = False
         self.stop_requested = False
+        self._skipped_resets = DepartedClientResetCounter()
         # Every cache reader in the package asks for recomputation through
         # server_jobs.request_refresh, which is a no-op until something
         # installs a sink. This is the process that has one. The displaced
@@ -199,12 +201,9 @@ class Server:
                 if self._clock() - self._last_request_at >= self._idle_exit_seconds:
                     self.stop_requested = True
                 continue
-            except OSError:
-                # Transient on Windows: a UDP recvfrom raises WinError 10054
-                # when an earlier sendto drew an ICMP port unreachable from a
-                # client that has already gone. One log line, not a dead
-                # server; close() is what actually ends this loop.
-                log_traceback(self._error_log_path)
+            except OSError as error:
+                if not self._skipped_resets.note(error):
+                    log_traceback(self._error_log_path)
                 continue
             try:
                 request = parse_request(data)
@@ -328,6 +327,7 @@ class Server:
                 "workers": self._pool.worker_count(),
                 "version": code_version(self._repository_root),
                 "pid": os.getpid(),
+                "departed_client_resets": self._skipped_resets.count,
             }
         )
         return json.dumps(summary)

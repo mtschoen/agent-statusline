@@ -62,10 +62,10 @@ _JOIN_TIMEOUT_SECONDS = 10.0
 
 
 class _FlakySocket:
-    """A receive socket that fails once the way Windows does (a UDP recvfrom
-    raises WinError 10054 when an earlier sendto drew an ICMP port unreachable
-    from a client that has already gone), then goes quiet forever. The loop
-    must log that and keep serving, then reach its idle exit."""
+    """A receive socket that fails once with a plain OSError (not the
+    departed-client ConnectionResetError WinError 10054 has become; that
+    case is _DepartedClientResetSocket below), then goes quiet forever. The
+    loop must log that and keep serving, then reach its idle exit."""
 
     def __init__(self, clock):
         self._clock = clock
@@ -76,6 +76,31 @@ class _FlakySocket:
         self.calls += 1
         if self.calls == 1:
             raise OSError("simulated transient receive error")
+        self._clock.now += IDLE_EXIT_SECONDS + 1
+        raise TimeoutError()
+
+    def close(self):
+        pass
+
+
+class _DepartedClientResetSocket:
+    """A receive socket that fails once the way Windows does when an earlier
+    sendto drew an ICMP port unreachable from a client that has already gone
+    (a UDP recvfrom raising ConnectionResetError, WinError 10054), then goes
+    quiet forever. The loop must count that, not log it, and still reach its
+    idle exit."""
+
+    def __init__(self, clock):
+        self._clock = clock
+        self.calls = 0
+
+    def recvfrom(self, size):
+        del size
+        self.calls += 1
+        if self.calls == 1:
+            raise ConnectionResetError(
+                10054, "An existing connection was forcibly closed by the remote host"
+            )
         self._clock.now += IDLE_EXIT_SECONDS + 1
         raise TimeoutError()
 
@@ -241,6 +266,45 @@ def check_a_transient_receive_error_is_logged_and_survived(failures):
             failures.append("a failing receive must log its traceback")
 
 
+def check_a_departed_client_reset_is_counted_not_logged(failures):
+    """A ConnectionResetError from recvfrom (WinError 10054, a departed
+    client's ICMP port unreachable on the wire) must cost the loop a counter
+    increment, not a traceback: it is the noisy-log bug this pair of checks
+    guards against, so this one fails before the fix (a traceback appended)
+    and passes after it (the log untouched, the counter at one)."""
+    log_before = ""
+    if os.path.exists(_ERROR_LOG):
+        with open(_ERROR_LOG, encoding=_ENCODING) as f:
+            log_before = f.read()
+    clock = _FakeClock()
+    server = _socket_server(clock=clock)
+    server.bind()
+    real_socket = server._socket
+    server._socket = _DepartedClientResetSocket(clock)
+    try:
+        server.serve_forever()
+    finally:
+        server._socket = real_socket
+        server.close()
+    if not server.stop_requested:
+        failures.append(
+            "the loop must still reach its idle exit after a departed reset"
+        )
+    if server._skipped_resets.count != 1:
+        failures.append(
+            f"a departed client's reset must be counted: {server._skipped_resets.count}"
+        )
+    log_after = ""
+    if os.path.exists(_ERROR_LOG):
+        with open(_ERROR_LOG, encoding=_ENCODING) as f:
+            log_after = f.read()
+    if log_after != log_before:
+        failures.append(
+            "a departed client's reset must not write to the error log: "
+            f"{log_after[len(log_before) :]!r}"
+        )
+
+
 def check_serve_runs_a_server_and_returns_zero(failures):
     """The entry point body end to end: resolve the directories, bind, sweep
     once, run the receive loop, tear everything down, return 0. The idle
@@ -379,6 +443,7 @@ def check(failures):
     check_a_malformed_datagram_is_ignored(failures)
     check_only_a_recognized_kind_refreshes_the_idle_timer(failures)
     check_a_transient_receive_error_is_logged_and_survived(failures)
+    check_a_departed_client_reset_is_counted_not_logged(failures)
     check_serve_runs_a_server_and_returns_zero(failures)
     check_a_failing_bind_is_logged_and_returns_one(failures)
     check_a_surrogate_bearing_reply_does_not_end_the_loop(failures)

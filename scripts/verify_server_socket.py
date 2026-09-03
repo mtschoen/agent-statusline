@@ -14,6 +14,7 @@ anything by reading the wall clock.
 Run from anywhere; imports from agent-statusline by path.
 """
 
+import ctypes
 import json
 import os
 import socket
@@ -41,7 +42,13 @@ import statusline_lib.server_socket as socket_module
 from statusline_lib.server import IDLE_EXIT_SECONDS, Server
 from statusline_lib.server_info import read_server_info, server_info_path
 from statusline_lib.server_jobs import WORKER_POOL_SIZE, set_refresh_sink
-from statusline_lib.server_socket import RECEIVE_BUFFER_BYTES, SPAWN_LOCK_FILENAME
+from statusline_lib.server_socket import (
+    RECEIVE_BUFFER_BYTES,
+    SPAWN_LOCK_FILENAME,
+    DepartedClientResetCounter,
+    _disable_windows_connection_reset,
+    is_departed_client_reset,
+)
 
 # The two prefs seams the server exposes so a check can shrink its idle window
 # and its pool instead of waiting ten minutes or starting four idle threads.
@@ -70,8 +77,9 @@ class _FakeSocket:
     """A socket that records its options and binds nothing. Used only to
     force the Windows arm of bind() on every operating system."""
 
-    def __init__(self, options):
+    def __init__(self, options, fileno=999):
         self._options = options
+        self._fileno = fileno
 
     def setsockopt(self, level, option, value):
         self._options.append((level, option, value))
@@ -84,6 +92,9 @@ class _FakeSocket:
 
     def getsockname(self):
         return ("127.0.0.1", 54321)
+
+    def fileno(self):
+        return self._fileno
 
     def close(self):
         pass
@@ -107,6 +118,60 @@ class _FakeSocketModule:
     def socket(self, family, kind):
         del family, kind
         return _FakeSocket(self.options)
+
+
+class _RecordingWSAIoctl:
+    """Stand-in for ctypes.windll.ws2_32.WSAIoctl, recording the fileno and
+    control code of every call instead of asking a real (or on Linux,
+    nonexistent) winsock for anything."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, fileno, control_code, in_buffer, in_size, *rest):
+        # *rest absorbs WSAIoctl's remaining five positional arguments
+        # (out_buffer, out_size, bytes_returned, overlapped, completion
+        # routine): _disable_windows_connection_reset never uses them, and
+        # this stand-in only needs to record what it does.
+        del in_buffer, rest
+        self.calls.append((fileno, control_code, in_size))
+        return 0
+
+
+class _FakeCtypes:
+    """Stand-in for the ctypes module inside statusline_lib.server_socket,
+    real for everything _disable_windows_connection_reset actually needs
+    (c_ulong, c_size_t, sizeof, byref) but carrying a fake windll so the
+    WSAIoctl call is observable instead of a real syscall, which only a real
+    Windows interpreter could make anyway."""
+
+    c_ulong = ctypes.c_ulong
+    c_size_t = ctypes.c_size_t
+    sizeof = staticmethod(ctypes.sizeof)
+    byref = staticmethod(ctypes.byref)
+
+    class _Ws2_32:
+        def __init__(self):
+            self.WSAIoctl = _RecordingWSAIoctl()
+
+    class _Windll:
+        def __init__(self):
+            self.ws2_32 = _FakeCtypes._Ws2_32()
+
+    def __init__(self):
+        self.windll = _FakeCtypes._Windll()
+
+
+class _CtypesWithoutWindll:
+    """The shape of ctypes on an interpreter with no windll at all (every
+    non-Windows platform): everything _disable_windows_connection_reset
+    needs except the one attribute it reaches for last, so accessing it
+    raises AttributeError the way it does off Windows."""
+
+    c_ulong = ctypes.c_ulong
+    c_size_t = ctypes.c_size_t
+    sizeof = staticmethod(ctypes.sizeof)
+    byref = staticmethod(ctypes.byref)
 
 
 def _socket_server(clock=None, pool=None):
@@ -345,6 +410,114 @@ def check_close_leaves_a_successors_info_file(failures):
         os.remove(path)
 
 
+def check_bind_disables_windows_connection_reset(failures):
+    """bind() must ask Windows to stop surfacing a departed client's ICMP
+    port-unreachable as WinError 10054 on the next recvfrom (SIO_UDP_CONNRESET
+    off via WSAIoctl). Forced on every platform the same way as the
+    exclusive-address option above: os.name and the socket module are
+    patched, and ctypes has to be patched too here, since a real windll only
+    exists on a real Windows interpreter."""
+    fake_socket = _FakeSocketModule()
+    fake_ctypes = _FakeCtypes()
+    saved_name = os.name
+    saved_socket = socket_module.socket
+    saved_ctypes = socket_module.ctypes
+    os.name = "nt"
+    socket_module.socket = fake_socket
+    socket_module.ctypes = fake_ctypes
+    try:
+        server = _socket_server()
+        server.bind()
+        server.close()
+    finally:
+        os.name = saved_name
+        socket_module.socket = saved_socket
+        socket_module.ctypes = saved_ctypes
+    calls = fake_ctypes.windll.ws2_32.WSAIoctl.calls
+    if not calls:
+        failures.append("bind must call WSAIoctl to disable SIO_UDP_CONNRESET")
+        return
+    fileno, control_code, in_size = calls[0]
+    if not isinstance(fileno, ctypes.c_size_t) or fileno.value != 999:
+        failures.append(
+            f"WSAIoctl was not called with the socket's fileno as c_size_t: {calls}"
+        )
+    if control_code != socket_module._SIO_UDP_CONNRESET:
+        failures.append(f"WSAIoctl was not called with SIO_UDP_CONNRESET: {calls}")
+    if in_size != ctypes.sizeof(ctypes.c_ulong):
+        failures.append(f"WSAIoctl's FALSE flag must be one c_ulong: {calls}")
+
+
+def check_disabling_connection_reset_preserves_64bit_socket_handle(failures):
+    """Winsock defines SOCKET as pointer-sized UINT_PTR. On 64-bit Windows,
+    a socket handle can exceed 2^32 - 1. Passing untyped Python ints to ctypes
+    converts them as 32-bit C int, which would truncate the handle; wrapping
+    in c_size_t preserves the full 64-bit handle."""
+    fake_ctypes = _FakeCtypes()
+    saved_ctypes = socket_module.ctypes
+    socket_module.ctypes = fake_ctypes
+    try:
+        large_handle = (1 << 32) + 1
+        _disable_windows_connection_reset(_FakeSocket([], fileno=large_handle))
+    finally:
+        socket_module.ctypes = saved_ctypes
+    calls = fake_ctypes.windll.ws2_32.WSAIoctl.calls
+    if not calls:
+        failures.append("WSAIoctl was not called for 64-bit socket handle")
+        return
+    fileno, _, _ = calls[0]
+    if not isinstance(fileno, ctypes.c_size_t) or fileno.value != large_handle:
+        failures.append(
+            f"WSAIoctl did not preserve 64-bit socket handle as c_size_t: {calls}"
+        )
+
+
+def check_disabling_connection_reset_swallows_a_missing_windll(failures):
+    """Off Windows, ctypes has no windll at all, so the attribute access
+    itself raises AttributeError. That must cost nothing: the socket factory
+    is unaffected, and is_departed_client_reset remains the safety net for
+    any WinError 10054 that reaches recvfrom regardless."""
+    saved_ctypes = socket_module.ctypes
+    socket_module.ctypes = _CtypesWithoutWindll()
+    try:
+        _disable_windows_connection_reset(_FakeSocket([]))
+    except AttributeError as error:
+        failures.append(
+            f"a missing ctypes.windll must be swallowed, not raised: {error!r}"
+        )
+    finally:
+        socket_module.ctypes = saved_ctypes
+
+
+def check_is_departed_client_reset_classifies_connection_reset_only(failures):
+    """The predicate is a plain isinstance check: only a ConnectionResetError
+    (WinError 10054 on the wire) counts as a departed client, so any other
+    receive failure still earns a traceback."""
+    if not is_departed_client_reset(ConnectionResetError("simulated WinError 10054")):
+        failures.append("a ConnectionResetError must classify as a departed client")
+    if is_departed_client_reset(OSError("some other receive failure")):
+        failures.append("a plain OSError must not classify as a departed client")
+    if is_departed_client_reset(TimeoutError("idle poll")):
+        failures.append("a TimeoutError must not classify as a departed client")
+
+
+def check_departed_client_reset_counter_notes_and_counts(failures):
+    """note() is what the receive loop calls: True and a bumped count for a
+    departed client's reset, False and no change for anything else."""
+    counter = DepartedClientResetCounter()
+    if counter.note(OSError("some other receive failure")):
+        failures.append("note() must return False for a non-reset OSError")
+    if counter.count != 0:
+        failures.append(f"a non-reset OSError must not be counted: {counter.count}")
+    if not counter.note(ConnectionResetError("simulated WinError 10054")):
+        failures.append("note() must return True for a departed client's reset")
+    if counter.count != 1:
+        failures.append(f"a departed client's reset must be counted: {counter.count}")
+    counter.note(ConnectionResetError("simulated WinError 10054"))
+    if counter.count != 2:
+        failures.append(f"the counter must accumulate across resets: {counter.count}")
+
+
 def check(failures):
     check_bind_writes_the_info_file(failures)
     check_bind_starts_the_pool_and_close_stops_it(failures)
@@ -358,6 +531,11 @@ def check(failures):
     check_the_idle_window_is_overridable(failures)
     check_the_pool_size_is_overridable(failures)
     check_close_leaves_a_successors_info_file(failures)
+    check_bind_disables_windows_connection_reset(failures)
+    check_disabling_connection_reset_preserves_64bit_socket_handle(failures)
+    check_disabling_connection_reset_swallows_a_missing_windll(failures)
+    check_is_departed_client_reset_classifies_connection_reset_only(failures)
+    check_departed_client_reset_counter_notes_and_counts(failures)
 
 
 def main():

@@ -196,7 +196,7 @@ def _is_lead_task(task, session_id):
     return bool(session_id and task.get("id") == session_id)
 
 
-def _metrics_for_task(task, parent_transcript_path, session_id, is_lead, now):
+def _metrics_for_task(task, parent_transcript_path, session_id, is_lead):
     """(metric_parts, model_id) for one task row. Everything here reads disk
     state that can surprise us (new JSONL shapes, new model ids) -- the caller
     guards it so one task's metrics can't cost the whole panel its rows."""
@@ -255,7 +255,7 @@ def _row_for_task(task, parent_transcript_path, session_id, now):
 
     try:
         metric_parts, model_id = _metrics_for_task(
-            task, parent_transcript_path, session_id, is_lead, now
+            task, parent_transcript_path, session_id, is_lead
         )
     except Exception:
         # Degrade this row to icon + description rather than letting one bad
@@ -304,7 +304,7 @@ def render_subagent_rows(payload, now):
         try:
             row = _row_for_task(task, parent, session_id, now)
         except Exception:
-            log_traceback(os.path.join(app_dir(), ".statusline-error.log"))
+            _log_error()
             continue
         if row is None:
             continue

@@ -111,8 +111,8 @@ class _Spawns:
         self.calls = []
         self.error = error
 
-    def __call__(self, command, environment):
-        self.calls.append((list(command), dict(environment)))
+    def __call__(self, command, *, env):
+        self.calls.append((list(command), dict(env)))
         if self.error is not None:
             raise self.error
 

@@ -15,6 +15,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
+from scripts._server_wait_helpers import server_json_appeared
 from statusline_lib.process_safe import run_captured
 from statusline_lib.server_socket import SPAWN_LOCK_FILENAME
 
@@ -217,25 +218,6 @@ def _check_corrupt_cache_degrades(failures, bash_bin, probe_path):
             )
 
 
-# A leaked server is a real detached process (interpreter startup, imports,
-# a socket bind) before it writes server.json, so it can lag the wrapper's
-# own return by a beat (~100ms, measured); checking once immediately can
-# miss a leak that is still in flight. Polling a bounded window rather than
-# sleeping a fixed amount: the loop returns the instant server.json appears,
-# and only pays the full window when it correctly never does.
-_SERVER_JSON_POLL_SECONDS = 0.5
-_SERVER_JSON_POLL_INTERVAL_SECONDS = 0.02
-
-
-def _server_json_appeared(path):
-    deadline = time.monotonic() + _SERVER_JSON_POLL_SECONDS
-    while time.monotonic() < deadline:
-        if os.path.exists(path):
-            return True
-        time.sleep(_SERVER_JSON_POLL_INTERVAL_SECONDS)
-    return os.path.exists(path)
-
-
 def _hold_spawn_lock(home_directory, relative_app_dir):
     """A fresh single-flight spawn lock in the isolated home's state
     directory, so invoking the real installed wrapper below (which now
@@ -350,7 +332,7 @@ def _check_wrapper_routing(failures, bash_bin):
             server_info_file = os.path.join(
                 home_dir, relative_app_dir, "state", "server.json"
             )
-            if _server_json_appeared(server_info_file):
+            if server_json_appeared(server_info_file):
                 failures.append(
                     f"{label} should not have spawned a real server: "
                     f"{server_info_file} appeared"

@@ -343,7 +343,7 @@ def _spawn(command, environment):
     function because importing statusline_lib costs more than the render being
     rescued, and this is only reached when a server has to be started at all."""
     if _spawner is not None:
-        return _spawner(command, environment)
+        return _spawner(command, env=environment)
     from statusline_lib.process_safe import spawn_detached
 
     return spawn_detached(command, env=environment)

@@ -215,7 +215,7 @@ def _support():
 
 def last_render_path(session_id):
     """This client's copy of server_render.last_render_path(), resolved
-    through this client's own state_directory()."""
+    against the state directory the client itself resolved."""
     return _support().last_render_path(session_id, state_directory())
 
 

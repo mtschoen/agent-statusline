@@ -146,6 +146,36 @@ def check_pool_dedupes_a_job_already_in_flight(failures):
         failures.append(f"pool ran {ran}, expected two distinct jobs")
 
 
+def check_pool_dedupes_a_job_already_queued(failures):
+    done = threading.Event()
+    ran = []
+
+    def runner(kind, argument):
+        ran.append((kind, argument))
+        if len(ran) == 2:
+            done.set()
+
+    pool = server_jobs.WorkerPool(size=1, runner=runner)
+    first = pool.submit("git-ref", "/repo")
+    duplicate = pool.submit("git-ref", "/repo")
+    other_argument = pool.submit("git-ref", "/other")
+    pool.start()
+    try:
+        if not done.wait(timeout=_EVENT_WAIT_SECONDS):
+            failures.append("pool did not drain both distinct queued jobs")
+    finally:
+        pool.stop()
+
+    if first is not True:
+        failures.append("the first queued submit must be accepted")
+    if duplicate is not False:
+        failures.append("a duplicate of a queued job must be refused")
+    if other_argument is not True:
+        failures.append("a distinct queued argument must be accepted")
+    if ran != [("git-ref", "/repo"), ("git-ref", "/other")]:
+        failures.append(f"pool ran {ran}, expected the two distinct queued jobs")
+
+
 def check_pool_never_exceeds_its_size(failures):
     release = threading.Event()
     entered = threading.Semaphore(0)
@@ -374,6 +404,7 @@ def main():
         check_run_refresh_rejects_an_unknown_kind,
         check_pool_runs_a_submitted_job,
         check_pool_dedupes_a_job_already_in_flight,
+        check_pool_dedupes_a_job_already_queued,
         check_pool_never_exceeds_its_size,
         check_pool_logs_and_survives_a_raising_job,
         check_pool_refuses_submissions_after_stop,

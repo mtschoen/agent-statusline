@@ -16,6 +16,7 @@ Run from anywhere.
 
 import contextlib
 import io
+import json
 import os
 import shutil
 import socket
@@ -152,6 +153,25 @@ def _check_server_stop_no_server(failures):
             failures.append(f"server stop with no server should exit 0; got {code}")
         if "no server running" not in output:
             failures.append(f"server stop with no server should say so: {output!r}")
+
+
+def _check_server_stop_stale_info_without_port(failures):
+    from statusline_lib.server_info import server_info_path
+
+    with _isolated_state_dir() as state_directory:
+        path = server_info_path(state_directory)
+        with open(path, "w", encoding="utf-8") as file_handle:
+            json.dump({"pid": 2**31 - 1, "version": "stale"}, file_handle)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = _run(["server", "stop"])
+        output = buffer.getvalue()
+        if code != 0:
+            failures.append(
+                f"server stop with no recorded port should exit 0; got {code}"
+            )
+        if f"stale server info (no port recorded): {path}" not in output:
+            failures.append(f"missing-port server info was not identified: {output!r}")
 
 
 def _check_server_stop_live_server(failures):
@@ -396,6 +416,7 @@ def check(failures):
     _check_server_status_live_server(failures)
     _check_server_status_stale_pid(failures)
     _check_server_stop_no_server(failures)
+    _check_server_stop_stale_info_without_port(failures)
     _check_server_stop_live_server(failures)
     _check_server_stop_reports_failure_when_server_stays_live(failures)
     _check_server_restart_reports_a_failed_start(failures)

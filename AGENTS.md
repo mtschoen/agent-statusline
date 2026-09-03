@@ -139,26 +139,26 @@ from in-memory per-session, per-cwd, and machine-wide state tables, and runs
 everything that can block (git, psutil, HTTP, the walker) on a worker pool
 bounded at four threads that the receive loop never waits on. Pool jobs carry
 no deadline of their own; they are bounded by their own subprocess and HTTP
-timeouts, still enforced by `scripts/verify_render_budget.py` across
+timeouts, still enforced by `scripts/verify_render_budget_static.py` across
 `statusline_lib`, plus the four-thread ceiling.
 
-`scripts/verify_render_budget.py` enforces the invariant mechanically: the
-client files (`statusline_client.py` and the `statusline_client_support.py`
-it reaches through a lazy import) import nothing outside the standard
-library except one function-local `process_safe.spawn_detached` import
-inside `_spawn`, reached only on the fallback path after a line has
-already been printed; the client makes exactly one socket send and one
-receive on its hot path; every subprocess call reachable from
-`statusline_lib` still carries an explicit `timeout=` no greater than 2s,
-with `Popen` and `time.sleep` banned there; and a live server round trip (a
-real server on a random port, a real client subprocess, the median of nine
-runs, the better of three attempts) must beat a 200ms budget, overridable via
-`STATUSLINE_TEST_CLIENT_BUDGET_MS` and measured at roughly 40ms on the
-development machine. `scripts/verify_server_concurrency.py` holds the
-ceiling at one server and four workers under fifty concurrent renders. If a
-new data source can't fit inside a worker-pool job's own timeouts, it
-doesn't belong in the server either - cache it, delegate it to the walker, or
-precompute it from a hook.
+`scripts/verify_render_budget_static.py` enforces the AST-level half of the
+invariant mechanically: the client files (`statusline_client.py` and the
+`statusline_client_support.py` it reaches through a lazy import) import
+nothing outside the standard library except their one declared,
+function-local exception; the client makes exactly one socket send and one
+receive on its hot path; and every subprocess call reachable from
+`statusline_lib` carries an explicit `timeout=` no greater than 2s, with
+`Popen` and `time.sleep` banned there. `scripts/verify_render_budget.py`
+imports and runs those static checks as well as measuring a live server round
+trip (a real server on a random port, a real client subprocess, the median of
+nine runs, the better of three attempts), which must beat a 200ms budget,
+overridable via `STATUSLINE_TEST_CLIENT_BUDGET_MS` and measured at roughly
+40ms on the development machine. `scripts/verify_server_concurrency.py`
+holds the ceiling at one server and four workers under fifty concurrent
+renders. If a new data source can't fit inside a worker-pool job's own
+timeouts, it doesn't belong in the server either - cache it, delegate it to
+the walker, or precompute it from a hook.
 
 The stale-while-revalidate rule is unchanged in shape, only in mechanism: a
 cache reader still serves whatever it has, stale included, and still hands

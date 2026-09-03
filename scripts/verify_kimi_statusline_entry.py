@@ -29,36 +29,23 @@ import sys
 import tempfile
 import time
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
+REPO = os.path.dirname(SCRIPTS_DIR)
 sys.path.insert(0, REPO)
 
+from _client_environment import isolated_client_environment
+
+from scripts._server_wait_helpers import server_json_appeared
 from statusline_lib.server_socket import SPAWN_LOCK_FILENAME
 
 _ENCODING = "utf-8"
+_SPAWN_LOCK_PREFERENCE = "STATUSLINE_SPAWN_LOCK_STALE_SECONDS"
+_HELD_SPAWN_LOCK_SECONDS = "3600"
 
 # Mirrors statusline_client._PLATFORM_APP_DIR_PARTS["kimi"]: the platform
 # app_dir() resolves to under a HOME this suite controls.
 _KIMI_APP_DIR_PARTS = (".kimi-code",)
-
-
-# A leaked server is a real detached process (interpreter startup, imports,
-# a socket bind) before it writes server.json, so it can lag the parent
-# subprocess's own return by a beat (~100ms, measured); checking once
-# immediately can miss a leak that is still in flight. Polling a bounded
-# window rather than sleeping a fixed amount: the loop returns the instant
-# server.json appears, and only pays the full window when it correctly never
-# does.
-_SERVER_JSON_POLL_SECONDS = 0.5
-_SERVER_JSON_POLL_INTERVAL_SECONDS = 0.02
-
-
-def _server_json_appeared(path):
-    deadline = time.monotonic() + _SERVER_JSON_POLL_SECONDS
-    while time.monotonic() < deadline:
-        if os.path.exists(path):
-            return True
-        time.sleep(_SERVER_JSON_POLL_INTERVAL_SECONDS)
-    return os.path.exists(path)
 
 
 def _state_dir(tmp_home):
@@ -73,22 +60,26 @@ def _state_dir(tmp_home):
 def _hold_spawn_lock(tmp_home):
     """A fresh single-flight spawn lock in the isolated home's kimi state
     directory, so a subprocess that finds no live server prints its
-    fallback and does not start a real server behind this suite's back."""
-    state_dir = _state_dir(tmp_home)
-    os.makedirs(state_dir, exist_ok=True)
-    with open(
-        os.path.join(state_dir, SPAWN_LOCK_FILENAME), "w", encoding=_ENCODING
-    ) as f:
+    fallback without single-flight spawning a real background
+    statusline_server.py process that would outlive this check."""
+    state_directory = _state_dir(tmp_home)
+    os.makedirs(state_directory, exist_ok=True)
+    lock_path = os.path.join(state_directory, SPAWN_LOCK_FILENAME)
+    with open(lock_path, "w", encoding=_ENCODING) as f:
         json.dump({"pid": os.getpid(), "at": time.time()}, f)
 
 
 def _run_kimi(failures, payload_raw, tmp_home):
-    env = dict(os.environ)
-    env["HOME"] = tmp_home
-    env["USERPROFILE"] = tmp_home
-    env["PYTHONUTF8"] = "1"
-    env["PYTHONIOENCODING"] = _ENCODING
+    """Run kimi_statusline.py against `tmp_home` with stdin=payload_raw.
+    Asserts along the way that the spawn lock blocked any background server
+    from starting and writing server.json."""
+    env = isolated_client_environment(
+        tmp_home,
+        encoding=_ENCODING,
+        **{_SPAWN_LOCK_PREFERENCE: _HELD_SPAWN_LOCK_SECONDS},
+    )
     _hold_spawn_lock(tmp_home)
+
     result = subprocess.run(
         [sys.executable, os.path.join(REPO, "kimi_statusline.py")],
         input=payload_raw,
@@ -100,7 +91,7 @@ def _run_kimi(failures, payload_raw, tmp_home):
         check=False,
     )
     server_info_path = os.path.join(_state_dir(tmp_home), "server.json")
-    if _server_json_appeared(server_info_path):
+    if server_json_appeared(server_info_path):
         failures.append(
             f"kimi_statusline.py should not have spawned a real server "
             f"(the spawn lock should have blocked it): {server_info_path} appeared"

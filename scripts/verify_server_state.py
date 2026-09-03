@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statusline_lib.cost import walk_transcript
-from statusline_lib.server_state import StateTables, read_appended
+from statusline_lib.server_state import SessionEntry, StateTables, read_appended
 
 _ENCODING = "utf-8"
 
@@ -309,6 +309,12 @@ def check_walk_for_skips_subagent_lookup_for_a_non_jsonl_transcript(failures):
             )
 
 
+def check_session_entry_has_no_unused_last_reply_field(failures):
+    entry = SessionEntry("session", "session.jsonl", lambda: 1.0)
+    if hasattr(entry, "last_reply"):
+        failures.append("SessionEntry must not retain the unused last_reply field")
+
+
 def check(failures):
     check_second_walk_reads_only_appended_bytes(failures)
     check_incremental_walk_matches_a_full_walk(failures)
@@ -322,6 +328,7 @@ def check(failures):
     check_read_appended_handles_an_open_failure(failures)
     check_read_appended_treats_a_lineless_partial_write_as_nothing_new(failures)
     check_walk_for_skips_subagent_lookup_for_a_non_jsonl_transcript(failures)
+    check_session_entry_has_no_unused_last_reply_field(failures)
 
 
 def main():

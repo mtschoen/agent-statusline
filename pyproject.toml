@@ -60,6 +60,10 @@ select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF", "TID251"]
 # real file as a subprocess against a real server, with a per-case env and a
 # hard timeout that process_safe deliberately does not expose.
 "scripts/verify_server_protocol.py" = ["TID251"]
+# Test-only launcher for verify_server_concurrency: starts a real wrapper and
+# client to verify parent-kill lifecycle behavior and requires the raw Popen
+# handle for targeted kill/wait cleanup.
+"scripts/_server_concurrency_helpers.py" = ["TID251"]
 
 [tool.ruff.format]
 # ruff format defaults: double quotes, 88-column wrap, trailing commas.

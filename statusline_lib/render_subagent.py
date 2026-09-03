@@ -304,7 +304,7 @@ def render_subagent_rows(payload, now):
         try:
             row = _row_for_task(task, parent, session_id, now)
         except Exception:
-            log_traceback(os.path.join(app_dir(), ".statusline-error.log"))
+            _log_error()
             continue
         if row is None:
             continue

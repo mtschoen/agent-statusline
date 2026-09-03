@@ -357,6 +357,26 @@ def _check_render_subagent_rows_logs_and_skips_when_row_for_task_raises(failures
         )
 
 
+def _check_render_rows_logs_a_dropped_row_through_the_shared_helper(failures):
+    original_row = render._row_for_task
+    original_log = render._log_error
+    calls = []
+
+    def failing_row(*arguments, **keywords):
+        raise RuntimeError("synthetic row failure")
+
+    render._row_for_task = failing_row
+    render._log_error = lambda: calls.append("logged")
+    try:
+        rows = render.render_subagent_rows({"tasks": [{"id": "bad"}]}, _NOW)
+    finally:
+        render._row_for_task = original_row
+        render._log_error = original_log
+
+    if rows != [] or calls != ["logged"]:
+        failures.append(f"a dropped row must use _log_error once: {rows!r}, {calls!r}")
+
+
 def check(failures):
     _check_renders_expected_rows_and_skips_the_rest(failures)
     _check_missing_transcript_path_falls_back_to_find_session_jsonl(failures)
@@ -364,6 +384,7 @@ def check(failures):
     _check_row_for_task_degrades_when_beacon_raises(failures)
     _check_row_for_task_includes_a_truthy_beacon(failures)
     _check_render_subagent_rows_logs_and_skips_when_row_for_task_raises(failures)
+    _check_render_rows_logs_a_dropped_row_through_the_shared_helper(failures)
     _check_live_payload_for_session(failures)
 
 

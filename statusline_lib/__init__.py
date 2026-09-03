@@ -40,8 +40,8 @@ Package layout (dependency order, no cycles):
               helpers (pure dict-in/dict-out; not re-exported here)
   cachefmt -- shared cache count/hit formatting across harness adapters
   prefs    -- live ~/.claude/.statusline-prefs.json resolver (pref/pref_bool)
-  sessions -- session counting (psutil lazy, stale-while-revalidate),
-              debounce state
+  sessions -- pure cached session-count reads on the render path; psutil walks
+              run only in pool-scheduled refreshes
   walker   -- binary discovery, root resolution, native pace bridge
   cost     -- cost calc, transcript walking, context/cache/model-badge formatting
   beacon   -- beacon scanning, format_beacon, format_calibrated_eta, session timing

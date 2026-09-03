@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import tempfile
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statusline_lib.server_state import (
@@ -122,7 +123,7 @@ def check_touching_a_cwd_keeps_it_alive(failures):
     clock = _FakeClock()
     tables = StateTables(clock=clock.read)
     first = tables.touch_cwd("/repo-a")
-    if first.cwd != "/repo-a" or first.last_seen != 1_700_000_000.0:
+    if first.cwd != os.path.normcase("/repo-a") or first.last_seen != 1_700_000_000.0:
         failures.append(f"a new cwd entry must record cwd and last_seen: {first.cwd}")
     for _ in range(4):
         clock.now += 1800
@@ -132,7 +133,7 @@ def check_touching_a_cwd_keeps_it_alive(failures):
             failures.append("re-touching a cwd must reuse its entry")
     if first.last_seen != clock.now:
         failures.append(f"touch_cwd must restamp last_seen: {first.last_seen}")
-    if tables.known_cwds() != ["/repo-a"]:
+    if tables.known_cwds() != [os.path.normcase("/repo-a")]:
         failures.append(
             f"one cwd touched five times is one entry: {tables.known_cwds()}"
         )
@@ -148,12 +149,21 @@ def check_known_cwds_lists_every_live_directory(failures):
     clock.now += 3000
     tables.touch_cwd("/repo-b")
     tables.touch_cwd("/repo-c")
-    if tables.known_cwds() != ["/repo-a", "/repo-b", "/repo-c"]:
+    expected = [
+        os.path.normcase("/repo-a"),
+        os.path.normcase("/repo-b"),
+        os.path.normcase("/repo-c"),
+    ]
+    if tables.known_cwds() != expected:
         failures.append(f"known_cwds must list every live cwd: {tables.known_cwds()}")
     clock.now += 1000
     if tables.drop_idle() != (0, 1):
         failures.append("only the cwd unseen for an hour may be dropped")
-    if tables.known_cwds() != ["/repo-b", "/repo-c"]:
+    expected_after = [
+        os.path.normcase("/repo-b"),
+        os.path.normcase("/repo-c"),
+    ]
+    if tables.known_cwds() != expected_after:
         failures.append(f"a dropped cwd must leave known_cwds: {tables.known_cwds()}")
 
 
@@ -192,6 +202,47 @@ def check_summary_reports_both_tables(failures):
         failures.append(f"unexpected summary: {summary}")
 
 
+def check_touch_cwd_normcases_its_key(failures):
+    clock = _FakeClock()
+    tables = StateTables(clock=clock.read)
+    with patch(
+        "statusline_lib.server_state.os.path.normcase",
+        side_effect=lambda path: path.lower(),
+    ):
+        first = tables.touch_cwd("C:\\Repo")
+        clock.now += 1
+        second = tables.touch_cwd("c:\\repo")
+    if second is not first:
+        failures.append("case-equivalent Windows cwd spellings must share one entry")
+    if tables.known_cwds() != ["c:\\repo"]:
+        failures.append(
+            f"known_cwds must expose one canonical cwd: {tables.known_cwds()}"
+        )
+    if first.cwd != "c:\\repo" or first.last_seen != clock.now:
+        failures.append(f"the canonical cwd entry must be restamped: {first.cwd!r}")
+
+
+def check_rewalk_summary_survives_session_eviction(failures):
+    clock = _FakeClock()
+    tables = StateTables(clock=clock.read)
+    with tempfile.TemporaryDirectory() as tmp:
+        first_path = os.path.join(tmp, "first.jsonl")
+        second_path = os.path.join(tmp, "second.jsonl")
+        _write_turns(first_path, count=1)
+        _write_turns(second_path, count=1)
+        tables.touch_session("session-a", first_path)
+        tables.touch_session("session-a", second_path)
+        before_drop = tables.summary()["rewalks"]
+        clock.now += SESSION_DROP_SECONDS
+        tables.drop_idle()
+        after_drop = tables.summary()["rewalks"]
+    if (before_drop, after_drop) != (1, 1):
+        failures.append(
+            f"server-lifetime rewalks must survive session eviction: "
+            f"{(before_drop, after_drop)!r}"
+        )
+
+
 def check(failures):
     check_drop_windows_are_one_hour(failures)
     check_an_unseen_session_is_dropped_after_an_hour(failures)
@@ -200,6 +251,8 @@ def check(failures):
     check_known_cwds_lists_every_live_directory(failures)
     check_a_new_transcript_path_resets_the_session_entry(failures)
     check_summary_reports_both_tables(failures)
+    check_touch_cwd_normcases_its_key(failures)
+    check_rewalk_summary_survives_session_eviction(failures)
 
 
 def main():

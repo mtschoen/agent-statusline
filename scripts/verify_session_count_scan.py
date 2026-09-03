@@ -149,11 +149,55 @@ def check_one_process_walk_serves_every_directory(failures):
         )
 
 
+def check_bad_candidate_does_not_zero_other_directories(failures):
+    shell = FakeSnapProc(50, 40, "cmd.exe", 100.0)
+    bad = FakeSnapProc(
+        59,
+        50,
+        "claude.exe",
+        190.0,
+        cmdline=RuntimeError("zombie cmdline"),
+        cwd="/repo-a",
+    )
+    first = FakeSnapProc(
+        60, 50, "claude.exe", 200.0, cmdline=["claude.exe"], cwd="/repo-a"
+    )
+    second = FakeSnapProc(
+        61, 50, "claude.exe", 200.0, cmdline=["claude.exe"], cwd="/repo-b"
+    )
+    fake = make_fake_psutil([shell, bad, first, second])
+    real_resolve = sessions_mod._resolve_psutil
+    sessions_mod._resolve_psutil = lambda: fake
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "counts.json")
+            sessions_mod.refresh_session_count_cache(
+                ["/repo-a", "/repo-b"], cache_path=path
+            )
+            cache = _load(path)
+    finally:
+        sessions_mod._resolve_psutil = real_resolve
+    counts = {key: entry["count"] for key, entry in cache.items()}
+    expected = {
+        os.path.normcase("/repo-a"): 1,
+        os.path.normcase("/repo-b"): 1,
+    }
+    if counts != expected:
+        failures.append(
+            f"one bad candidate must not zero shared-scan counts: {counts!r}"
+        )
+    if len(fake.seen_attrs) != 1:
+        failures.append(
+            f"candidate isolation must preserve one process scan: {fake.seen_attrs!r}"
+        )
+
+
 def check(failures):
     check_one_scan_answers_every_known_cwd(failures)
     check_an_empty_set_costs_nothing(failures)
     check_a_single_cwd_argument_still_works(failures)
     check_one_process_walk_serves_every_directory(failures)
+    check_bad_candidate_does_not_zero_other_directories(failures)
 
 
 def main():

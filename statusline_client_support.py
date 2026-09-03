@@ -182,7 +182,10 @@ def minimal_line(payload):
         os.path.basename(directory.rstrip("/\\")) or directory,
     ]
     line = " | ".join(field for field in fields if field)
-    return line or os.path.basename(os.getcwd())
+    current_directory = os.getcwd()
+    return (
+        line or os.path.basename(current_directory.rstrip("/\\")) or current_directory
+    )
 
 
 # --- Spawning a replacement server ------------------------------------------

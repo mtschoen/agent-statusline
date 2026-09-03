@@ -19,6 +19,7 @@ import contextlib
 import io
 import json
 import os
+import signal
 import socket
 import sys
 
@@ -144,6 +145,13 @@ def check_a_silent_server_is_never_replaced(failures):
         failures.append(f"a silent server must not be replaced, got {reasons}")
 
 
+def _kill_pid(pid):
+    """Hard-kill a process by PID across Unix and Windows."""
+    sig = signal.SIGTERM if os.name == "nt" else signal.SIGKILL
+    with contextlib.suppress(OSError):
+        os.kill(pid, sig)
+
+
 def _stop_spawned_server(context, failures):
     """Shut down whatever server is named in server.json and wait for its
     process to go. Bounded polling on a condition, so a server that will not
@@ -160,6 +168,49 @@ def _stop_spawned_server(context, failures):
             )
     if not _poll_until(lambda: pid_is_alive(info["pid"]) is False):
         failures.append(f"the spawned server (pid {info['pid']}) did not stop")
+        _kill_pid(info["pid"])
+        if not _poll_until(lambda: pid_is_alive(info["pid"]) is False):
+            failures.append(
+                f"the spawned server (pid {info['pid']}) survived hard kill"
+            )
+
+
+def check_an_unresponsive_spawned_server_is_killed(failures):
+    """When a spawned server ignores shutdown, _stop_spawned_server must
+    escalate to a hard kill so no orphan survives the verification run."""
+    global read_server_info, _poll_until
+    killed = []
+    saved_read = read_server_info
+    saved_poll = _poll_until
+    saved_kill = os.kill
+
+    def fake_read(path):
+        del path
+        return {"pid": 4242, "port": 9}
+
+    def fake_poll(predicate):
+        del predicate
+        return False
+
+    def fake_kill(pid, sig):
+        killed.append((pid, sig))
+
+    read_server_info = fake_read
+    _poll_until = fake_poll
+    os.kill = fake_kill
+    context = type("Context", (), {"state_directory": "/dummy"})()
+    try:
+        observed_failures = []
+        _stop_spawned_server(context, observed_failures)
+        expected_sig = signal.SIGTERM if os.name == "nt" else signal.SIGKILL
+        if killed != [(4242, expected_sig)]:
+            failures.append(f"expected kill of pid 4242, got {killed}")
+        if not any("did not stop" in failure for failure in observed_failures):
+            failures.append(f"expected 'did not stop' failure, got {observed_failures}")
+    finally:
+        read_server_info = saved_read
+        _poll_until = saved_poll
+        os.kill = saved_kill
 
 
 def check_ensure_server_reads_no_stdin_and_prints_nothing(failures):
@@ -190,6 +241,7 @@ def check(failures):
     check_a_version_mismatch_shuts_the_old_server_down(failures)
     check_the_render_path_spawns_only_when_something_is_wrong(failures)
     check_a_silent_server_is_never_replaced(failures)
+    check_an_unresponsive_spawned_server_is_killed(failures)
     check_ensure_server_reads_no_stdin_and_prints_nothing(failures)
 
 

@@ -48,9 +48,11 @@ from verify_server_socket import _socket_server
 # whole point, and the reader side of server.json.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from _server_concurrency_helpers import RecordingWorkerPool
+
 from statusline_lib import server_jobs
 from statusline_lib.server_info import read_server_info, server_info_path
-from statusline_lib.server_jobs import WORKER_POOL_SIZE, WorkerPool
+from statusline_lib.server_jobs import WORKER_POOL_SIZE
 
 # The burst. Fifty is well past the six sessions plus CI that produced the
 # incident, and four directories is what makes the git-ref refresher a set of
@@ -227,7 +229,7 @@ def _running_server(failures, runner=None):
     started this server was holding.
     """
     errors = []
-    pool = WorkerPool(
+    pool = RecordingWorkerPool(
         size=WORKER_POOL_SIZE,
         runner=server_jobs.run_refresh if runner is None else runner,
         error_logger=errors.append,
@@ -298,6 +300,8 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
         alive = _count_server_processes(context)
         peak = context.pool.peak_in_flight()
         workers = context.pool.worker_count()
+        submissions = context.pool.submissions()
+        cwds = list(context.cwds)
         release.set()
 
     if not wedged:
@@ -311,6 +315,35 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
         failures.append(f"{peak} jobs ran at once, the cap is {_WORKER_CAP}")
     if workers != _WORKER_CAP:
         failures.append(f"pool has {workers} threads, expected {_WORKER_CAP}")
+
+    git_ref_submissions = [s for s in submissions if s[0] == "git-ref"]
+    expected_keys = {str(cwd) for cwd in cwds}
+    observed_keys = {arg for _, arg, _ in git_ref_submissions}
+    total_accepted = sum(1 for _, _, accepted in git_ref_submissions if accepted)
+    total_refused = sum(1 for _, _, accepted in git_ref_submissions if not accepted)
+    accepted_by_key = {}
+    refused_by_key = {}
+    for _, arg, accepted in git_ref_submissions:
+        if accepted:
+            accepted_by_key[arg] = accepted_by_key.get(arg, 0) + 1
+        else:
+            refused_by_key[arg] = refused_by_key.get(arg, 0) + 1
+
+    if observed_keys != expected_keys:
+        failures.append(
+            f"git-ref keys {observed_keys} do not match expected {expected_keys}"
+        )
+    bad_accepted = {k: v for k, v in accepted_by_key.items() if v != 1}
+    if (
+        bad_accepted
+        or total_accepted != _CWD_COUNT
+        or total_refused != (_RENDER_COUNT - _CWD_COUNT)
+    ):
+        failures.append(
+            f"deduplication mismatch: accepted {total_accepted} (expected {_CWD_COUNT}), "
+            f"refused {total_refused} (expected {_RENDER_COUNT - _CWD_COUNT}), "
+            f"per-key accepted {accepted_by_key}, per-key refused {refused_by_key}"
+        )
 
     blank = [result for result in results if not result.stdout.strip()]
     nonzero = [result for result in results if result.returncode != 0]

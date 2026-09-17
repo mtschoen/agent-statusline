@@ -9,7 +9,7 @@ Imports:
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime
 
 from .base import (
     CACHE_READ,
@@ -77,10 +77,7 @@ def _spend_from_path(path, seen_ids, win_start):
                 _ts, usage, model_id = parsed
                 if model_id:
                     last_model = model_id
-                # Date prefix (UTC) for date-aware sonnet-5 pricing, derived
-                # from the parsed epoch (the walk drops the raw ISO string).
-                date_prefix = datetime.fromtimestamp(_ts, UTC).strftime("%Y-%m-%d")
-                total += _cost_for_turn(usage, model_id or last_model, date_prefix)
+                total += _cost_for_turn(usage, model_id or last_model)
     except (OSError, MemoryError):
         # Unreadable or pathological (e.g. a single line too large to buffer)
         # transcript files are skipped; partial spend is still useful. This

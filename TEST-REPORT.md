@@ -1,5 +1,55 @@
 # agent-statusline - Test Report
 
+## Codex footer preservation, 2026-09-30
+
+| Field | Value |
+|-------|-------|
+| Status | Focused regression and isolated-home installer smoke PASS; full suite has two reproduced baseline failures and one transient concurrency failure |
+| Mode | Best effort for existing Windows shell-probe failures; maintain 100% library coverage |
+| Tests | 99 verification scripts: 96 passed on the single whole-suite run; concurrency check passed on targeted confirmation |
+| Git | `fix/preserve-codex-footer`, uncommitted changes based on `86fe683` |
+| Coverage | Whole-suite run before review guard: 4015/4015 library statements (100%); final focused Codex module 117/117 (100%) |
+| Lint | Ruff check 0 findings; all 174 Python files formatted; final aislop ci 96/100, exit 0, 0 errors and 15 existing warnings outside changed files |
+
+Regression was observed before implementation: eleven preservation checks failed.
+The final regression preserves custom item order, unknown future item IDs, empty
+lists and explicit color preferences. Missing or invalid fields are seeded
+independently. The real installer retained a custom footer byte-identically,
+seeded missing items while retaining colors disabled, and left its second install
+byte-identical. All installer smoke checks used temporary home directories.
+
+The whole-suite run failed `verify_install_settings_merge.py` and
+`verify_interpreter_probe.py` because the selected Bash could not resolve Windows
+paths. Both failures were reproduced from unchanged `86fe683` source extracted
+into a temporary directory. `verify_server_concurrency.py` received only fallback
+renders during the whole-suite burst; unchanged source and a targeted rerun of
+the changed tree both passed. The concurrency code was unchanged. No whole-suite
+rerun or unrelated source repair was performed.
+
+Evidence under `%TEMP%`: `codex-footer-suite-62ac0710-a263-4e2f-b689-06e741f6c811`,
+`codex-footer-baseline-4476b65c-2f56-48dc-873e-180494c0d855`,
+`codex-footer-concurrency-81c7f9e8-1769-4879-a107-7998c109bbbc`, and
+`codex-footer-smoke-421d5cb7-846a-4195-a3eb-5eedefe11fc3`.
+
+Review added a failing regression for an assignment-looking line inside a
+multiline TOML string. A full parsed-config integrity comparison now rejects the
+merge if any unrelated value changes. Focused regression, final module coverage
+(117/117), and whole-repository Ruff checks passed after this change. The real
+installer rejected the decoy and retained the file byte-identically, verified
+under `%TEMP%/codex-footer-decoy-smoke-6a52feb5-b15e-4d97-b4c2-9eb1b5fb4648`.
+The whole suite was not repeated for this guard-only review fix.
+The final `aislop scan . --changes --json` scored 100 with zero errors and
+warnings; evidence is `%TEMP%/codex-footer-review-aislop.json`.
+
+The required dependency audit found six inherited vulnerable package entries in
+the development scanner tree. Exact patched overrides for adm-zip 0.6.1,
+fast-uri 3.1.8, hono 4.13.7, ip-address 10.7.1 and smol-toml 1.7.1 reduce
+`npm audit` to zero vulnerabilities. The lockfile changes only those five
+transitive packages. Final `aislop ci` passes at 96/100. Independent review
+approved both the config integrity guard and the scoped dependency changes.
+
+## Historical report
+
 `2026-09-02`
 
 | Field | Value |

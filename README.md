@@ -399,9 +399,12 @@ server does and how the client falls back when it isn't reachable.
 ### Codex CLI
 
 Codex CLI owns its TUI footer rather than invoking a command-style statusline.
-Run the installer with `--platform codex` to merge the closest native preset
-into `~/.codex/config.toml` while preserving unrelated TOML settings and
-comments:
+Run the installer with `--platform codex` to seed missing or invalid footer
+settings in `~/.codex/config.toml`. Existing lists of item IDs retain their order
+and formatting, including an empty list that disables the footer. An explicit
+`status_line_use_colors = false` is preserved. Unrelated TOML settings and
+comments are preserved. If a merge would change unrelated parsed TOML values,
+the installer refuses to write. A fresh configuration receives this native preset:
 
 ```toml
 [tui]

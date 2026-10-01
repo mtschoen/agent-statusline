@@ -10,15 +10,16 @@
   "devDependencies": {
     "@schoen/aislop": "0.12.3"
   },
-  "overridesComment": "Patched floors for vulnerable TRANSITIVE dependencies of @schoen/aislop (the lint tool itself). This repo ships no runtime JavaScript, so none of these reach a user; they were failing aislop's own security engine and with it the CI gate. Each entry is the lowest published version outside the advisory range (npm audit 2026-08-03, see issue #23): tar GHSA <=7.5.20 critical, fast-uri 3.0.0-3.1.4 high, adm-zip <0.6.0 high, hono <4.12.34 moderate, @hono/node-server <2.0.5 moderate, body-parser 2.0.0-2.2.2 low, ip-address <=10.3.0 high. Drop an entry once the mtschoen/aislop fork bumps past it; npm warns on overrides that no longer apply.",
+  "overridesComment": "Patched TRANSITIVE dependencies of @schoen/aislop (dev tooling only). Advisory floors verified with npm audit and registry metadata 2026-09-30: fast-uri 3.1.8 (GHSA-hrr3-gc8f-f4qj), adm-zip 0.6.1 (seven advisories), hono 4.13.7 (GHSA-hxh3-vqpv-xpqv), ip-address 10.7.1 (GHSA-j6r3-76f7-8jcv and GHSA-h3mg-xc3c-68pw), smol-toml 1.7.1 (GHSA-7w5x-hrqm-74c2). These five packages use exact lowest patched versions to keep the security refresh narrow. Other existing floors remain unchanged. Drop an entry once the fork's dependency range excludes vulnerable versions.",
   "overrides": {
     "tar": "^7.5.22",
-    "fast-uri": "^3.1.6",
-    "adm-zip": "^0.6.0",
-    "hono": "^4.12.34",
+    "fast-uri": "3.1.8",
+    "adm-zip": "0.6.1",
+    "hono": "4.13.7",
     "@hono/node-server": "^2.0.5",
     "body-parser": "^2.2.3",
-    "ip-address": "^10.3.1",
+    "ip-address": "10.7.1",
+    "smol-toml": "1.7.1",
     "qs": "^6.16.0"
   }
 }

@@ -175,9 +175,9 @@ def _check_no_tui_anywhere(failures):
         failures.append("no-tui config: preset was not appended")
 
 
-def _check_incomplete_preset_not_current(failures):
+def _check_missing_colors_not_current(failures):
     if codex_config_current('[tui]\nstatus_line = ["model"]\n'):
-        failures.append("current check: incomplete preset reported current")
+        failures.append("current check: missing color preference reported current")
 
 
 def _check_invalid_toml_error(failures):
@@ -196,22 +196,21 @@ def _check_inline_table_error(failures):
 def _check_integrity_guard(failures):
     real_settings_text = codex_install._settings_text
     try:
-        codex_install._settings_text = lambda _newline, dotted=False: (
+        codex_install._settings_text = lambda _newline, dotted=False, keys=(): (
             f'{"tui." if dotted else ""}status_line = ["model"]\n'
         )
         _expect_value_error(
             failures,
             "integrity guard",
             "[tui]\n",
-            "did not retain the Codex status-line preset",
+            "did not retain the Codex status-line settings",
         )
     finally:
         codex_install._settings_text = real_settings_text
 
 
 def _check_idempotent_merge(failures):
-    """Running the merge twice must produce a byte-identical file: the second
-    pass strips its own freshly-written preset and rewrites the same bytes."""
+    """An already configured footer remains byte-identical on every merge."""
     existing = (
         'model = "gpt-5.5"\n'
         "\n"
@@ -289,7 +288,7 @@ def _check_no_trailing_newline(failures):
         "[tui]\n"
         "animations = false\n"
         'status_line = ["model"]\n'
-        "status_line_use_colors = false"
+        'status_line_use_colors = "invalid"'
     )
     merged = merge_codex_config(text)
     data = tomllib.loads(merged)
@@ -301,7 +300,75 @@ def _check_no_trailing_newline(failures):
         failures.append("no trailing newline: preset was not retained")
 
 
+def _check_custom_footer_preserved(failures):
+    for existing in (
+        '[tui]\nstatus_line = ["context-remaining", "weekly-limit"] # owner order\nstatus_line_use_colors = false\n',
+        'tui.status_line = ["context-remaining", "future-item"]\ntui.status_line_use_colors = true\n',
+        "[tui]\nstatus_line = []\nstatus_line_use_colors = false\n",
+    ):
+        if merge_codex_config(existing) != existing:
+            failures.append("custom footer: existing settings or formatting changed")
+        if not codex_config_current(existing):
+            failures.append("custom footer: valid owner settings reported stale")
+
+
+def _check_partial_footer_preserved(failures):
+    cases = (
+        ('[tui]\nstatus_line = ["context-remaining"]\n', ["context-remaining"], True),
+        ('tui.status_line = ["context-remaining"]\n', ["context-remaining"], True),
+        (
+            "[tui]\nstatus_line_use_colors = false\n",
+            list(CODEX_STATUS_LINE_ITEMS),
+            False,
+        ),
+        ("tui.status_line_use_colors = false\n", list(CODEX_STATUS_LINE_ITEMS), False),
+        (
+            '[tui]\nstatus_line = ["context-remaining"]\nstatus_line_use_colors = "invalid"\n',
+            ["context-remaining"],
+            True,
+        ),
+        (
+            '[tui]\nstatus_line = ["context-remaining"]\nstatus_line_use_colors = 1\n',
+            ["context-remaining"],
+            True,
+        ),
+        (
+            "[tui]\nstatus_line = [1]\nstatus_line_use_colors = false\n",
+            list(CODEX_STATUS_LINE_ITEMS),
+            False,
+        ),
+    )
+    for existing, expected_items, expected_colors in cases:
+        merged = merge_codex_config(existing)
+        tui = tomllib.loads(merged)["tui"]
+        if (
+            tui["status_line"] != expected_items
+            or tui["status_line_use_colors"] is not expected_colors
+        ):
+            failures.append(
+                "partial footer: valid preference lost or default not seeded"
+            )
+        if merge_codex_config(merged) != merged:
+            failures.append("partial footer: repair was not idempotent")
+
+
 def check(failures):
+    _expect_value_error(
+        failures,
+        "multiline string decoy",
+        '[tui]\nnote = """\nstatus_line_use_colors = false\n"""\nstatus_line = ["custom"]\n',
+        "changed unrelated TOML settings",
+    )
+    _check_custom_footer_preserved(failures)
+    _check_partial_footer_preserved(failures)
+    _expect_value_error(failures, "scalar tui", 'tui = "invalid"\n', "must be a table")
+    try:
+        codex_config_current('tui = "invalid"\n')
+    except ValueError as error:
+        if "must be a table" not in str(error):
+            failures.append(f"current check: wrong scalar tui error: {error}")
+    else:
+        failures.append("current check: scalar tui should raise ValueError")
     _check_preset_fields(failures)
     _check_preset_order(failures)
     _check_array_guard(failures)
@@ -310,7 +377,7 @@ def check(failures):
     _check_dotted_form(failures)
     _check_nested_child_table(failures)
     _check_no_tui_anywhere(failures)
-    _check_incomplete_preset_not_current(failures)
+    _check_missing_colors_not_current(failures)
     _check_invalid_toml_error(failures)
     _check_inline_table_error(failures)
     _check_integrity_guard(failures)

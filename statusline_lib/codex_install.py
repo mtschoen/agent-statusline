@@ -13,8 +13,8 @@ quoting rules (only double-quoted strings support backslash escapes;
 single-quoted literal strings do not) and nested arrays -- verified against
 multi-line arrays, inline comments, CRLF, and adversarial cases like
 triple-quoted strings. Its actual safety net is `merge_codex_config`
-re-parsing the merged text through `tomllib` and checking the installed
-`status_line` matches `CODEX_STATUS_LINE_ITEMS` exactly before returning: a
+re-parsing the merged text through `tomllib` and checking that the full parsed
+config matches the original with only seeded footer defaults: a
 scanner miscount fails loudly with `ValueError` rather than silently
 corrupting the user's config.
 """
@@ -65,14 +65,16 @@ def _newline(text):
     return "\r\n" if "\r\n" in text else "\n"
 
 
-def _settings_text(newline, dotted=False):
+def _settings_text(
+    newline, dotted=False, keys=("status_line", "status_line_use_colors")
+):
     prefix = "tui." if dotted else ""
     items = "".join(f'  "{item}",{newline}' for item in CODEX_STATUS_LINE_ITEMS)
-    return (
-        f"{prefix}status_line = [{newline}"
-        f"{items}]"
-        f"{newline}{prefix}status_line_use_colors = true{newline}"
-    )
+    settings = {
+        "status_line": f"{prefix}status_line = [{newline}{items}]{newline}",
+        "status_line_use_colors": f"{prefix}status_line_use_colors = true{newline}",
+    }
+    return "".join(settings[key] for key in keys)
 
 
 def _table_bounds(text, name):
@@ -146,9 +148,8 @@ def _without_assignments(text, keys, start, end):
     return text, spans
 
 
-def _merge_unchecked(text):
+def _merge_unchecked(text, keys):
     newline = _newline(text)
-    keys = ("status_line", "status_line_use_colors")
     section = _table_bounds(text, "tui")
     if section is not None:
         content_start, content_end = section
@@ -159,17 +160,22 @@ def _merge_unchecked(text):
         return (
             text[:content_start]
             + separator
-            + _settings_text(newline)
+            + _settings_text(newline, keys=keys)
             + text[content_start:]
         )
 
     dotted_keys = tuple(f"tui.{key}" for key in keys)
-    text_without, spans = _without_assignments(text, dotted_keys, 0, len(text))
+    text_without, _removed = _without_assignments(text, dotted_keys, 0, len(text))
+    spans = [
+        span
+        for key in ("tui.status_line", "tui.status_line_use_colors")
+        if (span := _assignment_span(text, key, 0, len(text))) is not None
+    ]
     if spans:
         insertion = min(span[0] for span in spans)
         return (
             text_without[:insertion]
-            + _settings_text(newline, dotted=True)
+            + _settings_text(newline, dotted=True, keys=keys)
             + text_without[insertion:]
         )
 
@@ -183,25 +189,58 @@ def _merge_unchecked(text):
         )
     separator = "" if not text or text.endswith(("\n", "\r")) else newline
     blank = "" if not text.strip() else newline
-    return text + separator + blank + f"[tui]{newline}" + _settings_text(newline)
+    return (
+        text
+        + separator
+        + blank
+        + f"[tui]{newline}"
+        + _settings_text(newline, keys=keys)
+    )
+
+
+def _valid_items(value):
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
 def merge_codex_config(text):
-    """Return config TOML with the native Codex status-line preset installed."""
-    _parse_config(text)
-    merged = _merge_unchecked(text)
+    """Seed missing/invalid footer settings, preserving valid owner preferences."""
+    expected_configuration = _parse_config(text)
+    original = expected_configuration.get("tui") or {}
+    if not isinstance(original, dict):
+        raise ValueError("Codex tui must be a table")
+    items = original.get("status_line")
+    colors = original.get("status_line_use_colors")
+    expected = {
+        "status_line": items if _valid_items(items) else list(CODEX_STATUS_LINE_ITEMS),
+        "status_line_use_colors": colors if isinstance(colors, bool) else True,
+    }
+    keys = tuple(
+        key
+        for key, valid in (
+            ("status_line", _valid_items(items)),
+            ("status_line_use_colors", isinstance(colors, bool)),
+        )
+        if not valid
+    )
+    if not keys:
+        return text
+    merged = _merge_unchecked(text, keys)
     parsed = _parse_config(merged)
     tui = parsed.get("tui") or {}
-    if tuple(tui.get("status_line") or ()) != CODEX_STATUS_LINE_ITEMS:
-        raise ValueError("merged TOML did not retain the Codex status-line preset")
+    if any(tui.get(key) != value for key, value in expected.items()):
+        raise ValueError("merged TOML did not retain the Codex status-line settings")
+    expected_configuration["tui"] = {**original, **expected}
+    if parsed != expected_configuration:
+        raise ValueError("merged TOML changed unrelated TOML settings")
     return merged
 
 
 def codex_config_current(text):
-    """Return whether config TOML already has the complete native preset."""
+    """Return whether valid footer items and an explicit color preference exist."""
     parsed = _parse_config(text)
     tui = parsed.get("tui") or {}
-    return (
-        tuple(tui.get("status_line") or ()) == CODEX_STATUS_LINE_ITEMS
-        and tui.get("status_line_use_colors") is True
+    if not isinstance(tui, dict):
+        raise ValueError("Codex tui must be a table")
+    return _valid_items(tui.get("status_line")) and isinstance(
+        tui.get("status_line_use_colors"), bool
     )

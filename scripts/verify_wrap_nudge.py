@@ -150,8 +150,21 @@ def check_format_nudge(failures):
         failures.append(
             f"format_nudge should mention the soft ceiling ~{ceiling_k}K; got {out!r}"
         )
-    if "/wrap" not in out:
-        failures.append(f"format_nudge should mention /wrap; got {out!r}")
+    for phrase in (
+        "soft signal",
+        "natural stopping point",
+        "run the wrap skill",
+        "wrap skill in chain mode",
+        "handoff",
+        "fresh background session",
+        "no hard ceiling",
+        "wrap or chain already happened",
+        "owner declined",
+    ):
+        if phrase not in out:
+            failures.append(f"format_nudge should mention {phrase!r}; got {out!r}")
+    if "\u2014" in out:
+        failures.append(f"format_nudge must not contain an em dash; got {out!r}")
 
 
 def check_write_ctx_state_oserror(failures):

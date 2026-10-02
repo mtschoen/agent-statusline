@@ -830,13 +830,16 @@ itself within a few turns (arithmetic in `statusline_lib/nudge.py`). Add that
 model recall degrades as the window fills, and long sessions are worth wrapping
 even without a pricing cliff. This repo ships an optional
 [`UserPromptSubmit` hook](https://code.claude.com/docs/en/hooks) that injects a
-**one-shot**, gentle reminder to the agent - "you're around NK of context,
-consider offering `/wrap` before ~300K" - the first time a session crosses
-**250K**. The message carries the live occupancy so the agent can frame it
+**one-shot**, gentle signal to the agent to chain through the wrap skill with a
+handoff at the next natural stopping point - the first time a session crosses
+**250K**. The message carries the live occupancy so the agent can act on it
 concretely.
 
-It does **not** run `/wrap` or interrupt anything; it only nudges the agent to
-*offer* a wrap at the next natural stopping point. Wrap stays user-initiated.
+It does **not** interrupt in-progress work. Once the current ask or plan task
+reaches a natural stopping point, the agent runs the wrap skill in chain mode,
+continuing in a fresh background session. Work that genuinely needs to keep
+going long keeps going: there is no hard ceiling. The agent skips the signal if
+a wrap or chain already happened or the owner declined that session.
 
 **How it works.** A `UserPromptSubmit` hook's payload can't see context-window
 occupancy, but the statusline's payload can. So `statusline_lib/server_render.py`

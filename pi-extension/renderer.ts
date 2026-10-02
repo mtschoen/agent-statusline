@@ -335,7 +335,9 @@ function spendFromAllSessions(windowStart: number): number {
 function inputRatePerMillion(modelId: string | undefined): number {
 	const lowered = (modelId ?? "").toLowerCase();
 	if (lowered.includes("fable")) return 10;
+	if (lowered.includes("opus-5-5")) return 4;
 	if (lowered.includes("opus")) return 5;
+	if (/sonnet-5(-|\[|$)/.test(lowered)) return 2;
 	if (lowered.includes("sonnet")) return 3;
 	if (lowered.includes("haiku")) return 1;
 	return 3;

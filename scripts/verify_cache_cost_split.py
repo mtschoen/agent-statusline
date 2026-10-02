@@ -251,37 +251,43 @@ def _check_format_cache_read_cost_not_passed_through_fmt(failures):
 
 
 def _check_model_rates(failures):
-    # Fable 5 bills $10/$50 per MTok (platform.claude.com models overview).
-    # Before the fable row existed, _rates_for fell back to sonnet ($3/$15)
-    # and every fable session under-estimated cost 3.33x. Mythos ids map to the
-    # same Fable family. Sonnet 5 is date-aware: intro $2/$10 through 2026-08-31,
-    # standard $3/$15 from 2026-09-01. "sonnet-5" must NOT catch "sonnet-4-5".
-    from statusline_lib.cost import _rates_for
+    # Published rates, verified 2026-10-02 against
+    # https://platform.claude.com/docs/en/about-claude/pricing. Fable bills
+    # $10/$50 (before the fable row existed _rates_for fell back to sonnet and
+    # under-estimated 3.33x); Opus 5.5 is $4/$20; Sonnet 5 and 5.5 are $2/$10
+    # with no date step; Opus 4 / 4.1 are $15/$75. "sonnet-5" must NOT catch
+    # "sonnet-4-5". Cache reads: 0.025x on Fable 5.1, 0.05x on Opus 5.5.
+    from statusline_lib.cost import _price_row, _rates_for
 
-    # (model_id, date_prefix, expected)
+    # (model_id, expected input, output, cache read multiplier)
     cases = [
-        ("claude-fable-5", "", (10.0, 50.0)),
-        ("claude-fable-5[1m]", "", (10.0, 50.0)),
-        ("claude-mythos-preview", "", (10.0, 50.0)),
-        ("claude-opus-4-8", "", (5.0, 25.0)),
-        ("claude-haiku-4-5", "", (1.0, 5.0)),
-        ("totally-unknown-model", "", (3.0, 15.0)),  # sonnet fallback
-        # Sonnet 5 date-aware boundary.
-        ("claude-sonnet-5", "2026-05-10", (2.0, 10.0)),
-        ("claude-sonnet-5", "2026-08-31", (2.0, 10.0)),
-        ("claude-sonnet-5", "2026-09-01", (3.0, 15.0)),
-        ("claude-sonnet-5", "2026-09-15", (3.0, 15.0)),
-        ("claude-sonnet-5", "", (2.0, 10.0)),  # no date -> intro
-        # Non-collision: sonnet-4-5 stays generic sonnet, date-independent.
-        ("claude-sonnet-4-5", "2026-05-10", (3.0, 15.0)),
-        ("claude-sonnet-4-5", "2026-09-15", (3.0, 15.0)),
+        ("claude-fable-5", 10.0, 50.0, 0.1),
+        ("claude-fable-5[1m]", 10.0, 50.0, 0.1),
+        ("claude-fable-5-1", 10.0, 50.0, 0.025),
+        ("claude-mythos-preview", 10.0, 50.0, 0.1),
+        ("claude-opus-5-5", 4.0, 20.0, 0.05),
+        ("claude-opus-5", 5.0, 25.0, 0.1),
+        ("claude-opus-4-8", 5.0, 25.0, 0.1),
+        ("claude-opus-4-7", 5.0, 25.0, 0.1),
+        ("claude-opus-4-6", 5.0, 25.0, 0.1),
+        ("claude-opus-4-1-20250805", 15.0, 75.0, 0.1),
+        ("claude-opus-4-20250514", 15.0, 75.0, 0.1),
+        ("claude-sonnet-5", 2.0, 10.0, 0.1),
+        ("claude-sonnet-5-5", 2.0, 10.0, 0.1),
+        ("claude-sonnet-4-6", 3.0, 15.0, 0.1),
+        ("claude-sonnet-4-5", 3.0, 15.0, 0.1),
+        ("claude-haiku-4-5-20251001", 1.0, 5.0, 0.1),
+        ("claude-3-5-haiku-20241022", 0.8, 4.0, 0.1),
+        ("totally-unknown-model", 3.0, 15.0, 0.1),  # sonnet fallback
     ]
-    for model_id, date_prefix, expected in cases:
-        got = _rates_for(model_id, date_prefix)
-        if got != expected:
+    for model_id, inp, out, read_mult in cases:
+        got = _price_row(model_id)
+        if got != (inp, out, read_mult):
             failures.append(
-                f"rates for {model_id!r} @ {date_prefix!r}: {got!r} != {expected!r}"
+                f"price row for {model_id!r}: {got!r} != {(inp, out, read_mult)!r}"
             )
+        if _rates_for(model_id) != (inp, out):
+            failures.append(f"rates for {model_id!r}: {_rates_for(model_id)!r}")
 
 
 def _check_parse_ts_bad_value(failures):

@@ -21,11 +21,15 @@ Imports:
 
 import glob
 import os
+import re
 from datetime import datetime
 
 from .cost_walk import _walk_one_transcript, new_walk_accumulator, summarize_walk
 from .cost_walk import fold_transcript_lines as fold_transcript_lines
 
+# Per-MTok rates, verified 2026-10-02 against
+# https://platform.claude.com/docs/en/about-claude/pricing. Family defaults;
+# _VERSION_PRICES overrides them for versions whose published price differs.
 _RATES = {
     "fable": (10.0, 50.0),
     "opus": (5.0, 25.0),
@@ -33,14 +37,26 @@ _RATES = {
     "haiku": (1.0, 5.0),
 }
 
-# Sonnet 5 intro->standard boundary. Introductory pricing ($2/$10) runs through
-# 2026-08-31 inclusive; standard pricing ($3/$15) applies from 2026-09-01
-# onward. Selection is a lexicographic compare of the turn's ISO-8601 date
-# prefix ("YYYY-MM-DD") against this string -- monotonic for zero-padded dates,
-# no timezone math. Mirrors agent-walker SPEC.md and its four impls.
-_SONNET5_STANDARD_FROM = "2026-09-01"
-_SONNET5_INTRO_RATES = (2.0, 10.0)
-_SONNET5_STANDARD_RATES = (3.0, 15.0)
+# Cache hits bill at 0.1x base input except on Fable 5.1 / Mythos 5.1 (0.025x)
+# and Opus 5.5 (0.05x).
+CACHE_READ_MULT = 0.1
+
+# (pattern, input_per_mtok, output_per_mtok, cache_read_multiplier), first match
+# wins. "sonnet-5" does NOT match "claude-sonnet-4-5". Sonnet 5 and 5.5 bill
+# $2/$10: the introductory price became the standard one and the planned
+# 2026-09-01 step to $3/$15 never happened.
+_VERSION_PRICES = (
+    (re.compile(r"(fable|mythos)-5[-.]1"), 10.0, 50.0, 0.025),
+    (re.compile(r"opus-5[-.]5"), 4.0, 20.0, 0.05),
+    (
+        re.compile(r"opus-4(?:-1)?(?:[-@]\d{8})?(?:-v\d+(?::\d+)?)?(?:\[|$)"),
+        15.0,
+        75.0,
+        CACHE_READ_MULT,
+    ),
+    (re.compile(r"sonnet-5(?:-|\[|$)"), 2.0, 10.0, CACHE_READ_MULT),
+    (re.compile(r"haiku-3-5|3-5-haiku"), 0.8, 4.0, CACHE_READ_MULT),
+)
 
 _WEB_SEARCH_COST_USD = 0.01
 
@@ -99,33 +115,35 @@ def _written_ttl_seconds(usage):
     return TTL_1H_SECONDS
 
 
-def _rates_for(model_id, date_prefix=""):
-    """(input_per_mtok, output_per_mtok) for a model id.
+def _price_row(model_id):
+    """(input_per_mtok, output_per_mtok, cache_read_multiplier) for a model id.
 
-    Ordered substring match (first hit wins), mirroring agent-walker SPEC.md:
-    fable/mythos -> opus -> haiku -> date-aware sonnet-5 -> generic sonnet.
-    `date_prefix` is the turn's ISO-8601 timestamp; only its leading 10-char
-    "YYYY-MM-DD" is consulted, and only for the sonnet-5 family.
+    A matching _VERSION_PRICES row wins; otherwise the ordered family substring
+    match applies (first hit wins, mirroring agent-walker SPEC.md):
+    fable/mythos -> opus -> haiku -> generic sonnet.
     """
     mid = (model_id or "").lower()
-    # fable/mythos first: the Fable family bills at $10/$50 and must win before
-    # any substring that could collide.
+    for pattern, inp_rate, out_rate, read_mult in _VERSION_PRICES:
+        if pattern.search(mid):
+            return inp_rate, out_rate, read_mult
     if "fable" in mid or "mythos" in mid:
-        return _RATES["fable"]
-    if "opus" in mid:
-        return _RATES["opus"]
-    if "haiku" in mid:
-        return _RATES["haiku"]
-    # sonnet-5 BEFORE the generic sonnet default. "sonnet-5" does NOT match
-    # "claude-sonnet-4-5" (no such substring), so Sonnet 4.5 keeps the generic
-    # sonnet rates below, date-independent.
-    if "sonnet-5" in mid:
-        if date_prefix and date_prefix[:10] >= _SONNET5_STANDARD_FROM:
-            return _SONNET5_STANDARD_RATES
-        return _SONNET5_INTRO_RATES
-    # sonnet -- and any unknown family -- falls back to sonnet rates rather than
-    # zero so an unrecognized model doesn't silently render as free.
-    return _RATES["sonnet"]
+        family = "fable"
+    elif "opus" in mid:
+        family = "opus"
+    elif "haiku" in mid:
+        family = "haiku"
+    else:
+        # sonnet -- and any unknown family -- falls back to sonnet rates rather
+        # than zero so an unrecognized model doesn't silently render as free.
+        family = "sonnet"
+    inp_rate, out_rate = _RATES[family]
+    return inp_rate, out_rate, CACHE_READ_MULT
+
+
+def _rates_for(model_id):
+    """(input_per_mtok, output_per_mtok) for a model id."""
+    inp_rate, out_rate, _read_mult = _price_row(model_id)
+    return inp_rate, out_rate
 
 
 def _write_cost(usage, inp_rate):
@@ -146,15 +164,14 @@ def _write_cost(usage, inp_rate):
     return flat * WRITE_MULT_5M * inp_rate / 1_000_000.0
 
 
-def _cost_for_turn(usage, model_id, date_prefix=""):
+def _cost_for_turn(usage, model_id):
     """Per-Mtok token cost for one assistant turn, plus per-request web search.
 
     Web search is billed per request, not per token; $0.01 each was verified
     against ~/.claude.json's authoritative per-model costUSD. Cache writes are
-    billed by TTL via _write_cost (5m at 1.25x, 1h at 2.0x). `date_prefix` is
-    the turn's ISO-8601 timestamp, threaded through for date-aware sonnet-5.
+    billed by TTL via _write_cost (5m at 1.25x, 1h at 2.0x).
     """
-    inp_rate, out_rate = _rates_for(model_id, date_prefix)
+    inp_rate, out_rate, read_mult = _price_row(model_id)
     i = int(usage.get("input_tokens") or 0)
     r = int(usage.get("cache_read_input_tokens") or 0)
     o = int(usage.get("output_tokens") or 0)
@@ -162,7 +179,7 @@ def _cost_for_turn(usage, model_id, date_prefix=""):
         (usage.get("server_tool_use") or {}).get("web_search_requests") or 0
     )
     token_cost = (
-        i * inp_rate + r * (inp_rate * 0.1) + o * out_rate
+        i * inp_rate + r * (inp_rate * read_mult) + o * out_rate
     ) / 1_000_000.0 + _write_cost(usage, inp_rate)
     return token_cost + web_searches * _WEB_SEARCH_COST_USD
 
@@ -194,13 +211,9 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
     if model_id:
         acc["last_model"] = model_id
     rate_model = model_id or acc["last_model"]
-    # Date prefix for date-aware sonnet-5 pricing: the turn's own ISO-8601
-    # timestamp (leading "YYYY-MM-DD"). Non-string/absent -> "" -> intro rate.
-    ts_raw = entry.get("timestamp")
-    date_prefix = ts_raw[:10] if isinstance(ts_raw, str) else ""
-    acc["cost"] += _cost_for_turn(u, rate_model, date_prefix)
-    inp_rate, out_rate = _rates_for(rate_model, date_prefix)
-    acc["read_cost"] += r * inp_rate * 0.1 / 1_000_000.0
+    acc["cost"] += _cost_for_turn(u, rate_model)
+    inp_rate, out_rate, read_mult = _price_row(rate_model)
+    acc["read_cost"] += r * inp_rate * read_mult / 1_000_000.0
     acc["write_cost"] += _write_cost(u, inp_rate)
     # The other two cost dimensions, so the full breakdown reconciles to total:
     # fresh (uncached) input at the plain input rate, output at the output rate.
@@ -237,7 +250,7 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
         and idle_gap_exceeded
     ):
         acc["ttl_evictions"] += 1
-        acc["ttl_wasted"] += w * inp_rate * 1.15 / 1_000_000.0
+        acc["ttl_wasted"] += w * inp_rate * (WRITE_MULT_5M - read_mult) / 1_000_000.0
     acc["last_turn_ts"] = cur_ts
     acc["last_turn_ttl_seconds"] = _written_ttl_seconds(u)
     acc["last_input"] = i

@@ -18,9 +18,12 @@ writes, 2.0x for 1-hour writes - see _write_cost), and the $0.01/web-search
 charge match the canonical constants in ~/.claude/CLAUDE.md ("Cost-estimation
 formula") and were verified against ~/.claude.json's authoritative per-model
 costUSD: our formula matches the harness to the penny across the fleet (every
-deviating project reconciles exactly once 1-hour writes bill at 2.0x). The Opus
-1M-context tier doubling is NOT modeled because the harness does not apply it
-(official "Long context pricing": the full 1M window bills at standard rates).
+deviating project reconciles exactly once 1-hour writes bill at 2.0x). Rates
+were re-verified 2026-10-02 against the published pricing page (per-version
+rows: Opus 5.5 $4/$20 with 0.05x cache reads, Fable 5.1 0.025x cache reads,
+Sonnet 5 and 5.5 $2/$10). The Opus 1M-context tier doubling is NOT modeled
+because the harness does not apply it (official "Long context pricing": the
+full 1M window bills at standard rates).
 
 Package layout (dependency order, no cycles):
   base     -- _json_loads (orjson fallback), color constants, fmt, color helpers,

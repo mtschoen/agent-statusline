@@ -52,7 +52,7 @@ interface BranchSpendCache {
 	spendByWindow: Record<number, number>;
 }
 
-interface Totals {
+export interface Totals {
 	input: number;
 	cacheRead: number;
 	cacheWrite: number;
@@ -174,7 +174,7 @@ function branchFingerprint(branch: any[]): string {
 	return String(count);
 }
 
-function totalsFromBranch(branch: any[]): Totals {
+export function totalsFromBranch(branch: any[]): Totals {
 	const totals: Totals = {
 		input: 0,
 		cacheRead: 0,
@@ -213,10 +213,11 @@ function totalsFromBranch(branch: any[]): Totals {
 		const idleGapExceeded = previousTimestamp !== undefined && currentTimestamp !== undefined && (currentTimestamp - previousTimestamp) / 1000 > previousTtlSeconds;
 		if (totals.turns > 1 && (usage.cacheRead ?? 0) === 0 && (usage.cacheWrite ?? 0) >= 1000 && idleGapExceeded) {
 			totals.ttlEvictions += 1;
+			const modelIdentifier = message.responseModel ?? message.model;
 			totals.ttlWasted +=
 				(usage.cacheWrite ?? 0) *
-				inputRatePerMillion(message.responseModel ?? message.model) *
-				1.15 /
+				inputRatePerMillion(modelIdentifier) *
+				(1.25 - cacheReadMultiplier(modelIdentifier)) /
 				1_000_000;
 		}
 		previousTimestamp = currentTimestamp;
@@ -332,13 +333,24 @@ function spendFromAllSessions(windowStart: number): number {
 	return spend;
 }
 
-function inputRatePerMillion(modelId: string | undefined): number {
+export function inputRatePerMillion(modelId: string | undefined): number {
 	const lowered = (modelId ?? "").toLowerCase();
-	if (lowered.includes("fable")) return 10;
+	if (lowered.includes("fable") || lowered.includes("mythos")) return 10;
+	if (lowered.includes("opus-5-5") || lowered.includes("opus-5.5")) return 4;
+	if (/opus-4(?:-1)?(?:[-@]\d{8})?(?:-v\d+(?::\d+)?)?(?:\[|$)/.test(lowered)) return 15;
 	if (lowered.includes("opus")) return 5;
+	if (/sonnet-5(-|\[|$)/.test(lowered)) return 2;
 	if (lowered.includes("sonnet")) return 3;
+	if (lowered.includes("haiku-3-5") || lowered.includes("3-5-haiku")) return 0.8;
 	if (lowered.includes("haiku")) return 1;
 	return 3;
+}
+
+export function cacheReadMultiplier(modelId: string | undefined): number {
+	const lowered = (modelId ?? "").toLowerCase();
+	if (/(fable|mythos)-5[-.]1/.test(lowered)) return 0.025;
+	if (lowered.includes("opus-5-5") || lowered.includes("opus-5.5")) return 0.05;
+	return 0.1;
 }
 
 function cacheTtlSeconds(usage: any): number {

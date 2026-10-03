@@ -52,55 +52,83 @@ def _approx(a, b, tol=1e-6):
 
 
 def _check_components_and_evictions(failures):
-    # Opus 5.0/Mtok: m1 write5000(1st,skip) m2 read20000+write2000(read>0,skip) m3 read0+write30000(evict) m4 write500(<floor,skip)
+    # Parametrized across model families to verify model-specific cache-read
+    # rates and TTL-waste write-minus-read differentials:
+    #   standard Opus: 5.0 base, 0.1 read_mult -> 1.15 waste diff
+    #   Opus 5.5:      4.0 base, 0.05 read_mult -> 1.20 waste diff
+    #   Fable 5.1:     10.0 base, 0.025 read_mult -> 1.225 waste diff
+    #   Mythos 5.1:    10.0 base, 0.025 read_mult -> 1.225 waste diff
+    # In each case: m1 write5000(1st,skip) m2 read20000+write2000(read>0,skip)
+    # m3 read0+write30000(evict) m4 write500(<floor,skip).
     # m2 wrote a 1h cache, so m3 must sit >3600s after it to read as a real TTL expiry.
-    lines = [
-        _turn("m1", read=0, write=5000, ts="2026-06-02T15:00:00.000Z"),
-        _turn("m2", read=20000, write=2000, ts="2026-06-02T15:00:10.000Z"),
-        _turn("m3", read=0, write=30000, ts="2026-06-02T16:30:00.000Z"),
-        _turn("m4", read=0, write=500, ts="2026-06-02T16:30:01.000Z"),
+    cases = [
+        ("claude-opus-4-8", 5.0, 25.0, 0.1),
+        ("claude-opus-5-5", 4.0, 20.0, 0.05),
+        ("claude-fable-5-1", 10.0, 50.0, 0.025),
+        ("claude-mythos-5-1", 10.0, 50.0, 0.025),
     ]
-    tmp = tempfile.mkdtemp(prefix="cost-split-")
-    parent = os.path.join(tmp, "sess.jsonl")
-    _write_jsonl(parent, lines)
+    for model, inp_rate, out_rate, read_mult in cases:
+        lines = [
+            _turn("m1", read=0, write=5000, model=model, ts="2026-06-02T15:00:00.000Z"),
+            _turn(
+                "m2", read=20000, write=2000, model=model, ts="2026-06-02T15:00:10.000Z"
+            ),
+            _turn(
+                "m3", read=0, write=30000, model=model, ts="2026-06-02T16:30:00.000Z"
+            ),
+            _turn("m4", read=0, write=500, model=model, ts="2026-06-02T16:30:01.000Z"),
+        ]
+        tmp = tempfile.mkdtemp(prefix=f"cost-split-{model}-")
+        parent = os.path.join(tmp, "sess.jsonl")
+        _write_jsonl(parent, lines)
 
-    walk = walk_transcript(parent, include_subagents=True)
+        walk = walk_transcript(parent, include_subagents=True)
 
-    exp_read_cost = 20000 * 5.0 * 0.1 / 1e6
-    # All four turns default to a 1h cache write -> 2.0x base input (not 1.25x).
-    exp_write_cost = (5000 + 2000 + 30000 + 500) * 5.0 * 2.0 / 1e6
-    exp_wasted = 30000 * 5.0 * 1.15 / 1e6
+        exp_read_cost = 20000 * inp_rate * read_mult / 1e6
+        # All four turns default to a 1h cache write -> 2.0x base input (not 1.25x).
+        exp_write_cost = (5000 + 2000 + 30000 + 500) * inp_rate * 2.0 / 1e6
+        exp_wasted = 30000 * inp_rate * (1.25 - read_mult) / 1e6
 
-    if not _approx(walk["read_cost"], exp_read_cost):
-        failures.append(f"read_cost {walk['read_cost']!r} != {exp_read_cost!r}")
-    if not _approx(walk["write_cost"], exp_write_cost):
-        failures.append(f"write_cost {walk['write_cost']!r} != {exp_write_cost!r}")
-    if walk["ttl_evictions"] != 1:
-        failures.append(f"ttl_evictions {walk['ttl_evictions']!r} != 1")
-    if not _approx(walk["ttl_wasted"], exp_wasted):
-        failures.append(f"ttl_wasted {walk['ttl_wasted']!r} != {exp_wasted!r}")
+        if not _approx(walk["read_cost"], exp_read_cost):
+            failures.append(
+                f"{model} read_cost {walk['read_cost']!r} != {exp_read_cost!r}"
+            )
+        if not _approx(walk["write_cost"], exp_write_cost):
+            failures.append(
+                f"{model} write_cost {walk['write_cost']!r} != {exp_write_cost!r}"
+            )
+        if walk["ttl_evictions"] != 1:
+            failures.append(f"{model} ttl_evictions {walk['ttl_evictions']!r} != 1")
+        if not _approx(walk["ttl_wasted"], exp_wasted):
+            failures.append(
+                f"{model} ttl_wasted {walk['ttl_wasted']!r} != {exp_wasted!r}"
+            )
 
-    # The other two breakdown components: fresh input at the plain input rate
-    # (5.0/Mtok opus), output at the output rate (25.0/Mtok). Four turns at the
-    # _turn defaults (inp=10, out=100) -> 40 input tok, 400 output tok.
-    exp_input_cost = 40 * 5.0 / 1e6
-    exp_output_cost = 400 * 25.0 / 1e6
-    if not _approx(walk["input_cost"], exp_input_cost):
-        failures.append(f"input_cost {walk['input_cost']!r} != {exp_input_cost!r}")
-    if not _approx(walk["output_cost"], exp_output_cost):
-        failures.append(f"output_cost {walk['output_cost']!r} != {exp_output_cost!r}")
-    # The four components must reconcile to the walk's own token cost (cost has no
-    # web-search add-on in this fixture, so the sum is exact).
-    exp_components = (
-        walk["read_cost"]
-        + walk["write_cost"]
-        + walk["input_cost"]
-        + walk["output_cost"]
-    )
-    if not _approx(walk["cost"], exp_components):
-        failures.append(
-            f"four components {exp_components!r} must sum to cost {walk['cost']!r}"
+        # The other two breakdown components: fresh input at the plain input rate,
+        # output at the output rate. Four turns at the _turn defaults (inp=10, out=100)
+        # -> 40 input tok, 400 output tok.
+        exp_input_cost = 40 * inp_rate / 1e6
+        exp_output_cost = 400 * out_rate / 1e6
+        if not _approx(walk["input_cost"], exp_input_cost):
+            failures.append(
+                f"{model} input_cost {walk['input_cost']!r} != {exp_input_cost!r}"
+            )
+        if not _approx(walk["output_cost"], exp_output_cost):
+            failures.append(
+                f"{model} output_cost {walk['output_cost']!r} != {exp_output_cost!r}"
+            )
+        # The four components must reconcile to the walk's own token cost (cost has no
+        # web-search add-on in this fixture, so the sum is exact).
+        exp_components = (
+            walk["read_cost"]
+            + walk["write_cost"]
+            + walk["input_cost"]
+            + walk["output_cost"]
         )
+        if not _approx(walk["cost"], exp_components):
+            failures.append(
+                f"{model} four components {exp_components!r} must sum to cost {walk['cost']!r}"
+            )
 
 
 def _check_write_cost_ttl_split(failures):
@@ -251,37 +279,53 @@ def _check_format_cache_read_cost_not_passed_through_fmt(failures):
 
 
 def _check_model_rates(failures):
-    # Fable 5 bills $10/$50 per MTok (platform.claude.com models overview).
-    # Before the fable row existed, _rates_for fell back to sonnet ($3/$15)
-    # and every fable session under-estimated cost 3.33x. Mythos ids map to the
-    # same Fable family. Sonnet 5 is date-aware: intro $2/$10 through 2026-08-31,
-    # standard $3/$15 from 2026-09-01. "sonnet-5" must NOT catch "sonnet-4-5".
-    from statusline_lib.cost import _rates_for
+    # Published rates, verified 2026-10-02 against
+    # https://platform.claude.com/docs/en/about-claude/pricing. Fable bills
+    # $10/$50 (before the fable row existed _rates_for fell back to sonnet and
+    # under-estimated 3.33x); Opus 5.5 is $4/$20; Sonnet 5 and 5.5 are $2/$10
+    # with no date step; Opus 4 / 4.1 are $15/$75. "sonnet-5" must NOT catch
+    # "sonnet-4-5". Cache reads: 0.025x on Fable 5.1, 0.05x on Opus 5.5.
+    from statusline_lib.cost import _price_row, _rates_for
 
-    # (model_id, date_prefix, expected)
+    # (model_id, expected input, output, cache read multiplier)
     cases = [
-        ("claude-fable-5", "", (10.0, 50.0)),
-        ("claude-fable-5[1m]", "", (10.0, 50.0)),
-        ("claude-mythos-preview", "", (10.0, 50.0)),
-        ("claude-opus-4-8", "", (5.0, 25.0)),
-        ("claude-haiku-4-5", "", (1.0, 5.0)),
-        ("totally-unknown-model", "", (3.0, 15.0)),  # sonnet fallback
-        # Sonnet 5 date-aware boundary.
-        ("claude-sonnet-5", "2026-05-10", (2.0, 10.0)),
-        ("claude-sonnet-5", "2026-08-31", (2.0, 10.0)),
-        ("claude-sonnet-5", "2026-09-01", (3.0, 15.0)),
-        ("claude-sonnet-5", "2026-09-15", (3.0, 15.0)),
-        ("claude-sonnet-5", "", (2.0, 10.0)),  # no date -> intro
-        # Non-collision: sonnet-4-5 stays generic sonnet, date-independent.
-        ("claude-sonnet-4-5", "2026-05-10", (3.0, 15.0)),
-        ("claude-sonnet-4-5", "2026-09-15", (3.0, 15.0)),
+        ("claude-fable-5", 10.0, 50.0, 0.1),
+        ("claude-fable-5[1m]", 10.0, 50.0, 0.1),
+        ("claude-fable-5-1", 10.0, 50.0, 0.025),
+        ("claude-fable-5.1", 10.0, 50.0, 0.025),
+        ("claude-mythos-preview", 10.0, 50.0, 0.1),
+        ("claude-mythos-5-1", 10.0, 50.0, 0.025),
+        ("claude-mythos-5.1", 10.0, 50.0, 0.025),
+        ("claude-opus-5-5", 4.0, 20.0, 0.05),
+        ("claude-opus-5.5", 4.0, 20.0, 0.05),
+        ("claude-opus-5", 5.0, 25.0, 0.1),
+        ("claude-opus-4-8", 5.0, 25.0, 0.1),
+        ("claude-opus-4-7", 5.0, 25.0, 0.1),
+        ("claude-opus-4-6", 5.0, 25.0, 0.1),
+        ("claude-opus-4-1-20250805", 15.0, 75.0, 0.1),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", 15.0, 75.0, 0.1),
+        ("claude-opus-4-1@20250805", 15.0, 75.0, 0.1),
+        ("claude-opus-4-20250514", 15.0, 75.0, 0.1),
+        ("claude-opus-4@20250514", 15.0, 75.0, 0.1),
+        ("us.anthropic.claude-opus-4-20250514-v1:0", 15.0, 75.0, 0.1),
+        ("claude-opus-4-5@20251101", 5.0, 25.0, 0.1),
+        ("us.anthropic.claude-opus-4-5-20251101-v1:0", 5.0, 25.0, 0.1),
+        ("claude-sonnet-5", 2.0, 10.0, 0.1),
+        ("claude-sonnet-5-5", 2.0, 10.0, 0.1),
+        ("claude-sonnet-4-6", 3.0, 15.0, 0.1),
+        ("claude-sonnet-4-5", 3.0, 15.0, 0.1),
+        ("claude-haiku-4-5-20251001", 1.0, 5.0, 0.1),
+        ("claude-3-5-haiku-20241022", 0.8, 4.0, 0.1),
+        ("totally-unknown-model", 3.0, 15.0, 0.1),  # sonnet fallback
     ]
-    for model_id, date_prefix, expected in cases:
-        got = _rates_for(model_id, date_prefix)
-        if got != expected:
+    for model_id, inp, out, read_mult in cases:
+        got = _price_row(model_id)
+        if got != (inp, out, read_mult):
             failures.append(
-                f"rates for {model_id!r} @ {date_prefix!r}: {got!r} != {expected!r}"
+                f"price row for {model_id!r}: {got!r} != {(inp, out, read_mult)!r}"
             )
+        if _rates_for(model_id) != (inp, out):
+            failures.append(f"rates for {model_id!r}: {_rates_for(model_id)!r}")
 
 
 def _check_parse_ts_bad_value(failures):

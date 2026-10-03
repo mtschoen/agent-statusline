@@ -110,7 +110,7 @@ def _check_active_teammate_with_cost(failures):
         with open(jsonl, "w", encoding=_TEXT_ENCODING) as f:
             # opus 1M input tokens -> $5.00, but model here is a generic
             # sonnet: 1M input @ $3/Mtok -> $3.00. (Use sonnet-4-6, not
-            # sonnet-5 -- the latter is now a distinct, date-aware family.)
+            # sonnet-5 -- the latter bills $2/$10.)
             f.write(
                 _assistant_line("claude-sonnet-4-6", {"input_tokens": 1_000_000}) + "\n"
             )

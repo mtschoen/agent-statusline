@@ -220,22 +220,15 @@ def _check_git_command(failures):
 
 
 def _check_refresh_writes_cache(failures, tmpdir):
-    """refresh_git_ref_cache runs git and persists the result where the
-    render's cached read can serve it -- branch/short_hash plus the
-    working-tree badge counters (numstat added/deleted, rev-list
-    ahead/behind)."""
+    """refresh_git_ref_cache runs only the two cheap ref lookups and persists
+    branch/short_hash where the render's cached read can serve them. The
+    working-tree diff belongs to the separate git-worktree refresh."""
     original = gitref_mod._git_command
     calls = []
 
     def fake_git(cwd, *args):
         calls.append(args)
-        if args[0] == "symbolic-ref":
-            return "main"
-        if args[0] == "rev-parse":
-            return "abc123"
-        if args[0] == "diff":
-            return "3\t1\tfoo.py\n-\t-\tbin.dat"
-        return "2\t58"  # rev-list --left-right --count: behind 2, ahead 58
+        return "main" if args[0] == "symbolic-ref" else "abc123"
 
     gitref_mod._git_command = fake_git
     try:
@@ -248,19 +241,15 @@ def _check_refresh_writes_cache(failures, tmpdir):
             f"refresh_git_ref_cache must return the fresh values;"
             f" got {(branch, short_hash)!r}"
         )
-    if len(calls) != 4:
+    if [args[0] for args in calls] != ["symbolic-ref", "rev-parse"]:
         failures.append(
-            f"refresh_git_ref_cache must call git four times; got {len(calls)} calls"
+            f"refresh_git_ref_cache must run only the ref lookups; got {calls!r}"
         )
     cache_path = gitref_mod._git_ref_cache_path("/refreshed/repo", state_dir=tmpdir)
     with open(cache_path, encoding=_TEXT_ENCODING) as f:
         persisted = json.load(f)
-    expected = {"added": 3, "deleted": 1, "ahead": 58, "behind": 2}
-    for key, want in expected.items():
-        if persisted.get(key) != want:
-            failures.append(
-                f"refresh must persist {key}={want}; got {persisted.get(key)!r}"
-            )
+    if (persisted.get("branch"), persisted.get("short_hash")) != ("main", "abc123"):
+        failures.append(f"refresh must persist branch/short_hash; got {persisted!r}")
 
 
 def main():

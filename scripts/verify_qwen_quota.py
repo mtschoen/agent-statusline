@@ -203,6 +203,8 @@ def _check_format_warm_render(failures):
             failures.append(
                 f"both horizons at half their limits must show 50%: {rendered!r}"
             )
+        if qwen_quota._LOCAL_ONLY_MARK in rendered:
+            failures.append(f"a fresh anchor must not carry the loc mark: {rendered!r}")
         if spawner.calls:
             failures.append("a fresh cache render must not spawn")
 
@@ -268,25 +270,51 @@ def _check_format_exhausted_render(failures):
             failures.append(
                 f"a fresh exhausted-cache render must not spawn: {spawner.calls!r}"
             )
-    # Post-window exhausted anchor: normal pace suffix, no ~<clock>.
-    anchor_key_post = f"12000,20000@{NOW - 6 * 3600}"
+    # Boundary and post-window exhausted anchors: while held (age < 5h) the 5h
+    # segment shows ~<clock>; once expired (age >= 5h) it falls through to
+    # pure local, showing the muted loc mark and no surplus projection (+).
+    # 40 local calls of 12000 is the observed `0% +1495.0h` production case.
     with _Fixture() as fx:
         fx.set_env(BAILIAN_TOKEN_PLAN_API_KEY=_TEST_API_KEY)
-        fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": anchor_key_post})
-        fx.write_cache(
-            {
-                "anchor_key": anchor_key_post,
-                "anchored_at_unix": NOW - 6 * 3600,
-                "calls_since_anchor": 0,
-                "calls_5h": 0,
-                "cached_at_unix": NOW - 1,
-            }
-        )
-        rendered = format_qwen_quota()
-        if "~" in rendered:
-            failures.append(
-                f"post-window exhausted render must not carry ~<clock>: {rendered!r}"
+        for age_seconds, is_held in (
+            (FIVE_H - 1, True),
+            (FIVE_H, False),
+            (FIVE_H + 1, False),
+            (6 * 3600, False),
+        ):
+            anchored_at = NOW - age_seconds
+            key = f"12000,20000@{anchored_at}"
+            fx.write_prefs({"STATUSLINE_QWEN_QUOTA_ANCHOR": key})
+            fx.write_cache(
+                {
+                    "anchor_key": key,
+                    "anchored_at_unix": anchored_at,
+                    "calls_since_anchor": 40,
+                    "calls_5h": 40,
+                    "cached_at_unix": NOW - 1,
+                }
             )
+            five_hour_segment = format_qwen_quota().split("wk:")[0]
+            if is_held:
+                expected_suffix = (
+                    f"~{pace_module._fmt_local_clock(anchored_at + FIVE_H)}"
+                )
+                if (
+                    expected_suffix not in five_hour_segment
+                    or qwen_quota._LOCAL_ONLY_MARK in five_hour_segment
+                ):
+                    failures.append(
+                        f"held render wrong suffix at age {age_seconds}: {five_hour_segment!r}"
+                    )
+            else:
+                if (
+                    "~" in five_hour_segment
+                    or qwen_quota._LOCAL_ONLY_MARK not in five_hour_segment
+                    or "+" in five_hour_segment
+                ):
+                    failures.append(
+                        f"expired render wrong suffix at age {age_seconds}: {five_hour_segment!r}"
+                    )
 
 
 def _check_pace_and_horizon_guards(failures):

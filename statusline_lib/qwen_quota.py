@@ -38,7 +38,9 @@ anchors, locally recorded calls are layered on top:
   exhausted until the anchored population is provably gone". After the hold
   window the count falls through to pure local like the decay path, and
   while holding the pace suffix is replaced with the local clock time at
-  which the window clears.
+  which the window clears. In that pure-local state the pace suffix becomes a
+  muted `loc` mark and no projection is rendered: a local-only count is a
+  lower bound, so a surplus projection from it inverts the error.
 
 With no (or an unparseable) anchor the field renders nothing - a hidden
 field beats a wrong one.
@@ -62,7 +64,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-from .base import app_dir, color_high_bad, platform_name
+from .base import RESET, app_dir, color_high_bad, platform_name
 from .pace import _fmt_delta, _fmt_local_clock, _project_pace
 from .prefs import load_prefs, pref
 from .server_jobs import request_refresh
@@ -82,6 +84,14 @@ _PREF_WEEKLY = "STATUSLINE_QWEN_QUOTA_WEEKLY"
 _PREF_ANCHOR = "STATUSLINE_QWEN_QUOTA_ANCHOR"
 _LIMIT_OFF = ("0", "off", "false", "no")
 _ANCHOR_RE = re.compile(r"^\s*(\d+)\s*,\s*(\d+)\s*@\s*(\d+(?:\.\d+)?)\s*$")
+# Muted grey, the repo's secondary-label hue (agy.py, turns.py, kimi.py).
+_MUTED_LABEL_COLOR = "\x1b[38;5;245m"
+# Replaces the pace projection once the anchor expires out of the rolling
+# window. The 5h figure is then this host's calls alone - a LOWER BOUND on the
+# shared key's usage - so a surplus projection inverts the error (40 local
+# calls of 12000 rendered `0% +1495.0h`), and the label keeps the surviving
+# percentage from reading as total plan usage.
+_LOCAL_ONLY_MARK = f" {_MUTED_LABEL_COLOR}loc{RESET}"
 
 
 def _now_unix():
@@ -252,6 +262,14 @@ def _anchor_exhausted(anchor_five_hour, five_hour_limit):
     return five_hour_limit is not None and anchor_five_hour >= five_hour_limit
 
 
+def _anchor_expired(anchor, now_unix):
+    """True once the anchor is older than the rolling window, so the anchored
+    population has certainly expired out of it and `_five_hour_used` falls
+    through to this host's own calls. One definition of that boundary: the
+    hold, the decay and the pace projection all key off it."""
+    return now_unix - anchor[2] >= _FIVE_HOUR_SECONDS
+
+
 def _hold_clearance_unix(anchor, five_hour_limit, now_unix):
     """anchored_at + 5h when an exhausted anchor is being held flat (the
     moment the anchored population has certainly expired out of the rolling
@@ -260,7 +278,7 @@ def _hold_clearance_unix(anchor, five_hour_limit, now_unix):
     anchor_five_hour, _anchor_week, anchored_at = anchor
     if not _anchor_exhausted(anchor_five_hour, five_hour_limit):
         return None
-    if now_unix - anchored_at >= _FIVE_HOUR_SECONDS:
+    if _anchor_expired(anchor, now_unix):
         return None
     return anchored_at + _FIVE_HOUR_SECONDS
 
@@ -269,19 +287,20 @@ def _five_hour_used(entry, anchor, now_unix, five_hour_limit=None):
     """Anchored 5h usage: linear decay of the anchor population across the 5h
     after anchoring plus every local call since the anchor (all of which sit
     inside the rolling window while the decay runs); pure local once the
-    window is fully post-anchor. When the anchor is exhausted (at or above
-    the limit), the value is HELD flat at the anchored value until
-    anchored_at + 5h - shared-key traffic plausibly replaces every expiring
-    call, so the honest estimate is 'still exhausted until the anchored
-    population is provably gone'. Local calls made during the hold are NOT
-    added: they either 429'd or rode the extra-usage pack, neither of which
-    is defensibly counted against the base window."""
+    window is fully post-anchor, where the result is a lower bound on the
+    shared key's real usage and `format_qwen_quota` labels it as such. When
+    the anchor is exhausted (at or above the limit), the value is HELD flat at
+    the anchored value until anchored_at + 5h - shared-key traffic plausibly
+    replaces every expiring call, so the honest estimate is 'still exhausted
+    until the anchored population is provably gone'. Local calls made during
+    the hold are NOT added: they either 429'd or rode the extra-usage pack,
+    neither of which is defensibly counted against the base window."""
     anchor_five_hour, _anchor_week, anchored_at = anchor
-    elapsed = now_unix - anchored_at
-    if elapsed >= _FIVE_HOUR_SECONDS:
+    if _anchor_expired(anchor, now_unix):
         return float(entry.get("calls_5h") or 0)
     if _anchor_exhausted(anchor_five_hour, five_hour_limit):
         return float(anchor_five_hour)
+    elapsed = now_unix - anchored_at
     decay = max(0.0, (_FIVE_HOUR_SECONDS - elapsed) / _FIVE_HOUR_SECONDS)
     delta = entry.get("calls_since_anchor") or 0
     return anchor_five_hour * decay + delta
@@ -347,11 +366,12 @@ def format_qwen_quota():
     five_hour_used = _five_hour_used(entry, anchor, now_unix, five_hour_limit)
     week_used = _week_used(entry, anchor, now_unix)
     clearance = _hold_clearance_unix(anchor, five_hour_limit, now_unix)
-    five_hour_pace = (
-        f" ~{_fmt_local_clock(clearance)}"
-        if clearance is not None
-        else _rolling_pace_part(five_hour_used, five_hour_limit)
-    )
+    if clearance is not None:
+        five_hour_pace = f" ~{_fmt_local_clock(clearance)}"
+    elif _anchor_expired(anchor, now_unix):
+        five_hour_pace = _LOCAL_ONLY_MARK
+    else:
+        five_hour_pace = _rolling_pace_part(five_hour_used, five_hour_limit)
     parts = [
         part
         for part in (

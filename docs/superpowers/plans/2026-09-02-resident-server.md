@@ -878,7 +878,9 @@ def check_render_takes_the_walk_it_is_given(failures):
     """The extracted render must never call walk_transcript itself: the
     server owns the walk and maintains it incrementally."""
     walk = _walk(read=123456)
-    rendered = render_claude_statusline(_payload(), _REPO, walk, now=_NOW, state_dir=state)
+    rendered = render_claude_statusline(
+        _payload(), _REPO, walk, now=_NOW, state_dir=state
+    )
     if "123" not in rendered:
         failures.append("the render ignored the walk it was handed")
 
@@ -1261,7 +1263,9 @@ def check_a_partial_trailing_line_is_not_consumed(failures):
         walked = tables.walk_for(entry)
         if walked["assistant_turns"] != 2:
             failures.append("a partial trailing line must not be folded")
-        if entry.offsets[path] != os.path.getsize(path) - len('{"type": "assistant", "mess'):
+        if entry.offsets[path] != os.path.getsize(path) - len(
+            '{"type": "assistant", "mess'
+        ):
             failures.append("the offset must stop at the last complete newline")
 
 
@@ -2067,67 +2071,68 @@ Expected: FAIL with `AttributeError: 'Server' object has no attribute 'bind'`.
 - [ ] **Step 3: Write the implementation**
 
 ```python
-    def bind(self):
-        """Bind a random localhost UDP port and publish server.json.
+def bind(self):
+    """Bind a random localhost UDP port and publish server.json.
 
-        SO_EXCLUSIVEADDRUSE on Windows: without it a second server can bind
-        the same port and silently steal half the datagrams. The receive
-        buffer is raised well above the default because a burst of concurrent
-        renders arrives as a burst of datagrams, and a datagram the kernel
-        drops costs that client its reply (it falls back, which is correct but
-        worse than a real render).
-        """
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        if os.name == "nt":
-            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
-            if exclusive is not None:
-                self._socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
-        with contextlib.suppress(OSError):
-            self._socket.setsockopt(
-                socket.SOL_SOCKET, socket.SO_RCVBUF, RECEIVE_BUFFER_BYTES
-            )
-        self._socket.bind(("127.0.0.1", 0))
-        self._socket.settimeout(RECEIVE_POLL_SECONDS)
-        self._port = self._socket.getsockname()[1]
-        self._pool.start()
-        write_server_info(
-            server_info_path(self._state_directory),
-            pid=os.getpid(),
-            port=self._port,
-            version=code_version(self._repository_root),
-            started_at=self._started_at,
-            platform=platform_name() or "claude",
+    SO_EXCLUSIVEADDRUSE on Windows: without it a second server can bind
+    the same port and silently steal half the datagrams. The receive
+    buffer is raised well above the default because a burst of concurrent
+    renders arrives as a burst of datagrams, and a datagram the kernel
+    drops costs that client its reply (it falls back, which is correct but
+    worse than a real render).
+    """
+    self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if os.name == "nt":
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            self._socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+    with contextlib.suppress(OSError):
+        self._socket.setsockopt(
+            socket.SOL_SOCKET, socket.SO_RCVBUF, RECEIVE_BUFFER_BYTES
         )
-        return self._port
+    self._socket.bind(("127.0.0.1", 0))
+    self._socket.settimeout(RECEIVE_POLL_SECONDS)
+    self._port = self._socket.getsockname()[1]
+    self._pool.start()
+    write_server_info(
+        server_info_path(self._state_directory),
+        pid=os.getpid(),
+        port=self._port,
+        version=code_version(self._repository_root),
+        started_at=self._started_at,
+        platform=platform_name() or "claude",
+    )
+    return self._port
 
-    def serve_forever(self):
-        """Receive, handle, reply, until shutdown or the idle window passes.
 
-        The timeout on the socket is what makes the idle check work without a
-        sleep anywhere: every RECEIVE_POLL_SECONDS the loop either has a
-        datagram or gets a chance to notice it has been idle for ten minutes.
-        """
-        while not self.stop_requested:
-            try:
-                data, address = self._socket.recvfrom(MAXIMUM_DATAGRAM_BYTES)
-            except socket.timeout:
-                if self._clock() - self._last_request_at >= self._idle_exit_seconds:
-                    self.stop_requested = True
-                continue
-            except OSError:
-                log_traceback(self._error_log_path)
-                continue
-            try:
-                request = json.loads(data.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                continue
-            if not isinstance(request, dict):
-                continue
-            reply = self.handle_request(request)
-            if reply is None:
-                continue
-            with contextlib.suppress(OSError):
-                self._socket.sendto(reply.encode("utf-8"), address)
+def serve_forever(self):
+    """Receive, handle, reply, until shutdown or the idle window passes.
+
+    The timeout on the socket is what makes the idle check work without a
+    sleep anywhere: every RECEIVE_POLL_SECONDS the loop either has a
+    datagram or gets a chance to notice it has been idle for ten minutes.
+    """
+    while not self.stop_requested:
+        try:
+            data, address = self._socket.recvfrom(MAXIMUM_DATAGRAM_BYTES)
+        except socket.timeout:
+            if self._clock() - self._last_request_at >= self._idle_exit_seconds:
+                self.stop_requested = True
+            continue
+        except OSError:
+            log_traceback(self._error_log_path)
+            continue
+        try:
+            request = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(request, dict):
+            continue
+        reply = self.handle_request(request)
+        if reply is None:
+            continue
+        with contextlib.suppress(OSError):
+            self._socket.sendto(reply.encode("utf-8"), address)
 ```
 
 `serve(argv=None)` resolves the state directory and repository root, constructs a `Server`, binds, runs one housekeeping sweep immediately (the spec's "on start and hourly", and the reason roughly 2,000 stale beacon caches are still on disk), calls `serve_forever` in a `try` whose `finally` calls `close()` (which stops the pool and removes the info file), and returns 0.
@@ -2271,11 +2276,21 @@ def check_the_client_resolves_the_same_directories_as_the_package(failures):
     from statusline_lib.base import app_dir, state_dir
 
     for environment in _DIRECTORY_CASES:
-        printed = subprocess.run(
-            [sys.executable, os.path.join(_REPO, "statusline_client.py"),
-             "--print-directories"],
-            capture_output=True, text=True, timeout=30, env=environment,
-        ).stdout.strip().splitlines()
+        printed = (
+            subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(_REPO, "statusline_client.py"),
+                    "--print-directories",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=environment,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
         with _patched_environment(environment):
             expected = [app_dir(), state_dir()]
         if printed != expected:
@@ -2592,8 +2607,14 @@ def check_the_client_and_the_package_agree_on_the_version(failures):
     from statusline_lib.server_info import code_version, version_input_files
 
     client_version = subprocess.run(
-        [sys.executable, os.path.join(_REPO, "statusline_client.py"), "--print-version"],
-        capture_output=True, text=True, timeout=30,
+        [
+            sys.executable,
+            os.path.join(_REPO, "statusline_client.py"),
+            "--print-version",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
     ).stdout.strip()
     if client_version != code_version(_REPO):
         failures.append("client and server compute different code versions")
@@ -2969,7 +2990,9 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
                 f"{context.pool.peak_in_flight()} jobs ran at once, the cap is 4"
             )
         if context.pool.worker_count() != 4:
-            failures.append(f"pool has {context.pool.worker_count()} threads, expected 4")
+            failures.append(
+                f"pool has {context.pool.worker_count()} threads, expected 4"
+            )
 
     blank = [result for result in results if not result.stdout.strip()]
     nonzero = [result for result in results if result.returncode != 0]
@@ -3086,7 +3109,9 @@ def _server_hook_command(repo, platform="claude"):
     longer starts.
     """
     target = f"{repo}/statusline_client.py"
-    app_subdirectory = ".gemini/antigravity-cli" if platform == "antigravity" else ".claude"
+    app_subdirectory = (
+        ".gemini/antigravity-cli" if platform == "antigravity" else ".claude"
+    )
     if os.name == "nt":
         command = (
             f'py -3 "{target}" --ensure-server'

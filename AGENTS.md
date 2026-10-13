@@ -174,6 +174,15 @@ directory but one. A new walk-priced or otherwise non-trivial data source
 should go through the same job, not grow its own inline TTL cache or its own
 thread.
 
+Claude Code renders the status line while a session is idle, so every
+per-cwd refresh job fires on its TTL around the clock, not just while the
+user types. A short TTL is only safe for cheap work. Gate an expensive job on
+a cheap change fingerprint instead, as `gitref.py`'s `git-worktree` refresh
+does: it probes HEAD plus the index file's `(mtime_ns, size)` and reruns
+`git diff --numstat` only when they move or a max age passes. Before that
+split, an idle session in a Unity-sized monorepo spent ~13 cores for a second
+every ~6s on a diff the Claude line never showed.
+
 Platform routing is pinned once, at spawn: a spawned server's own argv
 carries no `--statusline-platform` flag, so `ensure_server` pins the render's
 resolved platform into `STATUSLINE_PLATFORM` in the spawned server's

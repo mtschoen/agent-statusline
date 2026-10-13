@@ -25,6 +25,7 @@ def check_dispatch_table_covers_every_refresher(failures):
         "pace-hourly",
         "window-spend",
         "git-ref",
+        "git-worktree",
         "beacon-latest",
         "session-count",
         "bias-factor",

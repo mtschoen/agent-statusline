@@ -33,6 +33,7 @@ REFRESHER_MODULES = {
     "pace-hourly": ("pace", "refresh_pace_hourly_cache"),
     "window-spend": ("burnrate", "refresh_window_spend_cache"),
     "git-ref": ("gitref", "refresh_git_ref_cache"),
+    "git-worktree": ("gitref", "refresh_git_worktree_cache"),
     "beacon-latest": ("beacon_cache", "refresh_beacon_latest_cache"),
     "session-count": ("sessions", "refresh_session_count_cache"),
     "bias-factor": ("beacon", "refresh_bias_factor_cache"),

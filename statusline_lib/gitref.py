@@ -6,6 +6,16 @@ against the upstream, mirroring kimi-code's built-in footer badge, which
 computes the same numbers in-process and never puts them in the status_line
 payload).
 
+The two halves have separate caches and separate refresh kinds because their
+costs differ by orders of magnitude: branch/short_hash is two ref lookups,
+while `git diff --numstat HEAD` stats the whole working tree (about a second
+of every core on a Unity-sized monorepo). The ref half refreshes on a short
+TTL. The counter half probes cheaply on the same cadence -- HEAD's hash plus
+the index file's (mtime_ns, size), which every commit, add, reset, checkout
+and rebase rewrites -- and reruns the diff only when that fingerprint moves
+or _GIT_WORKTREE_MAX_AGE_SECONDS has passed. Unstaged edits touch nothing git
+tracks, so the max age is what bounds how long the badge can lag one.
+
 Render-perf ratchet step 1 (PLAN.md) TTL-cached this, but a cache miss still
 paid the ~9ms git cost inline. Render-perf ratchet step 3 moves the miss/
 stale path onto the same in-process refresh pattern as the pace/spend walks
@@ -21,6 +31,7 @@ Imports:
 """
 
 import hashlib
+import math
 import os
 import time
 
@@ -30,6 +41,8 @@ from .server_jobs import request_refresh
 from .ttlcache import read_raw_cache, write_ttl_cache
 
 _GIT_REF_CACHE_TTL_SECONDS = 2.5
+_GIT_WORKTREE_MAX_AGE_SECONDS = 60
+_GIT_WORKTREE_COMPUTED_KEY = "computed_at_unix"
 
 
 def _git_command(cwd, *arguments):
@@ -45,10 +58,18 @@ def _git_command(cwd, *arguments):
     return ""
 
 
-def _git_ref_cache_path(cwd, state_dir=None):
+def _cwd_cache_path(prefix, cwd, state_dir):
     normalized = os.path.normcase(os.path.normpath(cwd))
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-    return os.path.join(_resolve_state_dir(state_dir), f"gitref-{digest}.json")
+    return os.path.join(_resolve_state_dir(state_dir), f"{prefix}-{digest}.json")
+
+
+def _git_ref_cache_path(cwd, state_dir=None):
+    return _cwd_cache_path("gitref", cwd, state_dir)
+
+
+def _git_worktree_cache_path(cwd, state_dir=None):
+    return _cwd_cache_path("gitwt", cwd, state_dir)
 
 
 def _git_ref_raw_cached(cwd, state_dir=None):
@@ -70,7 +91,7 @@ def _git_ref_raw_cached(cwd, state_dir=None):
 
 
 # Cache keys for the working-tree badge counters, persisted by
-# refresh_git_ref_cache alongside branch/short_hash.
+# refresh_git_worktree_cache.
 _GIT_STAT_KEYS = ("added", "deleted", "ahead", "behind")
 
 
@@ -84,28 +105,36 @@ def _count(value):
 
 
 def git_working_tree_cached(cwd, state_dir=None):
-    """Return (added, deleted, ahead, behind) for cwd from the git-ref
+    """Return (added, deleted, ahead, behind) for cwd from the git-worktree
     cache -- same stale-while-revalidate contract as _git_ref_raw_cached:
-    never a synchronous git call, stale beats blank beats blocked. An entry
-    predating the badge counters (keys absent) is served as zeros and
-    backfilled by the refresh it requests."""
+    never a synchronous git call, stale beats blank beats blocked. A stale
+    entry requests a refresh, which is a cheap fingerprint probe unless the
+    repository actually changed (refresh_git_worktree_cache)."""
     if not cwd:
         return 0, 0, 0, 0
-    path = _git_ref_cache_path(cwd, state_dir)
-    cached = read_raw_cache(path)
+    cached = read_raw_cache(_git_worktree_cache_path(cwd, state_dir))
     if cached is None:
-        request_refresh("git-ref", cwd)
+        request_refresh("git-worktree", cwd)
         return 0, 0, 0, 0
-    stats = tuple(_count(cached.get(key)) for key in _GIT_STAT_KEYS)
-    if _cache_age(cached) >= _GIT_REF_CACHE_TTL_SECONDS or any(
-        key not in cached for key in _GIT_STAT_KEYS
-    ):
-        request_refresh("git-ref", cwd)
-    return stats
+    if _cache_age(cached) >= _GIT_REF_CACHE_TTL_SECONDS:
+        request_refresh("git-worktree", cwd)
+    return tuple(_count(cached.get(key)) for key in _GIT_STAT_KEYS)
+
+
+def _is_finite_timestamp(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _cache_age(cached):
-    return time.time() - cached.get("cached_at_unix", 0)
+    timestamp = cached.get("cached_at_unix") if isinstance(cached, dict) else None
+    if not _is_finite_timestamp(timestamp):
+        return float("inf")
+    return time.time() - timestamp
 
 
 def _parse_numstat(text):
@@ -135,15 +164,55 @@ def _parse_ahead_behind(text):
 
 
 def refresh_git_ref_cache(cwd):
-    """Recompute cwd's git ref and working-tree counters and persist them
-    for the render's cached read. Runs on the resident server's worker pool
-    (server_jobs.run_refresh), never on the render path. The numstat and
-    rev-list calls fail harmlessly ("" -> zeros) on an unborn HEAD or a
-    branch with no upstream."""
-    state_dir = _resolve_state_dir(None)
-    path = _git_ref_cache_path(cwd, state_dir)
+    """Recompute cwd's branch and short hash and persist them for the
+    render's cached read. Runs on the resident server's worker pool
+    (server_jobs.run_refresh), never on the render path."""
+    path = _git_ref_cache_path(cwd)
     branch = _git_command(cwd, "symbolic-ref", "--short", "HEAD")
     short_hash = _git_command(cwd, "rev-parse", "--short", "HEAD")
+    write_ttl_cache(path, {"branch": branch, "short_hash": short_hash})
+    return branch, short_hash
+
+
+def _worktree_fingerprint(cwd):
+    """[git_dir, head_hash, index_mtime_ns, index_size] -- one rev-parse and
+    one stat, cheap however large the working tree. A failed rev-parse (not
+    a repository, unborn HEAD) or a missing index leaves blanks, which still
+    compare equal across probes, so the max age alone drives the recompute."""
+    lines = _git_command(cwd, "rev-parse", "--absolute-git-dir", "HEAD").splitlines()
+    git_dir, head = [*lines, "", ""][:2]
+    if not git_dir:
+        return ["", "", 0, 0]
+    try:
+        stat = os.stat(os.path.join(git_dir, "index"))
+    except OSError:
+        return [git_dir, head, 0, 0]
+    return [git_dir, head, stat.st_mtime_ns, stat.st_size]
+
+
+def _worktree_cache_current(cached, fingerprint):
+    if cached is None or cached.get("fingerprint") != fingerprint:
+        return False
+    computed_at = cached.get(_GIT_WORKTREE_COMPUTED_KEY)
+    if not _is_finite_timestamp(computed_at):
+        return False
+    return time.time() - computed_at < _GIT_WORKTREE_MAX_AGE_SECONDS
+
+
+def refresh_git_worktree_cache(cwd):
+    """Refresh cwd's working-tree badge counters. Runs on the resident
+    server's worker pool, never on the render path. When the fingerprint is
+    unchanged and the counters are younger than the max age, the entry is
+    rewritten as-is so its probe timestamp moves and the reader stops
+    requesting; otherwise the numstat diff and the ahead/behind rev-list
+    run. Both fail harmlessly ("" -> zeros) on an unborn HEAD or a branch
+    with no upstream. Returns True when the diff ran."""
+    path = _git_worktree_cache_path(cwd)
+    fingerprint = _worktree_fingerprint(cwd)
+    cached = read_raw_cache(path)
+    if _worktree_cache_current(cached, fingerprint):
+        write_ttl_cache(path, cached)
+        return False
     added, deleted = _parse_numstat(
         _git_command(cwd, "diff", "--no-color", "--numstat", "HEAD", "--")
     )
@@ -153,12 +222,12 @@ def refresh_git_ref_cache(cwd):
     write_ttl_cache(
         path,
         {
-            "branch": branch,
-            "short_hash": short_hash,
+            "fingerprint": fingerprint,
+            _GIT_WORKTREE_COMPUTED_KEY: time.time(),
             "added": added,
             "deleted": deleted,
             "ahead": ahead,
             "behind": behind,
         },
     )
-    return branch, short_hash
+    return True

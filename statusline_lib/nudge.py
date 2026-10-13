@@ -37,20 +37,21 @@ NUDGE_SOFT_CEILING_TOKENS = 300_000
 
 
 def format_nudge(ctx_used):
-    """UserPromptSubmit additionalContext: offer /wrap, never run it
-    (user-initiated). Reports live occupancy so the agent can frame the
-    suggestion concretely instead of citing a bare threshold."""
+    """UserPromptSubmit additionalContext: chain via the wrap skill at a
+    natural stopping point. Reports live occupancy so the agent can act on the
+    signal concretely instead of citing a bare threshold."""
     used_k = round((ctx_used or 0) / 1000)
     ceiling_k = NUDGE_SOFT_CEILING_TOKENS // 1000
     return (
         f"This session is around {used_k}K tokens of context. Model recall "
         "degrades as the window fills, and every turn re-reads the full "
         f"context, so past ~{ceiling_k}K it is usually worth winding "
-        "down. If you are at a natural stopping point, consider suggesting "
-        "`/wrap` to the user to close the session cleanly. Do not interrupt "
-        "in-progress work -- finish the current thread first, and skip the "
-        "suggestion entirely if a wrap was already offered or declined this "
-        "session."
+        "down. This is a soft signal: do not interrupt in-progress work. "
+        "Once the current ask or plan task reaches a natural stopping point, "
+        "run the wrap skill in chain mode: wrap with a handoff and continue "
+        "in a fresh background session. If work genuinely needs to keep going "
+        "long, keep going; there is no hard ceiling. Skip this if a wrap or "
+        "chain already happened or the owner declined this session."
     )
 
 

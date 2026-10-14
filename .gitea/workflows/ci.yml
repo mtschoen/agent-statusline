@@ -224,28 +224,24 @@ jobs:
           }
           "pin_only=$($pinOnly.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Install Python 3.11 (python-build-standalone)
+      - name: Resolve Python 3.11 from the fleet tool store
         if: steps.changed-files.outputs.pin_only != 'true'
-        # setup-python@v5 and the python.org MSI both fail under the SYSTEM-account
-        # WinSW runner (WOW64 path redirection / SYSTEM ACLs break registration);
-        # the portable tarball just unpacks with the runner's tar.exe. See local-ci
-        # docs/project-ci-setup.md "Python install on the Windows runner".
         shell: pwsh
         run: |
-          $pyDir = "C:\hostedtoolcache\Python311"
-          if (-not (Test-Path "$pyDir\python.exe")) {
-            $url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260414/cpython-3.11.15+20260414-x86_64-pc-windows-msvc-install_only.tar.gz"
-            $tar = Join-Path $env:RUNNER_TEMP "python-3.11.tar.gz"
-            Invoke-WebRequest -Uri $url -OutFile $tar -UseBasicParsing
-            New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
-            tar -xzf $tar -C $pyDir --strip-components=1
-            if (-not (Test-Path "$pyDir\python.exe")) {
-              throw "tar extracted but python.exe not at $pyDir\python.exe"
-            }
+          $ErrorActionPreference = 'Stop'
+          $pythonDirectory = & (Join-Path $env:SCHOEN_LAB_TOOL_STORE_ROOT "resolver/use-tool.ps1") python --add-to-path
+          if ($LASTEXITCODE -ne 0) {
+            throw "Fleet Python resolver failed; provision Python 3.11 in the runner tool store."
           }
-          & "$pyDir\python.exe" --version
-          "$pyDir"         | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          "$pyDir\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          if (-not (Test-Path -LiteralPath (Join-Path $pythonDirectory "python.exe") -PathType Leaf)) {
+            throw "Fleet Python executable missing in '$pythonDirectory'; fix runner provisioning."
+          }
+          $env:PATH = "$pythonDirectory;$env:PATH"
+          $pythonVersion = python --version
+          if ($LASTEXITCODE -ne 0 -or $pythonVersion -notmatch '^Python 3\.11\.\d+$') {
+            throw "Expected fleet Python 3.11, got '$pythonVersion'; fix runner provisioning."
+          }
+          Write-Host $pythonVersion
 
       - name: Install optional runtime deps
         if: steps.changed-files.outputs.pin_only != 'true'

@@ -21,6 +21,16 @@
 #   ignore CREATE_NO_WINDOW alone, and without the extra layer the statusline's
 #   detached SWR refresh children flash a console on Windows. Upstream
 #   process_safe carries the same fix now -- reconcile on the next re-vendor.
+# - run_captured isolates the child in its own process group (new session on
+#   POSIX, CREATE_NEW_PROCESS_GROUP on Windows) and the timeout path kills the
+#   whole tree (_kill_process_tree: killpg / taskkill /T) rather than only the
+#   direct child. Upstream reaches the same result through a Job Object plus a
+#   /proc descendant sweep (schoen-lab#1330); that machinery is several hundred
+#   lines of ctypes with Windows-only pragmas this repo's coverage gate forbids,
+#   so the vendored copy carries the small form. The bug it closes: a timed-out
+#   `git diff` left its `git-lfs filter-process` grandchild hashing a 21 GB
+#   working tree, one survivor per refresh, until they starved the disk
+#   (agent-statusline, 2026-10-13).
 """Sanctioned subprocess wrapper - THE ONLY module allowed to call subprocess.
 
 This is the `process_safe` package: a tiny, zero-dependency home for the one
@@ -52,9 +62,15 @@ from __future__ import annotations
 
 import contextlib
 import os
+import signal
 import subprocess
 import threading
 from dataclasses import dataclass
+
+# How long the timeout path waits for `taskkill /T` itself before giving up on
+# it and falling back to a direct kill. Bounded so a wedged taskkill can never
+# turn a 2 s git budget into an open-ended wait on the worker pool.
+_TREE_KILL_TIMEOUT_SECONDS = 3
 
 
 def _windows_hidden_kwargs() -> dict[str, object]:
@@ -78,6 +94,53 @@ def _windows_hidden_kwargs() -> dict[str, object]:
         startupinfo.wShowWindow = 0  # SW_HIDE
         kwargs["startupinfo"] = startupinfo
     return kwargs
+
+
+def _captured_spawn_kwargs() -> dict[str, object]:
+    """Popen kwargs for run_captured's child: hidden window plus its own
+    process group on Windows (``CREATE_NEW_PROCESS_GROUP``, ``getattr``-guarded
+    so the nt arm is exercisable on any host), a new session on POSIX. The
+    group is what lets the timeout path take down everything the child
+    spawned, not just the child."""
+    if os.name == "nt":
+        kwargs = _windows_hidden_kwargs()
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+        return kwargs
+    return {"start_new_session": True}
+
+
+def _kill_process_tree(process: subprocess.Popen) -> None:
+    """Best-effort kill of *process* and every descendant.
+
+    On Windows ``taskkill /T /F`` walks the PID tree (the only stdlib-free way
+    to reach a grandchild there); on POSIX the child leads its own session, so
+    ``killpg`` reaches the whole group. Either way the direct ``kill()`` runs
+    last as the backstop. Nothing here raises: the caller is already unwinding
+    a ``ProcessTimeout`` and a kill that fails because the tree is gone is the
+    outcome we wanted.
+
+    Known gap, kept deliberately small: on Windows a grandchild whose parent
+    has already exited is unreachable by PID tree, which is what upstream's
+    Job Object closes. The statusline's one real offender (a live ``git diff``
+    feeding a ``git-lfs filter-process``) is a live tree and is covered.
+    """
+    if os.name == "nt":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_TREE_KILL_TIMEOUT_SECONDS,
+                **_windows_hidden_kwargs(),
+            )
+    else:
+        with contextlib.suppress(OSError):  # group already gone
+            os.killpg(process.pid, getattr(signal, "SIGKILL", 9))
+    with contextlib.suppress(OSError):  # child already gone
+        process.kill()
 
 
 @dataclass(frozen=True)
@@ -123,9 +186,6 @@ def run_captured(
     stderr attached) so callers that relied on ``subprocess.run(check=True)``
     can keep their existing ``except CalledProcessError`` handling.
     """
-    hide_kwargs: dict[str, object] = {}
-    if os.name == "nt":
-        hide_kwargs = _windows_hidden_kwargs()
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -135,7 +195,7 @@ def run_captured(
         text=text,
         env=env,
         close_fds=True,
-        **hide_kwargs,
+        **_captured_spawn_kwargs(),
     )
 
     captured: dict[str, str] = {}
@@ -153,8 +213,7 @@ def run_captured(
     thread.join(timeout)
 
     if thread.is_alive():
-        with contextlib.suppress(OSError):  # child already gone
-            process.kill()
+        _kill_process_tree(process)
         raise ProcessTimeout(command, timeout)
 
     result = ProcessResult(

@@ -56,8 +56,13 @@ jobs:
           fi
           echo "pin_only=$PIN_ONLY" >> "$GITHUB_OUTPUT"
 
+      - name: Detect toolchain baked into the runner image
+        id: baked
+        shell: bash
+        run: bash ci/baked-toolchain.sh python
+
       - uses: actions/setup-python@v5
-        if: steps.changed-files.outputs.pin_only != 'true'
+        if: steps.baked.outputs.python != 'true' && steps.changed-files.outputs.pin_only != 'true'
         with:
           python-version: '3.11'
       - name: Check syntax
@@ -128,8 +133,13 @@ jobs:
           fi
           echo "pin_only=$PIN_ONLY" >> "$GITHUB_OUTPUT"
 
+      - name: Detect toolchain baked into the runner image
+        id: baked
+        shell: bash
+        run: bash ci/baked-toolchain.sh python
+
       - uses: actions/setup-python@v5
-        if: steps.changed-files.outputs.pin_only != 'true'
+        if: steps.baked.outputs.python != 'true' && steps.changed-files.outputs.pin_only != 'true'
         with:
           python-version: '3.11'
       - name: Install optional runtime deps

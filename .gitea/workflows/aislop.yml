@@ -37,7 +37,13 @@ jobs:
             exit 1
           fi
           echo "AISLOP_FORK_COMMIT=$commit" >> "$GITHUB_ENV"
+      - name: Detect toolchain baked into the runner image
+        id: baked
+        shell: bash
+        run: bash ci/baked-toolchain.sh node
+
       - uses: actions/setup-node@v4
+        if: steps.baked.outputs.node != 'true'
         with:
           # 22, not 20: building the fork via its "prepare": "tsdown" script
           # requires Node ^22.18 || >=24.11 at build time (tsdown >= 0.22 calls

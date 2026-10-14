@@ -517,6 +517,50 @@ def check_a_deeply_nested_datagram_does_not_end_the_loop(failures):
         failures.append("the loop stopped answering after a deeply nested datagram")
 
 
+def check_an_unexpected_handler_error_is_logged_and_survived(failures):
+    """Whichever input first reaches the loop's catch-all varies by Python
+    version (a deep nesting that raises RecursionError on one interpreter
+    parses cleanly on another), so this drives it directly: a handler that
+    raises an exception no narrower guard expects is logged to the server
+    error log and the next request is still answered."""
+    clock = _FakeClock()
+    server = _socket_server(clock=clock)
+    server.bind()
+    logged_paths = []
+    real_handle_request = server.handle_request
+    calls = []
+
+    def handle_request(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise RuntimeError("synthetic handler failure")
+        return real_handle_request(request)
+
+    server.handle_request = handle_request
+    scripted = _ScriptedSocket(
+        clock, [_datagram({"kind": "status"}), _datagram({"kind": "status"})]
+    )
+    real_socket, server._socket = server._socket, scripted
+    saved_log_traceback = server_module.log_traceback
+    server_module.log_traceback = lambda path: logged_paths.append(path)
+    try:
+        server.serve_forever()
+    except BaseException as error:
+        failures.append(
+            f"an unexpected handler error ended the receive loop: {error!r}"
+        )
+    finally:
+        server_module.log_traceback = saved_log_traceback
+        server._socket = real_socket
+        server.close()
+    if logged_paths != [server._error_log_path]:
+        failures.append(
+            f"an unexpected handler error must be logged once: {logged_paths!r}"
+        )
+    if not _answered_a_status_request(scripted.sent):
+        failures.append("the loop stopped answering after an unexpected handler error")
+
+
 def check(failures):
     check_server_exposes_startup_housekeeping(failures)
     check_server_exposes_exception_logging(failures)
@@ -533,6 +577,7 @@ def check(failures):
     check_a_failing_bind_is_logged_and_returns_one(failures)
     check_a_surrogate_bearing_reply_does_not_end_the_loop(failures)
     check_a_deeply_nested_datagram_does_not_end_the_loop(failures)
+    check_an_unexpected_handler_error_is_logged_and_survived(failures)
 
 
 def main():

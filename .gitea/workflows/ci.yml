@@ -73,7 +73,9 @@ jobs:
         # The validation gate. Config lives in pyproject.toml; 0 findings is
         # the bar. This step is the hard gate that blocks merge on regression.
         run: |
-          pip install ruff
+          # The fleet image bakes ruff on PATH (/usr/local/bin); install the
+          # same pinned version only where it is absent.
+          command -v ruff > /dev/null || pip install ruff==0.17.1
           ruff check .
           ruff format --check .
       - name: Type check (pyright, non-blocking)

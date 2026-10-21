@@ -82,9 +82,7 @@ jobs:
         if: steps.changed-files.outputs.pin_only != 'true'
         # Informational for now. Drop the `|| true` to hard-fail once the
         # codebase is clean against pyright.
-        run: |
-          pip install pyright
-          pyright || true
+        run: pyright || true
       - name: Lint shell (shellcheck, non-blocking)
         if: steps.changed-files.outputs.pin_only != 'true'
         # Informational until the .sh scripts are triaged to 0 findings, then
@@ -144,12 +142,6 @@ jobs:
         if: steps.baked.outputs.python != 'true' && steps.changed-files.outputs.pin_only != 'true'
         with:
           python-version: '3.11'
-      - name: Install optional runtime deps
-        if: steps.changed-files.outputs.pin_only != 'true'
-        # psutil is import-guarded in statusline_lib, but installing it lets the
-        # suite exercise the real process-enumeration path instead of the mtime
-        # fallback. coverage powers the 100% line-coverage gate below.
-        run: pip install psutil coverage
       - name: Run verification scripts (coverage-gated)
         if: steps.changed-files.outputs.pin_only != 'true'
         # Run every scripts/verify_*.py under coverage; collect failures so one

@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
 # UserPromptSubmit hook: inject a brief reminder of progress-beacon trigger
-# criteria into the agent's context. Fires once per user prompt, before the
+# criteria into the agent's context. Fires once per owner prompt, before the
 # agent starts any tool calls - the strongest moment to influence first-action
 # behavior.
 #
-# Conditional: skip injection if the session already has a non-end beacon
-# (skill is firing - no need to remind). Always inject if no beacon yet, or
-# if the latest beacon is kind=end (turn boundary; next prompt may be a
-# fresh non-trivial turn).
+# Conditional: skip injection when the prompt is harness-generated rather than
+# typed by the owner. Claude Code fires UserPromptSubmit for Monitor and
+# background task notifications (prompt starts with "<task-notification>") and
+# for teammate messages (prompt starts with "Another Claude session sent a
+# message:"); both are matched as fixed prefixes after leading whitespace.
+# Also skip injection if the session already has a non-end beacon (skill is
+# firing - no need to remind). Always inject if no beacon yet, or if the
+# latest beacon is kind=end (turn boundary; next prompt may be a fresh
+# non-trivial turn).
 set -euo pipefail
 
 input="$(cat)"
 session_id="$(printf '%s' "$input" | jq -r '.session_id // empty')"
 if [[ -z "$session_id" || ! "$session_id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo '{}'
+    exit 0
+fi
+
+prompt="$(printf '%s' "$input" | jq -r '.prompt // empty')"
+prompt="${prompt#"${prompt%%[![:space:]]*}"}"
+if [[ "$prompt" == '<task-notification>'* || "$prompt" == 'Another Claude session sent a message:'* ]]; then
     echo '{}'
     exit 0
 fi

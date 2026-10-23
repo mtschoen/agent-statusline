@@ -109,7 +109,9 @@ layer; skip this section if you don't want the nudges.
 ## Nudge paths and rate limiting
 
 `hooks/prompt-reminder.sh` (UserPromptSubmit) injects a one-line
-reminder of the trigger criteria on each user prompt, unless the
+reminder of the trigger criteria on each owner-typed prompt (prompts
+starting with `<task-notification>` or `Another Claude session sent a
+message:` are harness-generated and skipped), unless the
 session's latest visible beacon is a live `begin`/`report` (mid-turn
 prompt while the agent is already pacing).
 

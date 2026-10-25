@@ -48,7 +48,7 @@ def check_count_excludes_child_session_env(failures):
     # environment marker to be excluded.
     import statusline_lib.sessions as sessions_mod
 
-    target_cwd = os.path.normcase("/home/user/proj")
+    target_cwd = os.path.normcase("/home/example/proj")
     procs = [
         FakeSnapProc(40, 1, "explorer.exe", 100.0),
         FakeSnapProc(50, 40, "cmd.exe", 200.0),
@@ -79,7 +79,7 @@ def check_count_child_session_env_unreadable_fails_open(failures):
     # environment couldn't be read.
     import statusline_lib.sessions as sessions_mod
 
-    target_cwd = os.path.normcase("/home/user/proj")
+    target_cwd = os.path.normcase("/home/example/proj")
     procs = [
         FakeSnapProc(40, 1, "explorer.exe", 100.0),
         FakeSnapProc(50, 40, "cmd.exe", 200.0),

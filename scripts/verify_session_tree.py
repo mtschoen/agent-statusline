@@ -143,7 +143,7 @@ def check_process_iter_uses_cheap_attrs(failures):
     # lazily for the few pids it visits.
     import statusline_lib.sessions as sessions_mod
 
-    target_cwd = os.path.normcase("/home/user/proj")
+    target_cwd = os.path.normcase("/home/example/proj")
     fake = _make_fake_psutil(
         [
             _FakeSnapProc(50, 40, "cmd.exe", 200.0),
@@ -193,7 +193,7 @@ def check_access_denied_parent_still_counts(failures):
     # parent is GONE, not when it is merely opaque.
     import statusline_lib.sessions as sessions_mod
 
-    target_cwd = os.path.normcase("/home/user/proj")
+    target_cwd = os.path.normcase("/home/example/proj")
     procs = [
         _FakeSnapProc(50, 40, "cmd.exe", 200.0, meta_raises=_FakePsutilError()),
         _FakeSnapProc(100, 50, "claude", 300.0, ["claude"], target_cwd),
@@ -212,7 +212,7 @@ def check_count_excludes_agent_descendants(failures):
     # whether the helper's parent chain is intact or already dead (disowned).
     import statusline_lib.sessions as sessions_mod
 
-    target_cwd = os.path.normcase("/home/user/proj")
+    target_cwd = os.path.normcase("/home/example/proj")
     procs = [
         _FakeSnapProc(40, 1, "explorer.exe", 100.0),
         _FakeSnapProc(50, 40, "cmd.exe", 200.0),
@@ -248,7 +248,7 @@ def check_count_excludes_agent_descendants(failures):
 def check_count_includes_kimi_sessions(failures):
     import statusline_lib.sessions as sessions_mod
 
-    target_cwd = os.path.normcase("/home/user/proj")
+    target_cwd = os.path.normcase("/home/example/proj")
     shell_processes = [
         _FakeSnapProc(40, 1, "explorer.exe", 100.0),
         _FakeSnapProc(50, 40, "cmd.exe", 200.0),
@@ -310,7 +310,7 @@ def check_count_via_psutil_access_denied(failures):
     # the process is skipped, while a readable matching session still counts.
     import statusline_lib.sessions as sessions_mod
 
-    target_cwd = os.path.normcase("/home/user/proj")
+    target_cwd = os.path.normcase("/home/example/proj")
     denied = _FakePsutilError("no access")
     procs = [
         _FakeSnapProc(40, 1, "explorer.exe", 100.0),

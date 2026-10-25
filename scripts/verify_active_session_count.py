@@ -82,53 +82,53 @@ def check_dispatch(failures):
 
 
 def check_classifier(failures):
-    target = os.path.normcase("/home/user/proj")
+    target = os.path.normcase("/home/example/proj")
 
-    if not _process_matches("claude", ["claude"], "/home/user/proj", target):
+    if not _process_matches("claude", ["claude"], "/home/example/proj", target):
         failures.append("interactive claude in target cwd should match")
-    if not _process_matches("claude.exe", ["claude.exe"], "/home/user/proj", target):
+    if not _process_matches("claude.exe", ["claude.exe"], "/home/example/proj", target):
         failures.append("claude.exe in target cwd should match (Windows)")
     if not _process_matches(
-        "node", ["node", "/path/to/claude/cli.js"], "/home/user/proj", target
+        "node", ["node", "/path/to/claude/cli.js"], "/home/example/proj", target
     ):
         failures.append("node-wrapped claude should match")
 
     with patch.object(sessions_mod.os, "name", "nt"):
-        if not _process_matches("kimi.exe", ["kimi.exe"], "/home/user/proj", target):
+        if not _process_matches("kimi.exe", ["kimi.exe"], "/home/example/proj", target):
             failures.append("kimi.exe should match on Windows")
-        if _process_matches("kimi", ["kimi"], "/home/user/proj", target):
+        if _process_matches("kimi", ["kimi"], "/home/example/proj", target):
             failures.append("POSIX kimi binary should not match on Windows")
 
     with patch.object(sessions_mod.os, "name", "posix"):
-        if not _process_matches("kimi", ["kimi"], "/home/user/proj", target):
+        if not _process_matches("kimi", ["kimi"], "/home/example/proj", target):
             failures.append("kimi binary should match on POSIX")
         if not _process_matches(
             "node",
             ["node", "/opt/@moonshot-ai/kimi-code/dist/cli.js"],
-            "/home/user/proj",
+            "/home/example/proj",
             target,
         ):
             failures.append("node-wrapped kimi should match on POSIX")
-        if _process_matches("kimi.exe", ["kimi.exe"], "/home/user/proj", target):
+        if _process_matches("kimi.exe", ["kimi.exe"], "/home/example/proj", target):
             failures.append("Windows kimi.exe should not match on POSIX")
 
     for render_name, render_command in (
         ("py.exe", ["py", "-3", "C:/repo/kimi_statusline.py"]),
         ("python3", ["python3", "/repo/kimi_statusline.py"]),
     ):
-        if _process_matches(render_name, render_command, "/home/user/proj", target):
+        if _process_matches(render_name, render_command, "/home/example/proj", target):
             failures.append(f"Kimi statusline renderer {render_name} should not match")
 
     # Negative: -p / --print headless mode (Task subagents, scripted)
     if _process_matches(
         "claude.exe",
         ["claude.exe", "-p", "--output-format", "json"],
-        "/home/user/proj",
+        "/home/example/proj",
         target,
     ):
         failures.append("-p subagent should NOT match")
     if _process_matches(
-        "claude", ["claude", "--print", "hi"], "/home/user/proj", target
+        "claude", ["claude", "--print", "hi"], "/home/example/proj", target
     ):
         failures.append("--print subagent should NOT match")
 
@@ -137,11 +137,13 @@ def check_classifier(failures):
         failures.append("wrong cwd should NOT match")
 
     # Negative: unrelated process name
-    if _process_matches("python", ["python", "script.py"], "/home/user/proj", target):
+    if _process_matches(
+        "python", ["python", "script.py"], "/home/example/proj", target
+    ):
         failures.append("non-claude process should NOT match")
 
     # Negative: node without 'claude' in argv (regular Node app)
-    if _process_matches("node", ["node", "server.js"], "/home/user/proj", target):
+    if _process_matches("node", ["node", "server.js"], "/home/example/proj", target):
         failures.append("node without claude in argv should NOT match")
 
     # Negative: empty / None cwd

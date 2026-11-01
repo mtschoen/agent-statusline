@@ -56,15 +56,6 @@ jobs:
           fi
           echo "pin_only=$PIN_ONLY" >> "$GITHUB_OUTPUT"
 
-      - name: Detect toolchain baked into the runner image
-        id: baked
-        shell: bash
-        run: bash ci/baked-toolchain.sh python
-
-      - uses: actions/setup-python@v5
-        if: steps.baked.outputs.python != 'true' && steps.changed-files.outputs.pin_only != 'true'
-        with:
-          python-version: '3.11'
       - name: Check syntax
         if: steps.changed-files.outputs.pin_only != 'true'
         run: python -m py_compile statusline.py subagent_statusline.py statusline_client.py statusline_client_support.py statusline_server.py install.py wrap_nudge.py statusline_lib/*.py
@@ -73,9 +64,7 @@ jobs:
         # The validation gate. Config lives in pyproject.toml; 0 findings is
         # the bar. This step is the hard gate that blocks merge on regression.
         run: |
-          # The fleet image bakes ruff on PATH (/usr/local/bin); install the
-          # same pinned version only where it is absent.
-          command -v ruff > /dev/null || pip install ruff==0.17.1
+          # The fleet image bakes ruff 0.17.1 on PATH (/usr/local/bin).
           ruff check .
           ruff format --check .
       - name: Type check (pyright, non-blocking)
@@ -133,15 +122,6 @@ jobs:
           fi
           echo "pin_only=$PIN_ONLY" >> "$GITHUB_OUTPUT"
 
-      - name: Detect toolchain baked into the runner image
-        id: baked
-        shell: bash
-        run: bash ci/baked-toolchain.sh python
-
-      - uses: actions/setup-python@v5
-        if: steps.baked.outputs.python != 'true' && steps.changed-files.outputs.pin_only != 'true'
-        with:
-          python-version: '3.11'
       - name: Run verification scripts (coverage-gated)
         if: steps.changed-files.outputs.pin_only != 'true'
         # Run every scripts/verify_*.py under coverage; collect failures so one

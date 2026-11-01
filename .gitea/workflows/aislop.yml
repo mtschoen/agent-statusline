@@ -37,33 +37,20 @@ jobs:
             exit 1
           fi
           echo "AISLOP_FORK_COMMIT=$commit" >> "$GITHUB_ENV"
-      - name: Detect toolchain baked into the runner image
-        id: baked
-        shell: bash
-        run: bash ci/baked-toolchain.sh node
-
-      - uses: actions/setup-node@v4
-        if: steps.baked.outputs.node != 'true'
-        with:
-          # Matches the fleet image's baked Node (24.22.0), which already
-          # satisfies the fork's tsdown build floor (^22.18 || >=24.11).
-          node-version: '24.22.0'
       - name: Build aislop (pinned fork commit)
         # Cloned outside the workspace so aislop does not scan the fork's own source.
         # From Gitea (canonical, always current), not the github.com mirror (can lag
         # behind by many commits, so a freshly bumped pin can be absent there).
         # The fork is a pnpm workspace; its package.json "packageManager" is the
-        # only record of the pnpm version. The step reads that spec, activates it
-        # through corepack (offline from the version the fleet image bakes), and
-        # fails loudly if the active pnpm differs (no job-time npm download).
+        # only record of the pnpm version. The step reads that spec and fails
+        # loudly if the pnpm the fleet image bakes differs (an image bump, not a
+        # job-time download). Node and pnpm are baked into the image.
         env:
-          COREPACK_ENABLE_NETWORK: '0'
           PNPM_STORE_DIR: /var/cache/fleet/pnpm
           npm_config_store_dir: /var/cache/fleet/pnpm
         run: |
           git clone https://gitea.fleet.sticktoitive.net/schoen/aislop.git "$RUNNER_TEMP/aislop"
           git -C "$RUNNER_TEMP/aislop" checkout "$AISLOP_FORK_COMMIT"
-          corepack enable 2>/dev/null || true
           pnpm_spec="$(node -e '
             const fs = require("fs");
             const manifest = process.argv[1];
@@ -81,9 +68,8 @@ jobs:
             process.stdout.write(packageManager);
           ' "$RUNNER_TEMP/aislop/package.json")"
           pnpm_version="${pnpm_spec#pnpm@}"
-          corepack prepare "$pnpm_spec" --activate 2>/dev/null || true
           test "$(pnpm --version)" = "$pnpm_version"
-          (cd "$RUNNER_TEMP/aislop" && pnpm install --frozen-lockfile)
+          (cd "$RUNNER_TEMP/aislop" && pnpm install --prefer-offline --frozen-lockfile)
       - name: aislop quality gate
         # Sanity-fail if the scan didn't actually walk the repo (avoid a
         # silent pass on an empty/broken run): require a healthy file count

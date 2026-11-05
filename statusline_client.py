@@ -58,6 +58,9 @@ SPAWN_LOCK_STALE_SECONDS = 10.0
 # out of a checkout other than the one it is running from.
 _REPOSITORY_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# Mirrors python_floor.MIN_PYTHON; see _python_too_old.
+_MINIMUM_PYTHON = (3, 11)
+
 # What --ensure-server probes with: the status kind renders nothing.
 _LIVENESS_KIND = "status"
 
@@ -357,6 +360,28 @@ def _payload_from_stdin():
     return payload if isinstance(payload, dict) else {}
 
 
+def _python_too_old():
+    """True (after one stderr line, which the hook redirects to its log) when
+    this interpreter is below the floor statusline_lib needs. Checked only on
+    the --ensure-server path: it is the one that imports statusline_lib, to
+    spawn the server, and an old interpreter would die there with a bare
+    ImportError. The floor and message duplicate python_floor.py because this
+    file may import nothing outside the standard library
+    (verify_render_budget_static.py); verify_wrap_nudge_python_floor.py checks
+    the copy against python_floor."""
+    if tuple(sys.version_info[:2]) >= _MINIMUM_PYTHON:
+        return False
+    have = ".".join(str(part) for part in sys.version_info[:3])
+    want = ".".join(str(part) for part in _MINIMUM_PYTHON)
+    print(
+        f"ensure-server: {sys.executable} is Python {have}, but agent-statusline "
+        f"needs {want}+. Re-run install.py with a Python {want}+ interpreter to "
+        f"rewrite this hook with an absolute interpreter path.",
+        file=sys.stderr,
+    )
+    return True
+
+
 def main(kind, argv=None):
     """One render: resolve the server, ask it, print what it says.
 
@@ -380,6 +405,9 @@ def main(kind, argv=None):
     if "--print-version" in arguments:
         # The same duplication check, for the other copied algorithm.
         sys.stdout.write(f"{_support().code_version(_REPOSITORY_ROOT)}\n")
+        return 0
+
+    if "--ensure-server" in arguments and _python_too_old():
         return 0
 
     info = read_server_info(server_info_path())

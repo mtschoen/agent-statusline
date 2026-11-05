@@ -9,6 +9,9 @@ Shared by ``wrap_nudge.py`` (runtime guard) and ``statusline_lib.nudge_install``
 (install-time check), so the two can never disagree about the floor.
 """
 
+import os
+import sys
+
 MIN_PYTHON = (3, 11)
 
 
@@ -26,3 +29,17 @@ def too_old_message(version_info, executable, hook_name):
         f"{want}+. Re-run install.py with a Python {want}+ interpreter to "
         f"rewrite this hook with an absolute interpreter path."
     )
+
+
+def checked_interpreter(interpreter, hook_name):
+    """Absolute interpreter path to bake into an installed hook command.
+
+    Defaults to the interpreter running the installer, which must meet the
+    floor: a bare ``python3`` can resolve to an older interpreter than the one
+    that passed the check (macOS /usr/bin/python3 is 3.9). An explicit
+    ``interpreter`` is trusted as given (tests)."""
+    if interpreter is not None:
+        return interpreter
+    if is_too_old(sys.version_info):
+        raise RuntimeError(too_old_message(sys.version_info, sys.executable, hook_name))
+    return os.path.abspath(sys.executable)

@@ -19,6 +19,8 @@ exercise the merge against in-memory settings.
 
 import os
 
+from python_floor import checked_interpreter
+
 # Stable identity stamp for our hook entry, appended to the command string as
 # a shell comment (`#` starts a comment in both POSIX sh and PowerShell, the
 # two shells Claude Code runs hook commands through, so it never affects
@@ -27,12 +29,17 @@ import os
 _SERVER_SENTINEL = "#managed-by:agent-statusline/ensure-server"
 
 
-def _server_hook_command(repo, platform="claude"):
+def _server_hook_command(repo, platform="claude", interpreter=None):
     """Shell-aware command for the SessionStart ensure-server hook.
 
     Runs the client's liveness-and-version check only: no stdin is read and
     nothing is printed, so the hook costs one interpreter start and either
     finds a live server or spawns one in the background.
+
+    On POSIX the command pins the absolute interpreter running the installer
+    (`interpreter` overrides, for tests) rather than a bare `python3`, which
+    can be an older interpreter than statusline_lib supports; see
+    python_floor.checked_interpreter. Windows keeps the `py -3` launcher.
     """
     target = f"{repo}/statusline_client.py"
     app_subdirectory = (
@@ -45,8 +52,9 @@ def _server_hook_command(repo, platform="claude"):
             f" exit 0 {_SERVER_SENTINEL}"
         )
     else:
+        interpreter = checked_interpreter(interpreter, "install ensure-server")
         command = (
-            f'python3 "{target}" --ensure-server'
+            f'"{interpreter}" "{target}" --ensure-server'
             f' 2>>"$HOME/{app_subdirectory}/server_hook.log" || true {_SERVER_SENTINEL}'
         )
     return target, command

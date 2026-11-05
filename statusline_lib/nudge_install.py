@@ -10,9 +10,8 @@ exercise the merge against in-memory settings.
 """
 
 import os
-import sys
 
-from python_floor import is_too_old, too_old_message
+from python_floor import checked_interpreter
 
 # Stable identity stamp for our hook entry, appended to the command string as
 # a shell comment (`#` starts a comment in both POSIX sh and PowerShell, the
@@ -60,19 +59,9 @@ def _nudge_command(repo, platform="claude", interpreter=None):
     if os.name == "nt":
         command = f'py -3 "{target}" 2>>"$HOME\\{app_subdir}\\wrap_nudge_hook.log"; exit 0 {_NUDGE_SENTINEL}'
     else:
-        interpreter = _checked_interpreter(interpreter)
+        interpreter = checked_interpreter(interpreter, "install wrap nudge")
         command = f'"{interpreter}" "{target}" 2>>"$HOME/{app_subdir_unix}/wrap_nudge_hook.log" || true {_NUDGE_SENTINEL}'
     return target, command
-
-
-def _checked_interpreter(interpreter):
-    """Absolute interpreter path to bake into the hook command. Defaults to the
-    interpreter running the installer, which must meet the package floor."""
-    if interpreter is not None:
-        return interpreter
-    if is_too_old(sys.version_info):
-        raise RuntimeError(too_old_message(sys.version_info, sys.executable, "install"))
-    return os.path.abspath(sys.executable)
 
 
 def _nudge_markers(target):

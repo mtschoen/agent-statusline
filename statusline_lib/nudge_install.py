@@ -10,6 +10,9 @@ exercise the merge against in-memory settings.
 """
 
 import os
+import sys
+
+from python_floor import is_too_old, too_old_message
 
 # Stable identity stamp for our hook entry, appended to the command string as
 # a shell comment (`#` starts a comment in both POSIX sh and PowerShell, the
@@ -29,7 +32,7 @@ import os
 _NUDGE_SENTINEL = "#managed-by:agent-statusline/wrap-nudge"
 
 
-def _nudge_command(repo, platform="claude"):
+def _nudge_command(repo, platform="claude", interpreter=None):
     """Shell-aware command for the UserPromptSubmit wrap nudge hook.
 
     Wrapped so the hook can never exit 2 -- the one code that BLOCKS prompt
@@ -42,7 +45,13 @@ def _nudge_command(repo, platform="claude"):
     cmd.exe -- so %VAR% / ver>nul / || are wrong there; verified empirically by
     the stray-`nul`-file artifact), POSIX sh elsewhere. `$HOME` resolves in both
     PowerShell and sh. `; exit 0` forces non-blocking under PowerShell (works in
-    pwsh 7 and Windows PowerShell 5.1, neither of which needs `||`)."""
+    pwsh 7 and Windows PowerShell 5.1, neither of which needs `||`).
+
+    On POSIX the command pins the absolute path of the interpreter running the
+    installer (`interpreter` overrides, for tests). A bare `python3` can be a
+    different, older interpreter than the one that passed the version check --
+    macOS /usr/bin/python3 is 3.9 -- which made the hook crash on every prompt
+    with its stderr hidden. Windows keeps the `py -3` launcher."""
     target = f"{repo}/wrap_nudge.py"
     app_subdir = ".gemini\\antigravity-cli" if platform == "antigravity" else ".claude"
     app_subdir_unix = (
@@ -51,8 +60,19 @@ def _nudge_command(repo, platform="claude"):
     if os.name == "nt":
         command = f'py -3 "{target}" 2>>"$HOME\\{app_subdir}\\wrap_nudge_hook.log"; exit 0 {_NUDGE_SENTINEL}'
     else:
-        command = f'python3 "{target}" 2>>"$HOME/{app_subdir_unix}/wrap_nudge_hook.log" || true {_NUDGE_SENTINEL}'
+        interpreter = _checked_interpreter(interpreter)
+        command = f'"{interpreter}" "{target}" 2>>"$HOME/{app_subdir_unix}/wrap_nudge_hook.log" || true {_NUDGE_SENTINEL}'
     return target, command
+
+
+def _checked_interpreter(interpreter):
+    """Absolute interpreter path to bake into the hook command. Defaults to the
+    interpreter running the installer, which must meet the package floor."""
+    if interpreter is not None:
+        return interpreter
+    if is_too_old(sys.version_info):
+        raise RuntimeError(too_old_message(sys.version_info, sys.executable, "install"))
+    return os.path.abspath(sys.executable)
 
 
 def _nudge_markers(target):

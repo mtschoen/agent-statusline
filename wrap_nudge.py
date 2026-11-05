@@ -20,6 +20,18 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from python_floor import is_too_old, too_old_message
+
+# Fail loudly, not silently, on an interpreter that cannot import statusline_lib
+# (3.11+). The installed hook command swallows stderr into the hook log, so one
+# clear line there is the diagnosis. Exit 0: a hook must never block a prompt.
+if is_too_old(sys.version_info):
+    print(
+        too_old_message(sys.version_info, sys.executable, "wrap_nudge"),
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
 from statusline_lib.base import app_dir
 from statusline_lib.nudge import (
     format_nudge,

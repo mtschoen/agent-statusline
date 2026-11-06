@@ -14,12 +14,13 @@ Run from anywhere.
 import os
 import sys
 import tempfile
-import tomllib
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-import install
+import installer as install
+import statusline_lib.codex_install as codex_install
 import statusline_lib.kimi_install as kimi_install
 from statusline_lib.kimi_install import kimi_config_current, merge_kimi_config
 from statusline_lib.platform_commands import (
@@ -27,6 +28,7 @@ from statusline_lib.platform_commands import (
     _kimi_space_path_warning,
 )
 
+tomllib = codex_install.tomllib  # None below Python 3.11
 COMMAND_POSIX = 'bash "/repo/kimi-statusline-command.sh"'
 COMMAND_NT = "py -3 C:/repo/kimi_statusline.py"
 
@@ -360,9 +362,19 @@ def check(failures):
     _check_install_invalid_existing_config(failures)
 
 
+def _check_no_toml_parser(failures):
+    """Without tomllib (Python < 3.11) the merge must refuse clearly."""
+    with mock.patch.object(codex_install, "tomllib", None):
+        _expect_value_error(
+            failures, "no tomllib", "", COMMAND_POSIX, "needs Python 3.11+"
+        )
+
+
 def main():
     failures = []
-    check(failures)
+    _check_no_toml_parser(failures)
+    if tomllib is not None:
+        check(failures)
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}")

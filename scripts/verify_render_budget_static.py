@@ -39,6 +39,8 @@ import ast
 import os
 import sys
 
+from _compat import is_stdlib_module, zip_strict
+
 _TEXT_ENCODING = "utf-8"
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -112,11 +114,11 @@ def _default_timeouts(node):
     and keyword-only alike, as (parameter name, default node) pairs."""
     arguments = node.args
     positional = arguments.args[len(arguments.args) - len(arguments.defaults) :]
-    defaults = dict(zip([a.arg for a in positional], arguments.defaults, strict=True))
+    defaults = dict(zip_strict([a.arg for a in positional], arguments.defaults))
     defaults.update(
         {
             a.arg: d
-            for a, d in zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True)
+            for a, d in zip_strict(arguments.kwonlyargs, arguments.kw_defaults)
             if d is not None
         }
     )
@@ -279,7 +281,7 @@ def check_client_is_import_free(failures):
                     " process_safe is the only sanctioned subprocess surface"
                 )
                 continue
-            if all(root in sys.stdlib_module_names for root in roots):
+            if all(is_stdlib_module(root) for root in roots):
                 continue
             enclosing = _enclosing_function_name(tree, node)
             if imported == allowed_module and enclosing == allowed_function:

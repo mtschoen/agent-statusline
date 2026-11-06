@@ -11,8 +11,6 @@ exercise the merge against in-memory settings.
 
 import os
 
-from python_floor import checked_interpreter
-
 # Stable identity stamp for our hook entry, appended to the command string as
 # a shell comment (`#` starts a comment in both POSIX sh and PowerShell, the
 # two shells Claude Code runs hook commands through, so it never affects
@@ -31,7 +29,7 @@ from python_floor import checked_interpreter
 _NUDGE_SENTINEL = "#managed-by:agent-statusline/wrap-nudge"
 
 
-def _nudge_command(repo, platform="claude", interpreter=None):
+def _nudge_command(repo, platform="claude"):
     """Shell-aware command for the UserPromptSubmit wrap nudge hook.
 
     Wrapped so the hook can never exit 2 -- the one code that BLOCKS prompt
@@ -46,11 +44,11 @@ def _nudge_command(repo, platform="claude", interpreter=None):
     PowerShell and sh. `; exit 0` forces non-blocking under PowerShell (works in
     pwsh 7 and Windows PowerShell 5.1, neither of which needs `||`).
 
-    On POSIX the command pins the absolute path of the interpreter running the
-    installer (`interpreter` overrides, for tests). A bare `python3` can be a
-    different, older interpreter than the one that passed the version check --
-    macOS /usr/bin/python3 is 3.9 -- which made the hook crash on every prompt
-    with its stderr hidden. Windows keeps the `py -3` launcher."""
+    POSIX uses a bare `python3` (any python3 at or above python_floor.MIN_PYTHON
+    works, including macOS /usr/bin/python3 3.9; wrap_nudge.py itself prints a
+    one-line diagnosis below the floor). Windows keeps the `py -3` launcher.
+    Entries an earlier install pinned to an absolute interpreter are converted
+    back in place by the sentinel merge."""
     target = f"{repo}/wrap_nudge.py"
     app_subdir = ".gemini\\antigravity-cli" if platform == "antigravity" else ".claude"
     app_subdir_unix = (
@@ -59,8 +57,7 @@ def _nudge_command(repo, platform="claude", interpreter=None):
     if os.name == "nt":
         command = f'py -3 "{target}" 2>>"$HOME\\{app_subdir}\\wrap_nudge_hook.log"; exit 0 {_NUDGE_SENTINEL}'
     else:
-        interpreter = checked_interpreter(interpreter, "install wrap nudge")
-        command = f'"{interpreter}" "{target}" 2>>"$HOME/{app_subdir_unix}/wrap_nudge_hook.log" || true {_NUDGE_SENTINEL}'
+        command = f'python3 "{target}" 2>>"$HOME/{app_subdir_unix}/wrap_nudge_hook.log" || true {_NUDGE_SENTINEL}'
     return target, command
 
 

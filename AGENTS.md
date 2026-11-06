@@ -19,6 +19,19 @@ once per machine after cloning:
 Verify with `git config core.hooksPath` (should print `hooks`). The hook resolves
 `ruff` from PATH, falling back to `python -m ruff` / `python3 -m ruff`.
 
+## Python floor: 3.9, with an old-syntax guard
+
+The supported floor is `python_floor.MIN_PYTHON` (3.9, stock macOS
+`/usr/bin/python3`). Below it, `wrap_nudge.py`, `statusline_client.py` and
+`install.py` print one stderr line and exit (0 for hooks, 1 for the installer).
+Those entry files and `python_floor.py` must therefore stay parseable by very
+old Python 3: no f-strings, annotations or walrus (`verify_wrap_nudge_python_floor.py`
+enforces it). The real installer lives in `installer.py`; `install.py` is the
+thin guard. In `statusline_lib`, use `from __future__ import annotations` for
+`X | None` annotations and `timezone.utc`, not `datetime.UTC`; scripts use
+`scripts/_compat.py` for `pairwise`, `zip(strict=True)` and `stdlib_module_names`.
+CI runs the verify suite on 3.9 as well as the coverage-gated newer interpreter.
+
 ## Quality gate: aislop
 
 This project uses **aislop** as a deterministic quality gate for AI-written code

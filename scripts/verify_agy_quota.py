@@ -33,9 +33,13 @@ _NOW = 1_700_000_000.0
 
 
 def _iso(unix_ts):
-    from datetime import UTC, datetime
+    from datetime import datetime, timezone
 
-    return datetime.fromtimestamp(unix_ts, tz=UTC).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _window(remaining_fraction, resets_in_seconds):

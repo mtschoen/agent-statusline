@@ -7,7 +7,7 @@ execute this helper file as a standalone test suite.
 import json
 import os
 import tempfile
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import statusline_lib.pace as pace_module
 import statusline_lib.qwen_quota as qwen_quota
@@ -115,7 +115,9 @@ class _Fixture:
 
 
 def _iso(ts):
-    return datetime.fromtimestamp(ts, tz=UTC).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    )
 
 
 def _write_records(fx, timestamps):
@@ -141,7 +143,7 @@ def _check_week_start(failures):
         (WEEK_START, WEEK_START),  # exactly on the reset boundary
         (WEEK_START - 60, WEEK_START - 7 * 86400),  # Sunday 23:59 -> prev week
         (
-            datetime(2026, 8, 3, 0, 0, 0, tzinfo=UTC).timestamp(),
+            datetime(2026, 8, 3, 0, 0, 0, tzinfo=timezone.utc).timestamp(),
             WEEK_START,  # Monday 08:00 UTC+8 -> still that Monday's reset
         ),
     ]

@@ -38,6 +38,7 @@ import threading
 # before any statusline_lib module resolves an app_dir()-based path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _compat import zip_strict
 from _server_concurrency_helpers import (
     count_repository_python_processes,
     count_server_processes,
@@ -225,7 +226,7 @@ def check_fifty_concurrent_renders_leave_one_server(failures):
     fallbacks = _expected_fallbacks(context, _RENDER_COUNT, _CWD_COUNT)
     server_replies = 0
     fell_back = 0
-    for index, (result, fallback) in enumerate(zip(results, fallbacks, strict=True)):
+    for index, (result, fallback) in enumerate(zip_strict(results, fallbacks)):
         output = result.stdout.strip()
         if output == fallback:
             fell_back += 1

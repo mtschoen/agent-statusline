@@ -27,7 +27,7 @@ import tempfile
 import threading
 import time
 import types
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import ClassVar
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -55,7 +55,9 @@ from statusline_lib.server_jobs import request_refresh, run_refresh
 _HTTP_OK = 200
 NOW = 1787227200.0
 RESET_AT_MIDWEEK = NOW + 3.5 * 86400
-RESET_AT_MIDWEEK_ISO = datetime.fromtimestamp(RESET_AT_MIDWEEK, tz=UTC).isoformat()
+RESET_AT_MIDWEEK_ISO = datetime.fromtimestamp(
+    RESET_AT_MIDWEEK, tz=timezone.utc
+).isoformat()
 _REAL_NOW_UNIX = fable_quota._now_unix
 _PATCHED_ENV_KEYS = (
     "HOME",

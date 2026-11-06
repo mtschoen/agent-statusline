@@ -21,7 +21,7 @@ import os
 import re
 import sys
 import tempfile
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -92,10 +92,10 @@ def _check_format_beacon(failures):
     try:
         _check_format_beacon_hidden(failures)
 
-        recent_begin = (datetime.now(UTC) - timedelta(minutes=3)).strftime(
+        recent_begin = (datetime.now(timezone.utc) - timedelta(minutes=3)).strftime(
             "%Y-%m-%dT%H:%M:%S.000Z"
         )
-        recent_step = (datetime.now(UTC) - timedelta(minutes=1)).strftime(
+        recent_step = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime(
             "%Y-%m-%dT%H:%M:%S.000Z"
         )
         _beacon_mod._beacons_latest_cached = lambda session_id: {
@@ -149,7 +149,7 @@ def _check_bias_cache_fresh_hit_skips_spawn(failures, tmpdir):
     key = str(period)
     fresh = {
         key: {
-            "computed_at_unix": datetime.now(UTC).timestamp() - 1,
+            "computed_at_unix": datetime.now(timezone.utc).timestamp() - 1,
             "period_seconds": period,
             "n_pairs": 8,
             "bias_factor": 0.8,
@@ -184,7 +184,7 @@ def _check_bias_cache_stale_serves_and_spawns(failures, tmpdir):
     key = str(period)
     stale = {
         key: {
-            "computed_at_unix": datetime.now(UTC).timestamp()
+            "computed_at_unix": datetime.now(timezone.utc).timestamp()
             - _beacon_mod._BIAS_CACHE_TTL_SECONDS
             - 1,
             "period_seconds": period,
@@ -228,7 +228,7 @@ def _check_bias_cache_miss_and_wrong_period_serve_neutral_and_spawn(failures, tm
             json.dumps(
                 {
                     "999": {
-                        "computed_at_unix": datetime.now(UTC).timestamp() - 1,
+                        "computed_at_unix": datetime.now(timezone.utc).timestamp() - 1,
                         "period_seconds": 999,
                         "n_pairs": 7,
                         "bias_factor": 0.7,
@@ -273,7 +273,7 @@ def _check_refresh_bias_factor_cache_writes(failures, tmpdir):
     # Seed an unrelated period's entry that must survive the write.
     other_period_entry = {
         "300": {
-            "computed_at_unix": datetime.now(UTC).timestamp(),
+            "computed_at_unix": datetime.now(timezone.utc).timestamp(),
             "period_seconds": 300,
             "n_pairs": 42,
             "bias_factor": 2.2,
@@ -423,7 +423,7 @@ def _check_bias_cache_alternating_periods(failures, tmpdir):
     cache_path = os.path.join(tmpdir, "bias-cache-alternating.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path
     period_a, period_b = 604800, 300
-    now = datetime.now(UTC).timestamp()
+    now = datetime.now(timezone.utc).timestamp()
     seeded = {
         str(period_a): {
             "computed_at_unix": now - 1,
@@ -477,7 +477,7 @@ def _check_bias_cache_stale_period_spawns_only_its_own_key(failures, tmpdir):
     cache_path = os.path.join(tmpdir, "bias-cache-mixed-freshness.json")
     _beacon_mod._BIAS_CACHE_PATH = cache_path
     period_a, period_b = 604800, 300
-    now = datetime.now(UTC).timestamp()
+    now = datetime.now(timezone.utc).timestamp()
     seeded = {
         str(period_a): {
             "computed_at_unix": now - _beacon_mod._BIAS_CACHE_TTL_SECONDS - 1,
@@ -687,7 +687,11 @@ def _check_beacons_latest_cache_hit_skips_spawn(failures, tmpdir):
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, "w", encoding=_TEXT_ENCODING) as f:
         json.dump(
-            {"cached_at_unix": datetime.now(UTC).timestamp(), "data": fresh_data}, f
+            {
+                "cached_at_unix": datetime.now(timezone.utc).timestamp(),
+                "data": fresh_data,
+            },
+            f,
         )
 
     calls = []
@@ -723,7 +727,7 @@ def _check_beacons_latest_cache_expiry_serves_stale_and_spawns(failures, tmpdir)
     )
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     stale_ts = (
-        datetime.now(UTC).timestamp()
+        datetime.now(timezone.utc).timestamp()
         - _beacon_cache_mod._BEACON_LATEST_CACHE_TTL_SECONDS
         - 1
     )

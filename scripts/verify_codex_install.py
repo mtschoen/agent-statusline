@@ -2,7 +2,7 @@
 
 import os
 import sys
-import tomllib
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.codex_install as codex_install
@@ -11,6 +11,15 @@ from statusline_lib.codex_install import (
     codex_config_current,
     merge_codex_config,
 )
+
+tomllib = codex_install.tomllib  # None below Python 3.11
+
+
+def _check_no_toml_parser(failures):
+    """Without tomllib (Python < 3.11) the merge must refuse clearly, not edit
+    a config it cannot verify."""
+    with mock.patch.object(codex_install, "tomllib", None):
+        _expect_value_error(failures, "no tomllib", "", "needs Python 3.11+")
 
 
 def _expect_value_error(failures, label, text, message):
@@ -388,7 +397,9 @@ def check(failures):
 
 def main():
     failures = []
-    check(failures)
+    _check_no_toml_parser(failures)
+    if tomllib is not None:
+        check(failures)
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}")

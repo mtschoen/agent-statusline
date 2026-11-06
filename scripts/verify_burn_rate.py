@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.burnrate as burnrate
@@ -247,7 +247,7 @@ def _check_sum_window_spend_fixture(failures):
     no live ~/.claude transcripts, so this must not lean on the home dir."""
     win_start = 1_700_000_000.0
     ts = (
-        datetime.fromtimestamp(win_start + 60, tz=UTC)
+        datetime.fromtimestamp(win_start + 60, tz=timezone.utc)
         .isoformat()
         .replace("+00:00", "Z")
     )

@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,6 +38,9 @@ from statusline_lib import (
 from statusline_lib.server_jobs import set_refresh_sink
 
 _ENCODING = "utf-8"
+
+# Stands in for the optional psutil module: an empty process table.
+_FAKE_PSUTIL = SimpleNamespace(process_iter=lambda attrs=None: [])
 
 
 def _load(path):
@@ -202,6 +206,9 @@ def check_refresh_writes_cache(failures):
     render's cached read can serve it, under the module's default cache
     path when no cache_path is given."""
     real_count = sessions_mod._count_via_psutil
+    real_resolve = sessions_mod._resolve_psutil
+    # psutil is optional: stand in for it so this runs where it is not installed.
+    sessions_mod._resolve_psutil = lambda: _FAKE_PSUTIL
     sessions_mod._count_via_psutil = lambda cwd, ps, scan=None: 7
     saved_app_dir = sessions_mod.app_dir
     sink = _SinkRecorder()
@@ -215,6 +222,7 @@ def check_refresh_writes_cache(failures):
     finally:
         set_refresh_sink(previous)
         sessions_mod._count_via_psutil = real_count
+        sessions_mod._resolve_psutil = real_resolve
         sessions_mod.app_dir = saved_app_dir
     if returned != 7:
         failures.append(f"refresh return: expected 7, got {returned!r}")
@@ -316,6 +324,8 @@ def check_refresh_count_via_psutil_exception(failures):
     than propagating out of the server's worker pool, and the directories
     after it are still scored."""
     real_count = sessions_mod._count_via_psutil
+    real_resolve = sessions_mod._resolve_psutil
+    sessions_mod._resolve_psutil = lambda: _FAKE_PSUTIL
 
     def raising_for_first(target_cwd, psutil_module, scan=None):
         if target_cwd.endswith("first"):
@@ -334,6 +344,7 @@ def check_refresh_count_via_psutil_exception(failures):
             cache = _load(cache_path)
     finally:
         sessions_mod._count_via_psutil = real_count
+        sessions_mod._resolve_psutil = real_resolve
     if cache.get(os.path.normcase(first), {}).get("count") != 0:
         failures.append(f"a raising scan should cache 0 for that cwd: {cache!r}")
     if cache.get(os.path.normcase(second), {}).get("count") != 3:

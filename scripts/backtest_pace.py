@@ -18,8 +18,7 @@ live statusline uses -- so the winning params transfer directly.
 import argparse
 import os
 import sys
-from datetime import UTC, datetime
-from itertools import pairwise
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statusline_lib.cost import _cost_for_turn
@@ -163,7 +162,7 @@ def score_candidate(hourly, util_series, period_seconds, params):
     )
 
     cur_vals = [d for d in deltas_cur if d is not None]
-    jumps = [abs(b - a) for a, b in pairwise(cur_vals)]
+    jumps = [abs(b - a) for a, b in zip(cur_vals, cur_vals[1:])]
     jumpiness = (sum(jumps) / len(jumps) / _HOUR) if jumps else 0.0
 
     false_calls = _count_reverting_flips(cur_vals, horizon=6)
@@ -184,7 +183,7 @@ def parse_resets(raw):
             continue
         dt = datetime.fromisoformat(token.replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
+            dt = dt.replace(tzinfo=timezone.utc)
         out.append(dt.timestamp())
     return sorted(out)
 
@@ -193,7 +192,7 @@ def iter_windows(resets, period_seconds, exclude=None):
     """Yield (win_start, win_end) for each adjacent reset pair spanning ~one
     period. Skips a pair more than half a period off-cadence (e.g. the Opus
     anomaly straddle) and any window whose start is inside the exclude range."""
-    for start, end in pairwise(resets):
+    for start, end in zip(resets, resets[1:]):
         if abs((end - start) - period_seconds) > 0.5 * period_seconds:
             continue
         if exclude and exclude[0] <= start < exclude[1]:

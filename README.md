@@ -102,14 +102,14 @@ identity); fields are omitted when their data isn't available:
   Costs are model-accurate (summed per turn at each turn's model rate, including
   subagent transcripts, matching the token totals).
 - **TTL evictions** - a loud red `⚠ TTL:N (~$X.XX)` segment, shown only
-  when the session had cache evictions. An eviction is any parent-session
-  turn after the first that paid a substantial cache-write (>=1000 tokens)
-  with zero cache reads
-  (TTL expiry, compaction, `--resume` past the TTL, or the tool-reorder
-  bug) - the cached prefix was gone and had to be rewritten. `~$X.XX`
-  estimates the spend wasted re-warming the prefix (the 1.25x write
-  penalty over the 0.1x a warm read would have cost). Subagent transcripts
-  are excluded (their first turn is always a full write).
+  when the session had cache evictions. An eviction is a parent-session turn
+  after the first that wrote >=1000 cache tokens after an idle gap longer than
+  the TTL the previous turn's cache was written with (5m or 1h, read from the
+  usage breakdown; with no timestamps nothing counts). Quick rewrites right
+  after the prior turn (compaction, tool-reorder busts) are deliberately not
+  counted as TTL. `~$X.XX` is the rewrite's write cost at its real TTL
+  multiplier (1.25x for 5m, 2x for 1h) minus what a warm read (0.1x) would
+  have cost. Subagent transcripts are excluded.
 - **Quota** - labeled `5h:` and `wk:`, your 5-hour and 7-day Claude Code
   rate-limit utilization. Each is followed by a **pace projection** in
   absolute hours: `+0.4h` means you're on track to finish the window with 24

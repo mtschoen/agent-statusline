@@ -143,9 +143,37 @@ def _check_partial_hit_evicted(failures):
             f"partial-hit shared-prefix rewrite must count as an eviction; "
             f"got {walk['ttl_evictions']}"
         )
-    exp_wasted = 202628 * 5.0 * 1.15 / 1e6
+    exp_wasted = 202628 * 5.0 * (2.0 - 0.1) / 1e6  # 1h write
     if not _approx(walk["ttl_wasted"], exp_wasted):
         failures.append(f"ttl_wasted {walk['ttl_wasted']!r} != {exp_wasted!r}")
+
+
+def _check_waste_priced_at_written_ttl(failures):
+    # Waste = the rewrite's real write cost (5m 1.25x, 1h 2.0x, flat fallback
+    # 1.25x when there is no breakdown) minus the warm-read cost (0.1x on Opus 4.8).
+    for ttl, mult in (("5m", 1.25), ("1h", 2.0), (None, 1.25)):
+        lines = [
+            _turn(
+                "w1",
+                read=0,
+                write=_WRITE_FLOOR_TOKENS,
+                ts=_REFERENCE_TIMESTAMP,
+                ttl=ttl,
+            ),
+            _turn("w2", read=0, write=200000, ts="2026-06-02T17:00:00.000Z", ttl=ttl),
+        ]
+        tmp = tempfile.mkdtemp(prefix="ttl-gate-waste-")
+        parent = os.path.join(tmp, "sess.jsonl")
+        _write_jsonl(parent, lines)
+
+        walk = walk_transcript(parent, include_subagents=True)
+
+        expected = 200000 * 5.0 * (mult - 0.1) / 1e6
+        if walk["ttl_evictions"] != 1 or not _approx(walk["ttl_wasted"], expected):
+            failures.append(
+                f"ttl={ttl}: evictions {walk['ttl_evictions']}, wasted "
+                f"{walk['ttl_wasted']!r} != {expected!r}"
+            )
 
 
 def _check_small_session_partial_hit_evicted(failures):
@@ -238,6 +266,7 @@ def check(failures):
     _check_ttl_threshold_derived_from_write(failures)
     _check_missing_timestamps_not_evicted(failures)
     _check_partial_hit_evicted(failures)
+    _check_waste_priced_at_written_ttl(failures)
     _check_small_session_partial_hit_evicted(failures)
     _check_warm_double_resume_below_floor_not_evicted(failures)
     _check_partial_hit_gap_not_exceeded_not_evicted(failures)

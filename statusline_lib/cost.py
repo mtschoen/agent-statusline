@@ -250,7 +250,11 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
         and idle_gap_exceeded
     ):
         acc["ttl_evictions"] += 1
-        acc["ttl_wasted"] += w * inp_rate * (WRITE_MULT_5M - read_mult) / 1_000_000.0
+        # Waste = what the rewrite actually billed (5m at 1.25x, 1h at 2.0x, via
+        # _write_cost) minus what reading those w tokens warm would have cost.
+        acc["ttl_wasted"] += _write_cost(u, inp_rate) - (
+            w * inp_rate * read_mult / 1_000_000.0
+        )
     acc["last_turn_ts"] = cur_ts
     acc["last_turn_ttl_seconds"] = _written_ttl_seconds(u)
     acc["last_input"] = i

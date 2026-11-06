@@ -54,10 +54,11 @@ def _approx(a, b, tol=1e-6):
 def _check_components_and_evictions(failures):
     # Parametrized across model families to verify model-specific cache-read
     # rates and TTL-waste write-minus-read differentials:
-    #   standard Opus: 5.0 base, 0.1 read_mult -> 1.15 waste diff
-    #   Opus 5.5:      4.0 base, 0.05 read_mult -> 1.20 waste diff
-    #   Fable 5.1:     10.0 base, 0.025 read_mult -> 1.225 waste diff
-    #   Mythos 5.1:    10.0 base, 0.025 read_mult -> 1.225 waste diff
+    # (the evicted rewrite is a 1h write at 2.0x, so waste diff = 2.0 - read_mult):
+    #   standard Opus: 5.0 base, 0.1 read_mult -> 1.9 waste diff
+    #   Opus 5.5:      4.0 base, 0.05 read_mult -> 1.95 waste diff
+    #   Fable 5.1:     10.0 base, 0.025 read_mult -> 1.975 waste diff
+    #   Mythos 5.1:    10.0 base, 0.025 read_mult -> 1.975 waste diff
     # In each case: m1 write5000(1st,skip) m2 read20000+write2000(read>0,skip)
     # m3 read0+write30000(evict) m4 write500(<floor,skip).
     # m2 wrote a 1h cache, so m3 must sit >3600s after it to read as a real TTL expiry.
@@ -87,7 +88,7 @@ def _check_components_and_evictions(failures):
         exp_read_cost = 20000 * inp_rate * read_mult / 1e6
         # All four turns default to a 1h cache write -> 2.0x base input (not 1.25x).
         exp_write_cost = (5000 + 2000 + 30000 + 500) * inp_rate * 2.0 / 1e6
-        exp_wasted = 30000 * inp_rate * (1.25 - read_mult) / 1e6
+        exp_wasted = 30000 * inp_rate * (2.0 - read_mult) / 1e6
 
         if not _approx(walk["read_cost"], exp_read_cost):
             failures.append(

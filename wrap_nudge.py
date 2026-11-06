@@ -20,6 +20,19 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from python_floor import is_too_old, too_old_message
+
+# Fail loudly, not silently, on an interpreter that cannot import statusline_lib
+# (3.9+). This file avoids f-strings and annotations so even a very old Python
+# parses it far enough to reach this guard. The installed hook command swallows stderr into the hook log, so one
+# clear line there is the diagnosis. Exit 0: a hook must never block a prompt.
+if is_too_old(sys.version_info):
+    print(
+        too_old_message(sys.version_info, sys.executable, "wrap_nudge"),
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
 from statusline_lib.base import app_dir
 from statusline_lib.nudge import (
     format_nudge,
@@ -40,7 +53,7 @@ def _log_error(message):
         os.makedirs(os.path.dirname(log), exist_ok=True)
         stamp = datetime.datetime.now().isoformat(timespec="seconds")
         with open(log, "a", encoding="utf-8") as f:
-            f.write(f"{stamp} {message}\n")
+            f.write(stamp + " " + message + "\n")
     except OSError:
         # Logging is best-effort; a full disk or unwritable ~/.claude must not
         # turn a benign nudge failure into a hook crash.

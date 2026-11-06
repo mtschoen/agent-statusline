@@ -678,8 +678,11 @@ invoked reliably.
 
 ### Requirements
 
-- `bash`, `python3` (any 3.x), `git` - present on most machines that already
-  run Claude Code.
+- `bash`, `python3` 3.9 or newer (stock macOS `/usr/bin/python3` is 3.9.6 and
+  works; `orjson` and `psutil` stay optional), `git` - present on most machines
+  that already run Claude Code. Below 3.9 the hooks and `install.py` print one
+  stderr line naming the requirement and exit instead of a traceback. The
+  Codex and Kimi installers additionally need 3.11+ (`tomllib`) and say so.
 - Claude Code v2.1+ (for the rich JSON payload - earlier versions only sent
   `model` / `session_id` / `cwd`).
 - Subagent statusline requires a Claude Code version that ships

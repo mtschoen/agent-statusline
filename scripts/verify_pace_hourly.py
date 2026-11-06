@@ -16,8 +16,10 @@ import json
 import os
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from unittest.mock import patch
+
+from _compat import zip_strict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.pace as pace
@@ -29,7 +31,7 @@ _WINDOW_START_TIMESTAMP = 1_700_000_000.0
 def _line(ts_unix, message_id, output_tokens):
     return json.dumps(
         {
-            "timestamp": datetime.fromtimestamp(ts_unix, tz=UTC)
+            "timestamp": datetime.fromtimestamp(ts_unix, tz=timezone.utc)
             .isoformat()
             .replace("+00:00", "Z"),
             "message": {
@@ -77,7 +79,7 @@ def _check_hourly_binning(failures):
         failures.append(f"expected 4 hourly buckets (0..3), got {len(hourly)}")
         return
     expected = [25.0, 25.0, 0.0, 25.0]
-    for i, (got, want) in enumerate(zip(hourly, expected, strict=True)):
+    for i, (got, want) in enumerate(zip_strict(hourly, expected)):
         if abs(got - want) > 1e-6:
             failures.append(f"bucket {i}: expected ${want:.2f}, got ${got:.2f}")
 
@@ -132,7 +134,7 @@ def _check_parse_pace_line_edge_cases(failures):
 
     # Duplicate message id -> None (line 57)
     good_ts = (
-        datetime.fromtimestamp(win_start + 60, tz=UTC)
+        datetime.fromtimestamp(win_start + 60, tz=timezone.utc)
         .isoformat()
         .replace("+00:00", "Z")
     )
@@ -169,7 +171,7 @@ def _check_parse_pace_line_truncated_id_not_poisoned(failures):
         )
 
     good_ts = (
-        datetime.fromtimestamp(win_start + 60, tz=UTC)
+        datetime.fromtimestamp(win_start + 60, tz=timezone.utc)
         .isoformat()
         .replace("+00:00", "Z")
     )
@@ -243,7 +245,7 @@ def _check_walk_pace_hourly_parallel(failures):
         root = os.path.join(tmp, "projects")
         # Create 3 sessions so len(groups) > 2 -> parallel path
         good_ts = (
-            datetime.fromtimestamp(win_start + 60, tz=UTC)
+            datetime.fromtimestamp(win_start + 60, tz=timezone.utc)
             .isoformat()
             .replace("+00:00", "Z")
         )
@@ -286,7 +288,7 @@ def _check_walk_hourly_parallel_oserror_fallback(failures):
     n_buckets = 2
     # Build a small groups dict with one real entry so inline fallback has something to sum
     good_ts = (
-        datetime.fromtimestamp(win_start + 60, tz=UTC)
+        datetime.fromtimestamp(win_start + 60, tz=timezone.utc)
         .isoformat()
         .replace("+00:00", "Z")
     )
@@ -339,7 +341,7 @@ def _check_walk_hourly_parallel_worker_failure(failures):
     win_start = _WINDOW_START_TIMESTAMP
     n_buckets = 2
     good_ts = (
-        datetime.fromtimestamp(win_start + 60, tz=UTC)
+        datetime.fromtimestamp(win_start + 60, tz=timezone.utc)
         .isoformat()
         .replace("+00:00", "Z")
     )

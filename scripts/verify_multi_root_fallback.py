@@ -13,7 +13,7 @@ import os
 import shutil
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
@@ -21,7 +21,7 @@ sys.path.insert(0, REPO)
 
 def make_jsonl(path, model, output_tokens):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     entry = {
         "timestamp": iso,
         "message": {
@@ -85,7 +85,7 @@ def main():
 
         # Win start far enough in the past that both transcripts (timestamped
         # "now") fall inside the window.
-        win_start = datetime.now(UTC).timestamp() - 3600
+        win_start = datetime.now(timezone.utc).timestamp() - 3600
 
         # Pin _now_unix so n_buckets covers the window.
         original_now_unix = pace_module._now_unix

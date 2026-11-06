@@ -24,6 +24,44 @@ import os
 import socket
 import sys
 
+# Mirrors python_floor.MIN_PYTHON; see _python_too_old.
+_MINIMUM_PYTHON = (3, 9)
+
+
+def _python_too_old(hook_name="ensure-server"):
+    """True (after one stderr line, which the hook redirects to its log) when
+    this interpreter is below the floor statusline_lib needs. Runs before
+    anything newer than Python 3.4 syntax or stdlib is touched, so this whole
+    file avoids f-strings and annotations: an old interpreter must reach this
+    message instead of a SyntaxError. The floor and message duplicate
+    python_floor.py because this file may import nothing outside the standard
+    library (verify_render_budget_static.py); verify_wrap_nudge_python_floor.py
+    checks the copy against python_floor."""
+    if tuple(sys.version_info[:2]) >= _MINIMUM_PYTHON:
+        return False
+    have = ".".join(str(part) for part in sys.version_info[:3])
+    want = ".".join(str(part) for part in _MINIMUM_PYTHON)
+    print(
+        hook_name
+        + ": "
+        + sys.executable
+        + " is Python "
+        + have
+        + ", but agent-statusline needs "
+        + want
+        + "+. Install Python "
+        + want
+        + "+ and make python3 resolve to it.",
+        file=sys.stderr,
+    )
+    return True
+
+
+# Fail loudly, with exit 0 so a hook never blocks, before anything below (the
+# stdout reconfigure needs 3.7) can raise a bare traceback.
+if _python_too_old("statusline_client"):
+    sys.exit(0)
+
 # Force UTF-8 stdout regardless of the Windows console code page, the same way
 # statusline.py does: a reply carries glyphs like the beacon's stopwatch, and
 # on a cp1252 stdout writing one raises UnicodeEncodeError. errors="replace"
@@ -374,12 +412,15 @@ def main(kind, argv=None):
     if "--print-directories" in arguments:
         # Exists only so the duplication check in verify_server_protocol.py
         # has something to compare the package's own resolution against.
-        sys.stdout.write(f"{application_directory()}\n{state_directory()}\n")
+        sys.stdout.write(application_directory() + "\n" + state_directory() + "\n")
         return 0
 
     if "--print-version" in arguments:
         # The same duplication check, for the other copied algorithm.
-        sys.stdout.write(f"{_support().code_version(_REPOSITORY_ROOT)}\n")
+        sys.stdout.write(_support().code_version(_REPOSITORY_ROOT) + "\n")
+        return 0
+
+    if "--ensure-server" in arguments and _python_too_old():
         return 0
 
     info = read_server_info(server_info_path())

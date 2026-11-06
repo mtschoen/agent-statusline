@@ -42,7 +42,13 @@ def _nudge_command(repo, platform="claude"):
     cmd.exe -- so %VAR% / ver>nul / || are wrong there; verified empirically by
     the stray-`nul`-file artifact), POSIX sh elsewhere. `$HOME` resolves in both
     PowerShell and sh. `; exit 0` forces non-blocking under PowerShell (works in
-    pwsh 7 and Windows PowerShell 5.1, neither of which needs `||`)."""
+    pwsh 7 and Windows PowerShell 5.1, neither of which needs `||`).
+
+    POSIX uses a bare `python3` (any python3 at or above python_floor.MIN_PYTHON
+    works, including macOS /usr/bin/python3 3.9; wrap_nudge.py itself prints a
+    one-line diagnosis below the floor). Windows keeps the `py -3` launcher.
+    Entries an earlier install pinned to an absolute interpreter are converted
+    back in place by the sentinel merge."""
     target = f"{repo}/wrap_nudge.py"
     app_subdir = ".gemini\\antigravity-cli" if platform == "antigravity" else ".claude"
     app_subdir_unix = (

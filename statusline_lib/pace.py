@@ -9,7 +9,7 @@ Imports:
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from .base import GREEN, RESET, app_dir, color_high_bad, ramp_color_for
 from .pace_walk import (
@@ -57,7 +57,7 @@ _ON_TARGET_MARGIN_SECONDS = 4 * 3600
 
 def _now_unix():
     """Current unix time. Seam so tests can pin the window clock."""
-    return datetime.now(UTC).timestamp()
+    return datetime.now(timezone.utc).timestamp()
 
 
 _PACE_CACHE_TTL_SECONDS = 15  # 15s: a spend spike becomes visible quickly
@@ -184,8 +184,10 @@ def _weekly_deltas(util, resets_at_unix, period_seconds):
     """
     if util is None or util <= 0 or not resets_at_unix:
         return None
-    reset_dt = datetime.fromtimestamp(resets_at_unix, tz=UTC)
-    remaining = (reset_dt - datetime.fromtimestamp(_now_unix(), tz=UTC)).total_seconds()
+    reset_dt = datetime.fromtimestamp(resets_at_unix, tz=timezone.utc)
+    remaining = (
+        reset_dt - datetime.fromtimestamp(_now_unix(), tz=timezone.utc)
+    ).total_seconds()
     elapsed = period_seconds - remaining
     if elapsed <= 0 or remaining <= 0:
         return None
@@ -296,11 +298,11 @@ def _fmt_local_clock(unix_ts):
     today: "6:00pm" today, "Tue 6:00pm" otherwise. strftime's %I/%p are avoided
     (%I zero-pads the hour and %p casing/availability vary by platform), so the
     12-hour parts are assembled by hand for stable cross-platform output."""
-    dt = datetime.fromtimestamp(unix_ts, tz=UTC).astimezone()
+    dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc).astimezone()
     hour12 = dt.hour % 12 or 12
     ampm = "am" if dt.hour < 12 else "pm"
     clock = f"{hour12}:{dt.minute:02d}{ampm}"
-    today = datetime.fromtimestamp(_now_unix(), tz=UTC).astimezone().date()
+    today = datetime.fromtimestamp(_now_unix(), tz=timezone.utc).astimezone().date()
     if dt.date() == today:
         return clock
     return f"{dt:%a} {clock}"
@@ -353,9 +355,9 @@ def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
         return ""
     try:
         if not use_trailing:
-            reset_dt = datetime.fromtimestamp(resets_at_unix, tz=UTC)
+            reset_dt = datetime.fromtimestamp(resets_at_unix, tz=timezone.utc)
             remaining = (
-                reset_dt - datetime.fromtimestamp(_now_unix(), tz=UTC)
+                reset_dt - datetime.fromtimestamp(_now_unix(), tz=timezone.utc)
             ).total_seconds()
             elapsed = period_seconds - remaining
             if elapsed <= 0 or remaining <= 0:

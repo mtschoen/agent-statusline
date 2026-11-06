@@ -8,18 +8,18 @@ agents never self-reported moderate/material even when reality diverged
 
 import os
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statusline_lib import _compute_objective_drift
 
 
 def iso(dt):
-    return dt.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
+    return dt.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def run_case(name, begin_minutes_ago, begin_eta_seconds, current_eta_seconds, expected):
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     begin_ts = iso(now - timedelta(minutes=begin_minutes_ago))
     got = _compute_objective_drift(begin_ts, begin_eta_seconds, current_eta_seconds)
     ok = got == expected

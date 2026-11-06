@@ -19,8 +19,15 @@ scanner miscount fails loudly with `ValueError` rather than silently
 corrupting the user's config.
 """
 
+import importlib
 import re
-import tomllib
+import sys
+
+# tomllib is stdlib only from Python 3.11. Below that the Codex and Kimi
+# installers cannot read or verify a config, so _parse_config refuses with a
+# clear error rather than editing a TOML file blind. Everything else in the
+# package runs on 3.9.
+tomllib = importlib.import_module("tomllib") if sys.version_info >= (3, 11) else None
 
 CODEX_STATUS_LINE_ITEMS = (
     # Order mirrors this project's own line-2 rendering philosophy
@@ -55,6 +62,12 @@ _TABLE_HEADER = re.compile(
 
 
 def _parse_config(text):
+    if tomllib is None:
+        raise ValueError(
+            "reading TOML needs Python 3.11+ (tomllib); this interpreter is "
+            + ".".join(str(part) for part in sys.version_info[:3])
+            + ". Re-run install.py with Python 3.11+ for this platform"
+        )
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:

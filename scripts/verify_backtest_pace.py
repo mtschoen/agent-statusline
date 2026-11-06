@@ -15,8 +15,7 @@ import math
 import os
 import sys
 import tempfile
-from datetime import UTC, datetime
-from itertools import pairwise
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import scripts.backtest_pace as bt
@@ -28,7 +27,7 @@ _HOUR = 3600.0
 def _line(ts_unix, message_id, output_tokens):
     return json.dumps(
         {
-            "timestamp": datetime.fromtimestamp(ts_unix, tz=UTC)
+            "timestamp": datetime.fromtimestamp(ts_unix, tz=timezone.utc)
             .isoformat()
             .replace("+00:00", "Z"),
             "message": {
@@ -72,7 +71,7 @@ def _check_reconstruct_and_score(failures):
             failures.append(
                 f"normalized util should end at 100, got {util_series[-1] if util_series else 'EMPTY'}"
             )
-        if any(b - a < -1e-9 for a, b in pairwise(util_series)):
+        if any(b - a < -1e-9 for a, b in zip(util_series, util_series[1:])):
             failures.append("normalized util must be monotonically non-decreasing")
 
         metrics = bt.score_candidate(hourly, util_series, period, DEFAULT_PARAMS)

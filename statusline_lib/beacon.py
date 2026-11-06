@@ -13,7 +13,7 @@ Imports:
 import glob
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from .base import GREEN, RED, RESET, YELLOW, app_dir
 from .beacon_cache import _beacons_latest_cached
@@ -53,8 +53,8 @@ def _compute_objective_drift(begin_ts, begin_eta_seconds, current_eta_seconds):
     except (ValueError, TypeError):
         return "nominal"
     if begin_dt.tzinfo is None:
-        begin_dt = begin_dt.replace(tzinfo=UTC)
-    elapsed = (datetime.now(UTC) - begin_dt).total_seconds()
+        begin_dt = begin_dt.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - begin_dt).total_seconds()
     if elapsed < 0:
         elapsed = 0
     if elapsed > _DRIFT_MATERIAL_ELAPSED_SECONDS:
@@ -140,7 +140,7 @@ def _format_clock_and_elapsed(begin_ts):
     if not begin_ts:
         return None
     try:
-        # Python's fromisoformat accepts the trailing Z suffix on 3.11+.
+        # fromisoformat accepts a trailing Z only on 3.11+; normalize it for 3.9.
         normalized = (
             begin_ts.replace("Z", "+00:00") if begin_ts.endswith("Z") else begin_ts
         )
@@ -148,9 +148,9 @@ def _format_clock_and_elapsed(begin_ts):
     except (ValueError, TypeError):
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
+        dt = dt.replace(tzinfo=timezone.utc)
     local = dt.astimezone()
-    elapsed = (datetime.now(UTC) - dt).total_seconds()
+    elapsed = (datetime.now(timezone.utc) - dt).total_seconds()
     if elapsed < 0:
         elapsed = 0
     elapsed_min = max(0, int(elapsed) // 60)
@@ -228,7 +228,9 @@ def _read_bias_cache():
 
 def _bias_entry_fresh(entry):
     ttl = _BIAS_FAILURE_TTL_SECONDS if entry.get("failed") else _BIAS_CACHE_TTL_SECONDS
-    return datetime.now(UTC).timestamp() - entry.get("computed_at_unix", 0) < ttl
+    return (
+        datetime.now(timezone.utc).timestamp() - entry.get("computed_at_unix", 0) < ttl
+    )
 
 
 def _bias_factor_cached(period_seconds):
@@ -289,7 +291,7 @@ def refresh_bias_factor_cache(period_seconds):
         timeout=2,
     )
     entry = {
-        "computed_at_unix": datetime.now(UTC).timestamp(),
+        "computed_at_unix": datetime.now(timezone.utc).timestamp(),
         "period_seconds": period_seconds,
         "n_pairs": (data or {}).get("n_pairs", 0),
         "bias_factor": (data or {}).get("bias_factor"),

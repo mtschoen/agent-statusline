@@ -9,9 +9,9 @@
 # broad select below — 0 findings is the bar.
 
 [tool.ruff]
-# Match the CI Python floor (.gitea/workflows/ci.yml uses 3.11). UP fixes are
+# Match the supported Python floor (python_floor.MIN_PYTHON, 3.9; CI tests 3.9 and 3.11). UP fixes are
 # gated to this version, so keep it in sync with the oldest supported runtime.
-target-version = "py311"
+target-version = "py39"
 
 [tool.ruff.lint]
 select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF", "TID251"]

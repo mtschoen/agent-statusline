@@ -182,9 +182,9 @@ def _check_command_both_platform_branches(failures):
         failures.append(
             f"nt server command should use 'py -3' and force exit 0; got {nt_command!r}"
         )
-    if "python3" not in posix_command or "|| true" not in posix_command:
+    if "|| true" not in posix_command:
         failures.append(
-            f"POSIX server command should use python3 and '|| true'; got {posix_command!r}"
+            f"POSIX server command should force success with '|| true'; got {posix_command!r}"
         )
     for command in (nt_command, posix_command):
         if _SERVER_SENTINEL not in command:

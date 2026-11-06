@@ -15,7 +15,7 @@ import os
 import re
 import sys
 import tempfile
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -77,21 +77,23 @@ def _check_compute_objective_drift(failures):
         failures.append("drift: bad timestamp must be nominal")
     if _compute_objective_drift("2020-01-01T00:00:00", 300, 60) != "material":
         failures.append("drift: naive far-past timestamp must be material")
-    future_ts = (datetime.now(UTC) + timedelta(hours=1)).strftime(
+    future_ts = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime(
         "%Y-%m-%dT%H:%M:%S.000Z"
     )
     result = _compute_objective_drift(future_ts, 300, 60)
     if result != "nominal":
         failures.append(f"drift: future ts must be nominal, got {result!r}")
-    old_ts = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    old_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z"
+    )
     if _compute_objective_drift(old_ts, 300, 60) != "material":
         failures.append("drift: 1h elapsed must be material")
-    recent_ts = (datetime.now(UTC) - timedelta(seconds=10)).strftime(
+    recent_ts = (datetime.now(timezone.utc) - timedelta(seconds=10)).strftime(
         "%Y-%m-%dT%H:%M:%S.000Z"
     )
     if _compute_objective_drift(recent_ts, 300, "bad-eta") != "nominal":
         failures.append("drift: bad eta string must yield nominal")
-    future_ts2 = (datetime.now(UTC) + timedelta(seconds=1)).strftime(
+    future_ts2 = (datetime.now(timezone.utc) + timedelta(seconds=1)).strftime(
         "%Y-%m-%dT%H:%M:%S.000Z"
     )
     if _compute_objective_drift(future_ts2, 300, 700) != "material":
@@ -288,16 +290,20 @@ def _check_format_clock_and_elapsed(failures):
         failures.append("_format_clock_and_elapsed(None) must be None")
     if _format_clock_and_elapsed("not-a-date") is not None:
         failures.append("_format_clock_and_elapsed(bad) must be None")
-    ts = (datetime.now(UTC) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    ts = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z"
+    )
     result = _format_clock_and_elapsed(ts)
     if result is None:
         failures.append("_format_clock_and_elapsed(valid) must not be None")
     elif not re.match(r"^\d{2}:\d{2} \(\d+m\)$", result):
         failures.append(f"_format_clock_and_elapsed format wrong: {result!r}")
-    naive_ts = (datetime.now(UTC) - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%S")
+    naive_ts = (datetime.now(timezone.utc) - timedelta(minutes=2)).strftime(
+        "%Y-%m-%dT%H:%M:%S"
+    )
     if _format_clock_and_elapsed(naive_ts) is None:
         failures.append("_format_clock_and_elapsed(naive) must not be None")
-    future_ts = (datetime.now(UTC) + timedelta(hours=1)).strftime(
+    future_ts = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime(
         "%Y-%m-%dT%H:%M:%S.000Z"
     )
     result = _format_clock_and_elapsed(future_ts)

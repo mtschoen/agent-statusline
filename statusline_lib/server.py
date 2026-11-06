@@ -31,6 +31,7 @@ Imports:
 import contextlib
 import json
 import os
+import socket
 import time
 
 from .base import app_dir, log_line, log_traceback, platform_name
@@ -198,7 +199,9 @@ class Server:
         while not self.stop_requested:
             try:
                 data, address = self._socket.recvfrom(MAXIMUM_DATAGRAM_BYTES)
-            except TimeoutError:
+            except (socket.timeout, TimeoutError):
+                # socket.timeout is only an alias of TimeoutError from 3.10; on
+                # 3.9 a poll timeout is its own OSError subclass.
                 if self._clock() - self._last_request_at >= self._idle_exit_seconds:
                     self.stop_requested = True
                 continue

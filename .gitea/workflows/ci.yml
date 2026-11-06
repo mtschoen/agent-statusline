@@ -152,6 +152,32 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 ci/post-coverage-status.py
 
+  test-py39:
+    name: Unit tests (Linux, Python 3.9 floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The supported floor is python_floor.MIN_PYTHON (3.9, what stock macOS
+      # ships). Always provision it explicitly rather than trusting the baked
+      # toolchain, which is the newer interpreter the main test job uses.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Run verification scripts (no coverage gate)
+        # The 100% statusline_lib coverage gate runs on the newer interpreter
+        # in "Unit tests (Linux)": a few lines (the tomllib arms) are
+        # version-specific, so coverage is only meaningful there.
+        run: |
+          python --version
+          fail=0
+          for t in scripts/verify_*.py; do
+            echo "=== $t ==="
+            python "$t" || fail=1
+          done
+          exit $fail
+
   test-windows:
     name: Unit tests (Windows)
     runs-on: windows-latest

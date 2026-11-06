@@ -33,6 +33,11 @@ def _server_hook_command(repo, platform="claude"):
     Runs the client's liveness-and-version check only: no stdin is read and
     nothing is printed, so the hook costs one interpreter start and either
     finds a live server or spawns one in the background.
+
+    POSIX uses a bare `python3`; the client prints a one-line diagnosis if it
+    is below python_floor.MIN_PYTHON. Entries an earlier install pinned to an
+    absolute interpreter are converted back in place by the sentinel merge.
+    Windows keeps the `py -3` launcher.
     """
     target = f"{repo}/statusline_client.py"
     app_subdirectory = (

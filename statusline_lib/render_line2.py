@@ -5,6 +5,8 @@ statusline.py so the resident server can render line 2 without importing the
 entry script.
 """
 
+from __future__ import annotations
+
 from typing import NamedTuple
 
 from .agy import format_agy_cache, format_agy_quota

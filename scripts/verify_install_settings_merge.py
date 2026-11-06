@@ -31,7 +31,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-import install
+import installer as install
 from scripts._server_wait_helpers import server_json_appeared
 from statusline_lib.claude_family_install import (
     desired_statusline_entries,
